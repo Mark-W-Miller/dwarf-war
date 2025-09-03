@@ -1,4 +1,4 @@
-import { defineQuery, enterQuery, hasComponent } from 'https://cdn.skypack.dev/bitecs@0.3.40';
+import { defineQuery } from '../vendor/bitecs-lite.mjs';
 import { Transform, AIOrder, ThinIndex, PathStore } from './components.mjs';
 
 function dist(a, b) {

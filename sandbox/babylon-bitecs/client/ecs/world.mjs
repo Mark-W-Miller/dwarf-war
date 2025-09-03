@@ -1,5 +1,5 @@
 // Minimal world bootstrapping utilities for bitecs
-import { createWorld, addEntity, addComponent } from 'https://cdn.skypack.dev/bitecs@0.3.40';
+import { createWorld, addEntity, addComponent } from '../vendor/bitecs-lite.mjs';
 import { Transform } from './components.mjs';
 
 export function makeWorld() {
@@ -14,4 +14,3 @@ export function spawnWithTransform(world, x = 0, y = 0, z = 0, s = 1) {
   Transform.x[eid] = x; Transform.y[eid] = y; Transform.z[eid] = z; Transform.s[eid] = s;
   return eid;
 }
-

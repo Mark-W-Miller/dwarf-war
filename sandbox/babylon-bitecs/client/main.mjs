@@ -1,7 +1,7 @@
 import { makeWorld, spawnWithTransform } from './ecs/world.mjs';
 import { Transform, AIOrder, ThinIndex, UnitTag, PathStore } from './ecs/components.mjs';
 import { movementSystem, makeThinInstanceRenderer } from './ecs/systems.mjs';
-import { addComponent } from 'https://cdn.skypack.dev/bitecs@0.3.40';
+import { addComponent } from './vendor/bitecs-lite.mjs';
 
 // Babylon setup
 const canvas = document.getElementById('renderCanvas');
@@ -13,6 +13,23 @@ scene.clearColor = new BABYLON.Color4(0.03, 0.05, 0.07, 1.0);
 const camera = new BABYLON.ArcRotateCamera('cam', Math.PI * 1.2, Math.PI / 3, 18, new BABYLON.Vector3(0, 1, 0), scene);
 camera.attachControl(canvas, true);
 camera.lowerRadiusLimit = 6; camera.upperRadiusLimit = 80;
+
+// 3D label indicating which sandbox this is
+{
+  const plane = BABYLON.MeshBuilder.CreatePlane('label', { size: 3 }, scene);
+  plane.position = new BABYLON.Vector3(0, 3, 0);
+  plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
+  const dt = new BABYLON.DynamicTexture('labelTex', { width: 1024, height: 256 }, scene, false);
+  const ctx = dt.getContext();
+  dt.hasAlpha = true;
+  ctx.clearRect(0, 0, 1024, 256);
+  dt.drawText('Babylon + bitecs Sandbox', null, null, "bold 64px sans-serif", '#e0e6ed', 'transparent', true);
+  const mat = new BABYLON.StandardMaterial('labelMat', scene);
+  mat.diffuseTexture = dt;
+  mat.emissiveTexture = dt;
+  mat.backFaceCulling = false;
+  plane.material = mat;
+}
 
 // Lighting
 const light = new BABYLON.DirectionalLight('dir', new BABYLON.Vector3(-1, -2, -1), scene);
@@ -68,6 +85,8 @@ for (let i = 0; i < COUNT; i++) {
 
 // Systems pipeline
 const renderSyncThin = makeThinInstanceRenderer(dwarfBase);
+// Initialize instance matrices once before the first render
+renderSyncThin(world);
 
 engine.runRenderLoop(() => {
   const dt = engine.getDeltaTime() / 1000; // seconds

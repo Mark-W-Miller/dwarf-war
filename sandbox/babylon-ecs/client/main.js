@@ -15,6 +15,23 @@ camera.attachControl(canvas, true);
 camera.lowerRadiusLimit = 6;
 camera.upperRadiusLimit = 50;
 
+// 3D label indicating which sandbox this is
+{
+  const plane = BABYLON.MeshBuilder.CreatePlane('label', { size: 3 }, scene);
+  plane.position = new BABYLON.Vector3(0, 3, 0);
+  plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
+  const dt = new BABYLON.DynamicTexture('labelTex', { width: 1024, height: 256 }, scene, false);
+  const ctx = dt.getContext();
+  dt.hasAlpha = true;
+  ctx.clearRect(0, 0, 1024, 256);
+  dt.drawText('Babylon + Custom ECS Sandbox', null, null, "bold 64px sans-serif", '#e0e6ed', 'transparent', true);
+  const mat = new BABYLON.StandardMaterial('labelMat', scene);
+  mat.diffuseTexture = dt;
+  mat.emissiveTexture = dt;
+  mat.backFaceCulling = false;
+  plane.material = mat;
+}
+
 // Lighting
 const light = new BABYLON.DirectionalLight('dir', new BABYLON.Vector3(-1, -2, -1), scene);
 light.position = new BABYLON.Vector3(10, 20, 10);
@@ -86,4 +103,3 @@ engine.runRenderLoop(() => {
 });
 
 window.addEventListener('resize', () => engine.resize());
-
