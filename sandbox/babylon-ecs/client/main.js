@@ -1,6 +1,7 @@
 import { World } from './ecs/world.js';
-import { C, makeTransform, makeRenderable, makeUnitTag, makeAIOrder, makeCarddon } from './ecs/components.js';
-import { MovementSystem, RenderSyncSystem } from './ecs/systems.js';
+import { C, makeTransform, makeRenderable, makeUnitTag, makeAIOrder, makeCarddon, makeSpin, makeMass } from './ecs/components.js';
+import { MovementSystem, RenderSyncSystem, SpinSystem } from './ecs/systems.js';
+import { registerInputHandlers } from './input.js';
 
 // Expect BABYLON global from CDN script in index.html
 
@@ -46,10 +47,12 @@ caveMat.roughness = 1.0;
 // Create a "cave" as a backface sphere
 const cave = BABYLON.MeshBuilder.CreateSphere('cave', { diameter: 60, segments: 32, sideOrientation: BABYLON.Mesh.BACKSIDE }, scene);
 cave.material = caveMat;
+cave.isPickable = false; // ignore cave when clicking so ground receives picks
 
 // Ground-ish hint inside the cave
 const ground = BABYLON.MeshBuilder.CreateGround('ground', { width: 100, height: 100, subdivisions: 1 }, scene);
 ground.position.y = -2;
+ground.isPickable = true; // ensure ground receives pointer picks
 const groundMat = new BABYLON.PBRMetallicRoughnessMaterial('groundMat', scene);
 groundMat.baseColor = new BABYLON.Color3(0.18, 0.18, 0.18);
 groundMat.metallic = 0.0;
@@ -63,10 +66,24 @@ dwarfMat.baseColor = new BABYLON.Color3(0.8, 0.7, 0.5);
 dwarfMat.metallic = 0.2;
 dwarfMat.roughness = 0.6;
 dwarfMesh.material = dwarfMat;
+// Small blue dot on the cube face that rotates and travels with it
+{
+  const blueMat = new BABYLON.PBRMetallicRoughnessMaterial('blueDotMat', scene);
+  blueMat.baseColor = new BABYLON.Color3(0.2, 0.5, 1.0);
+  blueMat.metallic = 0.0;
+  blueMat.roughness = 0.3;
+  const blueDot = BABYLON.MeshBuilder.CreateSphere('blueDot', { diameter: 0.15, segments: 8 }, scene);
+  blueDot.material = blueMat;
+  blueDot.parent = dwarfMesh; // inherit position + rotation from the cube
+  // place slightly in front of the +Z face (cube half-size = 0.35)
+  blueDot.position = new BABYLON.Vector3(0, 0, 0.45);
+  blueDot.isPickable = false; // don't interfere with cube picking
+}
 
 // World (ECS)
 const world = new World();
 world.addSystem(MovementSystem);
+world.addSystem(SpinSystem);
 world.addSystem(RenderSyncSystem);
 
 // Cave entity (static)
@@ -78,11 +95,15 @@ world.addSystem(RenderSyncSystem);
 }
 
 // Dwarf entity (moves along a simple path)
+let dwarfEid = null;
 {
   const e = world.createEntity();
+  dwarfEid = e;
   world.addComponent(e, C.Transform, makeTransform({ x: -3, y: 0, z: -2 }));
   world.addComponent(e, C.Renderable, makeRenderable({ mesh: dwarfMesh }));
   world.addComponent(e, C.UnitTag, makeUnitTag('Dwarf'));
+  world.addComponent(e, C.Spin, makeSpin(0, 0, 0, 0.92));
+  world.addComponent(e, C.Mass, makeMass(1.0, 0.25, 0));
   const path = [
     { x: -3, y: 0, z: -2 },
     { x: 0, y: 0, z: 0 },
@@ -90,8 +111,11 @@ world.addSystem(RenderSyncSystem);
     { x: 0, y: 0, z: -1 },
     { x: -3, y: 0, z: -2 },
   ];
-  world.addComponent(e, C.AIOrder, makeAIOrder(path, 'Move', 2.0));
+  world.addComponent(e, C.AIOrder, makeAIOrder(path, 'Move', 2.5));
 }
+
+// Centralized input handlers: pointer + window resize
+registerInputHandlers({ scene, camera, engine, ground, dwarfMesh, world, dwarfEid });
 
 // Camera target near center
 camera.target = new BABYLON.Vector3(0, 0.5, 0);
@@ -102,4 +126,4 @@ engine.runRenderLoop(() => {
   scene.render();
 });
 
-window.addEventListener('resize', () => engine.resize());
+// resize handler is registered in input.js

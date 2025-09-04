@@ -41,3 +41,19 @@ export function RenderSyncSystem(world, _dt) {
   }
 }
 
+export function SpinSystem(world, dt) {
+  for (const id of world.query(C.Transform, C.Spin)) {
+    const t = world.getComponent(id, C.Transform);
+    const s = world.getComponent(id, C.Spin);
+    // Integrate angular velocity into rotation
+    t.rotation.x += (s.angVel.x || 0) * dt;
+    t.rotation.y += (s.angVel.y || 0) * dt;
+    t.rotation.z += (s.angVel.z || 0) * dt;
+    // Exponential damping per second
+    const d = Math.max(0, Math.min(1, s.damping ?? 0.9));
+    const factor = Math.pow(d, dt * 60 / 60); // approximately per-second damping
+    s.angVel.x *= factor;
+    s.angVel.y *= factor;
+    s.angVel.z *= factor;
+  }
+}

@@ -7,7 +7,9 @@ export const C = {
   AIOrder: 'AIOrder',
   TunnelSegment: 'TunnelSegment',
   Carddon: 'Carddon',
-  WarRoom: 'WarRoom'
+  WarRoom: 'WarRoom',
+  Spin: 'Spin',
+  Mass: 'Mass'
 };
 
 export function makeTransform({ x = 0, y = 0, z = 0 } = {}, { rx = 0, ry = 0, rz = 0 } = {}, { sx = 1, sy = 1, sz = 1 } = {}) {
@@ -38,3 +40,12 @@ export function makeCarddon(name = 'Honwee', integrity = 100, beauty = 0) {
   return { name, integrity, beauty };
 }
 
+export function makeSpin(ax = 0, ay = 0, az = 0, damping = 0.9) {
+  // angVel in radians/sec; damping is multiplicative per second (0.0=no damping, 1.0=full stop)
+  return { angVel: { x: ax, y: ay, z: az }, damping };
+}
+
+export function makeMass(baseInertia = 1.0, perDotInertia = 0.25, dots = 0) {
+  // Simple scalar moment of inertia model: I = baseInertia + perDotInertia * dots
+  return { baseInertia, perDotInertia, dots };
+}
