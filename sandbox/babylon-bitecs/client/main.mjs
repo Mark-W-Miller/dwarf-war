@@ -5,6 +5,7 @@ import { addComponent } from './vendor/bitecs-lite.mjs';
 
 // Babylon setup
 const canvas = document.getElementById('renderCanvas');
+const overlayEl = document.getElementById('overlay');
 const engine = new BABYLON.Engine(canvas, true, { preserveDrawingBuffer: true, stencil: true });
 const scene = new BABYLON.Scene(engine);
 scene.clearColor = new BABYLON.Color4(0.03, 0.05, 0.07, 1.0);
@@ -57,11 +58,10 @@ dwarfBase.isVisible = false;
 
 // ECS world
 const world = makeWorld();
+let debugFollowEid = null; // entity to mirror with a regular mesh for debugging
 
 // Spawn a bunch of units as thin instances
 const COUNT = 120; // tweak to 1000+ later to test scale
-dwarfBase.thinInstanceSetMatrixAt(0, BABYLON.Matrix.Identity()); // initialize buffer
-dwarfBase.thinInstanceCount = COUNT;
 
 for (let i = 0; i < COUNT; i++) {
   const angle = (i / COUNT) * Math.PI * 2;
@@ -70,6 +70,7 @@ for (let i = 0; i < COUNT; i++) {
   const z = Math.sin(angle) * radius;
   const y = ((i % 5) - 2) * 0.2;
   const eid = spawnWithTransform(world, x, y, z, 1);
+  if (debugFollowEid === null) debugFollowEid = eid;
   addComponent(world, UnitTag, eid);
   addComponent(world, ThinIndex, eid); ThinIndex.i[eid] = i;
   addComponent(world, AIOrder, eid); AIOrder.speed[eid] = 3.0 + (i % 3) * 0.6; AIOrder.index[eid] = 0;
@@ -81,6 +82,17 @@ for (let i = 0; i < COUNT; i++) {
     { x: x * 0.7, y: y, z: -z * 0.7 },
   ];
   PathStore.set(eid, p);
+
+  // Create the thin instance initially at its transform
+  const m = new BABYLON.Matrix();
+  BABYLON.Matrix.ComposeToRef(
+    new BABYLON.Vector3(1,1,1),
+    BABYLON.Quaternion.Identity(),
+    new BABYLON.Vector3(x, y, z),
+    m
+  );
+  const idx = dwarfBase.thinInstanceAdd(m);
+  ThinIndex.i[eid] = idx;
 }
 
 // Systems pipeline
@@ -88,11 +100,41 @@ const renderSyncThin = makeThinInstanceRenderer(dwarfBase);
 // Initialize instance matrices once before the first render
 renderSyncThin(world);
 
+// Visible debug cube that mirrors the first entity's Transform
+const debugMat = new BABYLON.PBRMetallicRoughnessMaterial('debugMat', scene);
+debugMat.baseColor = new BABYLON.Color3(1.0, 0.2, 0.2);
+debugMat.metallic = 0.0; debugMat.roughness = 0.4;
+const debugCube = BABYLON.MeshBuilder.CreateBox('debugCube', { size: 0.9 }, scene);
+debugCube.material = debugMat;
+
+function updateDebugOverlay(dt) {
+  const posText = debugFollowEid != null
+    ? `x=${Transform.x[debugFollowEid]?.toFixed(2)} y=${Transform.y[debugFollowEid]?.toFixed(2)} z=${Transform.z[debugFollowEid]?.toFixed(2)}`
+    : 'n/a';
+  const lines = [
+    'Babylon + bitecs Sandbox',
+    `dt=${dt.toFixed(3)}s`,
+    `entities=${world.__entities.size || 0}`,
+    `instances=${dwarfBase.thinInstanceCount ?? 'n/a'}`,
+    `followEid=${debugFollowEid ?? 'n/a'} ${posText}`,
+  ];
+  if (overlayEl) overlayEl.textContent = lines.join(' • ');
+}
+
 engine.runRenderLoop(() => {
   const dt = engine.getDeltaTime() / 1000; // seconds
   // Update loop (variable timestep for demo)
   movementSystem(world, dt);
   renderSyncThin(world, dt);
+  // Mirror one entity with a real mesh so you always see movement
+  if (debugFollowEid != null) {
+    debugCube.position.set(
+      Transform.x[debugFollowEid] || 0,
+      Transform.y[debugFollowEid] || 0,
+      Transform.z[debugFollowEid] || 0
+    );
+  }
+  updateDebugOverlay(dt);
   scene.render();
 });
 
