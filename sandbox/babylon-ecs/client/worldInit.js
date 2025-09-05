@@ -20,11 +20,17 @@ export function createScene(engine, canvas) {
   camera.attachControl(canvas, true);
   camera.lowerRadiusLimit = 6;
   camera.upperRadiusLimit = 50;
+  camera.minZ = 0.1;
+  camera.maxZ = 500;
 
-  // Directional light
+  // Directional light (key)
   const light = new BABYLON.DirectionalLight('dir', new BABYLON.Vector3(-1, -2, -1), scene);
   light.position = new BABYLON.Vector3(10, 20, 10);
   light.intensity = 1.2;
+
+  // Soft ambient fill to avoid fully black materials if key/flash miss
+  const hemi = new BABYLON.HemisphericLight('hemi', new BABYLON.Vector3(0, 1, 0), scene);
+  hemi.intensity = 0.15;
 
   // Materials
   const caveMat = new BABYLON.PBRMetallicRoughnessMaterial('caveMat', scene);
@@ -54,6 +60,36 @@ export function createScene(engine, canvas) {
 
   const dwarfMesh = BABYLON.MeshBuilder.CreateBox('dwarf', { size: 0.7 }, scene);
   dwarfMesh.material = dwarfMat;
+
+  // Flashlight: a spotlight that follows the camera and focuses on the dwarf cube
+  {
+    const flashlight = new BABYLON.SpotLight(
+      'flashlight',
+      camera.position.clone(),
+      new BABYLON.Vector3(0, 0, 1),
+      Math.PI / 5, // cone angle
+      8,           // exponent for decay within the cone
+      scene
+    );
+    flashlight.intensity = 1.4;
+    flashlight.range = 60;
+
+    // Update flashlight each frame: position at camera, aim at dwarf
+    const tmp = new BABYLON.Vector3();
+    scene.onBeforeRenderObservable.add(() => {
+      flashlight.position.copyFrom(camera.position);
+      tmp.copyFrom(dwarfMesh.getAbsolutePosition());
+      tmp.subtractInPlace(flashlight.position);
+      const lenSq = tmp.lengthSquared();
+      if (lenSq > 1e-6) {
+        tmp.scaleInPlace(1 / Math.sqrt(lenSq));
+        flashlight.direction.copyFrom(tmp);
+      } else {
+        const fwd = camera.getForwardRay(1).direction;
+        flashlight.direction.copyFrom(fwd);
+      }
+    });
+  }
 
   // Visual label to identify this sandbox
   {
@@ -98,4 +134,3 @@ export function createWorld() {
   world.addSystem(RenderSyncSystem);
   return world;
 }
-

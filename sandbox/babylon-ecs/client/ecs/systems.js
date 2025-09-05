@@ -18,13 +18,17 @@ export function MovementSystem(world, dt) {
   for (const id of world.query(C.Transform, C.AIOrder)) {
     const t = world.getComponent(id, C.Transform);
     const order = world.getComponent(id, C.AIOrder);
-    if (order.mode !== 'Move' || !order.path?.length) continue;
-    const target = order.path[Math.min(order.index, order.path.length - 1)];
+    const path = order.path || [];
+    if (order.mode !== 'Move' || path.length === 0) continue;
+    // Ensure index is in range
+    if (order.index == null || order.index < 0 || order.index >= path.length) order.index = 0;
+    const target = path[order.index];
     const speed = order.speed || 1;
     const nextPos = stepToward(t.position, target, speed * dt);
     t.position = nextPos;
     if (dist(nextPos, target) < 0.05) {
-      order.index = Math.min(order.index + 1, order.path.length - 1);
+      // Loop back to start to patrol continuously
+      order.index = (order.index + 1) % path.length;
     }
   }
 }

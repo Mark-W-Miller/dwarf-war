@@ -31,14 +31,8 @@ let dwarfEid = null;
   world.addComponent(e, C.UnitTag, makeUnitTag('Dwarf'));
   world.addComponent(e, C.Spin, makeSpin(0, 0, 0, 0.92));
   world.addComponent(e, C.Mass, makeMass(1.0, 0.25, 0));
-  const path = [
-    { x: -3, y: 0, z: -2 },
-    { x: 0, y: 0, z: 0 },
-    { x: 3, y: 0, z: 2 },
-    { x: 0, y: 0, z: -1 },
-    { x: -3, y: 0, z: -2 },
-  ];
-  world.addComponent(e, C.AIOrder, makeAIOrder(path, 'Move', 2.5));
+  // Start with an empty patrol path; user clicks will append waypoints (see input.js)
+  world.addComponent(e, C.AIOrder, makeAIOrder([], 'Move', 2.5));
 }
 
 // Centralized input handlers: pointer + window resize

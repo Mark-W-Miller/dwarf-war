@@ -82,16 +82,15 @@ export function handleGroundHit({ scene, ground, world, dwarfEid, pickedPoint, m
   console.log('marker (red dot)', markerPos);
   console.groupEnd();
 
-  // Retarget dwarf to the clicked x/z at its current height
+  // Append this point to the dwarf's patrol path (order.path)
   if (dwarfEid != null) {
     const t = world.getComponent(dwarfEid, C.Transform);
     const order = world.getComponent(dwarfEid, C.AIOrder);
     if (t && order) {
-      order.path = [
-        { x: t.position.x, y: t.position.y, z: t.position.z },
-        { x: pickedPoint.x, y: t.position.y, z: pickedPoint.z },
-      ];
-      order.index = 0;
+      if (!Array.isArray(order.path)) order.path = [];
+      order.path.push({ x: pickedPoint.x, y: t.position.y, z: pickedPoint.z });
+      // If this is the first point added, ensure we start moving toward it
+      if (order.path.length === 1) order.index = 0;
       order.mode = 'Move';
     }
   }
@@ -112,6 +111,29 @@ export function registerInputHandlers({ scene, camera, engine, ground, dwarfMesh
 
   let clickCount = 0;
 
+  // Patrol path visual state: small tube connecting ground dots in click order
+  const tubeMat = new BABYLON.PBRMetallicRoughnessMaterial('patrolTubeMat', scene);
+  tubeMat.baseColor = new BABYLON.Color3(0.95, 0.75, 0.2); // warm highlight
+  tubeMat.metallic = 0.0;
+  tubeMat.roughness = 0.5;
+  let patrolTube = null; // BABYLON.Mesh
+  const pathPoints = []; // Array<BABYLON.Vector3> at ground height
+
+  function updatePatrolTube() {
+    // If fewer than 2 points, remove any existing tube and bail
+    if (pathPoints.length < 2) {
+      if (patrolTube) { patrolTube.dispose(); patrolTube = null; }
+      return;
+    }
+    // Close the loop visually so it returns last → first
+    const closed = pathPoints.concat([pathPoints[0]]);
+    // Babylon's Tube update expects same path length; rebuild to support growth
+    if (patrolTube) { patrolTube.dispose(); patrolTube = null; }
+    patrolTube = BABYLON.MeshBuilder.CreateTube('patrolTube', { path: closed, radius: 0.035 }, scene);
+    patrolTube.material = tubeMat;
+    patrolTube.isPickable = false;
+  }
+
   scene.onPointerObservable.add((pi) => {
     if (pi.type !== BABYLON.PointerEventTypes.POINTERDOWN) return;
 
@@ -127,7 +149,13 @@ export function registerInputHandlers({ scene, camera, engine, ground, dwarfMesh
     const hitGround = scene.pick(scene.pointerX, scene.pointerY, (m) => m === ground);
     if (hitGround?.hit && hitGround.pickedPoint) {
       clickCount += 1;
+      // Record this point at ground height for tube visualization
+      const flat = new BABYLON.Vector3(hitGround.pickedPoint.x, ground.position.y + 0.02, hitGround.pickedPoint.z);
+      pathPoints.push(flat);
+      // Create dot + append to patrol path/order; logs happen inside
       handleGroundHit({ scene, ground, world, dwarfEid, pickedPoint: hitGround.pickedPoint, markerMat, clickIndex: clickCount });
+      // Rebuild or update the small tube that connects all ground dots
+      updatePatrolTube();
     }
   });
 
