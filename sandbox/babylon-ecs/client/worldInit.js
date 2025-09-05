@@ -67,12 +67,12 @@ export function createScene(engine, canvas) {
       'flashlight',
       camera.position.clone(),
       new BABYLON.Vector3(0, 0, 1),
-      Math.PI / 5, // cone angle
-      8,           // exponent for decay within the cone
+      Math.PI / 24, // narrower cone for "laser" look
+      32,            // sharper falloff inside the cone
       scene
     );
-    flashlight.intensity = 1.4;
-    flashlight.range = 60;
+    flashlight.intensity = 2.0;
+    flashlight.range = 80;
 
     // Update flashlight each frame: position at camera, aim at dwarf
     const tmp = new BABYLON.Vector3();
@@ -89,6 +89,14 @@ export function createScene(engine, canvas) {
         flashlight.direction.copyFrom(fwd);
       }
     });
+
+    // Shadows: cube casts; ground/cave receive
+    const shadowGen = new BABYLON.ShadowGenerator(1024, flashlight);
+    shadowGen.usePoissonSampling = true;
+    shadowGen.bias = 0.0015;
+    shadowGen.addShadowCaster(dwarfMesh);
+    ground.receiveShadows = true;
+    cave.receiveShadows = true;
   }
 
   // Visual label to identify this sandbox
