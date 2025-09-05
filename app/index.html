@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Dwarf War — App</title>
+    <style>
+      html, body { height: 100%; margin: 0; background: #0b0f12; }
+      #renderCanvas { width: 100vw; height: 100vh; display: block; touch-action: none; }
+      .overlay { position: absolute; top: 8px; left: 10px; color: #cfd8dc; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; font-size: 12px; }
+      .panel { position: absolute; top: 8px; right: 10px; bottom: 8px; width: 360px; max-width: calc(100vw - 40px); background: rgba(10,14,18,0.9); border: 1px solid #1e2a30; border-radius: 8px; padding: 10px; color: #e3edf3; display: flex; flex-direction: column; overflow: hidden; }
+      .panel h3 { margin: 0 0 8px 0; font-size: 14px; font-weight: 600; }
+      .panel .header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+      .panel .panel-content { flex: 1; min-height: 0; overflow: auto; }
+      .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+      .row label { display: inline-flex; align-items: center; gap: 6px; }
+      .btn { background: #1f2b33; color: #e3edf3; border: 1px solid #2b3a42; border-radius: 6px; padding: 6px 10px; cursor: pointer; font-size: 12px; }
+      .btn:hover { background: #27353e; }
+      .btn.warn { background: #3a2624; border-color: #5a2e2b; }
+      .icon-btn { background: transparent; color: #9fb2bb; border: 1px solid #2b3a42; border-radius: 6px; padding: 4px 8px; cursor: pointer; font-size: 13px; }
+      .icon-btn:hover { background: #162028; }
+      textarea { width: 100%; min-height: 120px; background: #0f151a; color: #cfe1ea; border: 1px solid #1e2a30; border-radius: 6px; padding: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+      .hint { color: #a7bac3; font-size: 11px; margin-top: 6px; }
+      .collapse { background: transparent; color: #9fb2bb; border: 1px solid #2b3a42; border-radius: 6px; padding: 4px 8px; cursor: pointer; font-size: 12px; }
+      .panel.collapsed { width: 40px; padding: 8px; display: flex; align-items: flex-start; }
+      .panel.collapsed .panel-content, .panel.collapsed h3, .panel.collapsed .row, .panel.collapsed .hint, .panel.collapsed #assistantOutput { display: none; }
+      .panel.collapsed .header-title { display: none; }
+
+      /* Settings modal */
+      .modal { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.5); z-index: 1000; }
+      .modal.open { display: flex; }
+      .modal-card { width: min(640px, 96vw); max-height: 90vh; overflow: auto; background: #0f151a; border: 1px solid #1e2a30; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); padding: 14px; color: #e3edf3; }
+      .modal-card h3 { margin: 0 0 10px 0; }
+      .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px; }
+      .field input, .field select { width: 100%; background: #0f151a; color: #cfe1ea; border: 1px solid #1e2a30; border-radius: 6px; padding: 6px 8px; }
+      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+      /* Tabs */
+      .tabs { display: flex; gap: 6px; border-bottom: 1px solid #1e2a30; margin-bottom: 8px; }
+      .tab { background: transparent; color: #9fb2bb; border: 1px solid #2b3a42; border-bottom: none; border-radius: 6px 6px 0 0; padding: 6px 10px; cursor: pointer; font-size: 12px; }
+      .tab.active { background: #162028; color: #e3edf3; border-color: #2b3a42; }
+      .tab-pane { display: none; }
+      .tab-pane.active { display: block; }
+    </style>
+    <script src="https://cdn.babylonjs.com/babylon.js"></script>
+  </head>
+  <body>
+    <canvas id="renderCanvas"></canvas>
+    <div class="overlay" id="hud">Dwarf War • Edit/Game scaffold • drag to orbit</div>
+    <div class="panel" id="rightPanel">
+      <div class="header">
+        <h3 class="header-title">Editor</h3>
+        <div style="display:flex; gap:6px; align-items:center;">
+          <button class="icon-btn" id="settingsOpen" title="Settings">⚙️</button>
+          <button class="collapse" id="collapsePanel" title="Collapse/Expand">⟨⟩</button>
+        </div>
+      </div>
+      <div class="panel-content">
+        <div class="row">
+          <label><input type="radio" name="mode" value="edit" checked> Edit</label>
+          <label><input type="radio" name="mode" value="game"> Game</label>
+          <button class="btn" id="toggleRun">Pause</button>
+          <button class="btn" id="reset">Reset</button>
+          <button class="btn" id="export">Export</button>
+          <input type="file" id="importFile" style="display:none" />
+          <button class="btn" id="import">Import</button>
+        </div>
+        <h3>Assistant Bus</h3>
+        <textarea id="assistantInput" placeholder='Type natural language or paste JSON (e.g., "Dento is the central cavern..." or {"caverns":[...],"links":[...]})'></textarea>
+        <div class="row">
+          <button class="btn" id="parse">Parse Text</button>
+          <button class="btn" id="askAI">Ask AI</button>
+          <button class="btn" id="execute">Run Command</button>
+          <button class="btn" id="apply">Apply to Barrow</button>
+          <button class="btn warn" id="clear">Clear Text</button>
+        </div>
+        <pre id="assistantOutput" style="margin-top:8px; max-height: 200px; overflow:auto; background:#0f151a; border:1px solid #1e2a30; border-radius:6px; padding:8px;"></pre>
+        <div class="hint">Tip: Try describing a central cavern and connections. We’ll map directions to a quick layout and persist to local history.</div>
+      </div>
+    </div>
+    <!-- Settings Modal -->
+    <div class="modal" id="settingsModal">
+      <div class="modal-card" role="dialog" aria-modal="true">
+        <div style="display:flex; align-items:center; justify-content: space-between; gap:8px; margin-bottom:8px;">
+          <h3 style="margin:0;">Assistant Settings</h3>
+          <button class="icon-btn" id="settingsClose" title="Close">✕</button>
+        </div>
+        <div class="grid">
+          <div class="field">
+            <label>Provider
+              <select id="aiProvider">
+                <option value="none">None (local parser)</option>
+                <option value="local">Local Assistant (HTTP)</option>
+                <option value="openai">OpenAI</option>
+              </select>
+            </label>
+          </div>
+          <div class="field">
+            <label>Model
+              <input id="aiModel" type="text" value="gpt-4o-mini" />
+            </label>
+          </div>
+          <div class="field" style="grid-column: 1 / -1;">
+            <label>API Key
+              <input id="aiKey" type="password" placeholder="sk-..." />
+            </label>
+          </div>
+          <div class="field" style="grid-column: 1 / -1;">
+            <label>Base URL
+              <input id="aiBaseUrl" type="text" placeholder="https://api.openai.com or http://localhost:8787" />
+            </label>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button class="btn" id="testAI">Test AI</button>
+          <button class="btn" id="saveAI">Save Settings</button>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="./main.mjs"></script>
+  </body>
+  </html>
