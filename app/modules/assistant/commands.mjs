@@ -17,7 +17,7 @@ function ensureCavern(barrow, nameOrId) {
   const existing = findCavern(barrow, nameOrId);
   if (existing) return existing;
   const id = slugId(nameOrId);
-  const c = { id, name: nameOrId, size: 'medium', pos: null };
+  const c = { id, size: 'medium', pos: null };
   barrow.caverns.push(c);
   return c;
 }
@@ -60,7 +60,20 @@ export function executeCommands(barrow, commands) {
       case 'renameCavern': {
         const from = findCavern(b, cmd.from);
         if (!from) { out.messages.push(`Rename cavern failed: '${cmd.from}' not found`); break; }
-        from.name = cmd.to; out.messages.push(`Renamed cavern '${cmd.from}' to '${cmd.to}'.`);
+        const newId = slugId(cmd.to);
+        if (b.caverns.some(c => c.id === newId)) { out.messages.push(`Rename cavern failed: target id '${newId}' already exists`); break; }
+        const oldId = from.id;
+        from.id = newId;
+        // Update links
+        for (const l of b.links || []) {
+          if (l.from === oldId) l.from = newId;
+          if (l.to === oldId) l.to = newId;
+        }
+        // Update carddons location references
+        for (const cd of b.carddons || []) {
+          if (cd.cavernId === oldId) cd.cavernId = newId;
+        }
+        out.messages.push(`Renamed cavern id '${oldId}' to '${newId}'.`);
         break;
       }
       case 'addLink': {
@@ -112,4 +125,3 @@ export function executeCommands(barrow, commands) {
   layoutBarrow(out.barrow);
   return out;
 }
-

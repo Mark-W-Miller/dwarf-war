@@ -1,7 +1,7 @@
 // Build Babylon meshes from Barrow data
 
 export function buildSceneFromBarrow(scene, barrow) {
-  const built = { caverns: [], links: [], carddons: [] };
+  const built = { caverns: [], links: [], carddons: [], cavernLabels: [] };
 
   // Materials
   const cavernMat = new BABYLON.PBRMetallicRoughnessMaterial('cavernMat', scene);
@@ -19,6 +19,24 @@ export function buildSceneFromBarrow(scene, barrow) {
     sphere.material = c.role === 'central' ? centralMat : cavernMat;
     sphere.isPickable = false;
     built.caverns.push({ id: c.id, mesh: sphere });
+
+    // Cavern label above the sphere — label = object name (id)
+    const labelPlane = BABYLON.MeshBuilder.CreatePlane(`cavern:${c.id}:label`, { width: 1.8, height: 0.6 }, scene);
+    labelPlane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
+    const yOffset = (size * 0.5) + 0.6;
+    labelPlane.position = new BABYLON.Vector3(sphere.position.x, sphere.position.y + yOffset, sphere.position.z);
+    labelPlane.isPickable = false;
+    const dt = new BABYLON.DynamicTexture(`cavern:${c.id}:dt`, { width: 512, height: 192 }, scene, false);
+    dt.hasAlpha = true;
+    const ctx = dt.getContext(); ctx.clearRect(0,0,512,192);
+    const title = c.id || sphere.name || 'cavern';
+    const sub = c.role ? String(c.role) : '';
+    dt.drawText(title, null, 98, 'bold 56px system-ui, sans-serif', '#e9f1f7', 'transparent', true);
+    if (sub) dt.drawText(sub, null, 160, 'normal 30px system-ui, sans-serif', '#9fb2bb', 'transparent', true);
+    const lmat = new BABYLON.StandardMaterial(`cavern:${c.id}:mat`, scene);
+    lmat.diffuseTexture = dt; lmat.emissiveTexture = dt; lmat.backFaceCulling = false; lmat.specularColor = new BABYLON.Color3(0,0,0);
+    labelPlane.material = lmat;
+    built.cavernLabels.push({ id: c.id, mesh: labelPlane, dt, mat: lmat });
   }
 
   // Links (as tubes)
@@ -33,7 +51,7 @@ export function buildSceneFromBarrow(scene, barrow) {
     built.links.push({ link: l, mesh: tube });
   }
 
-  // Carddon nameplates above their caverns
+  // Carddon cubes + nameplates above their caverns
   if (Array.isArray(barrow.carddons) && barrow.carddons.length) {
     // Track how many labels per cavern to stack them
     const stackCount = new Map();
@@ -44,9 +62,17 @@ export function buildSceneFromBarrow(scene, barrow) {
       const idx = (stackCount.get(cavId) || 0);
       stackCount.set(cavId, idx + 1);
 
+      // Cube for the carddon (object)
+      const cube = BABYLON.MeshBuilder.CreateBox(`carddon:${cd.id}:cube`, { size: 0.7 }, scene);
+      cube.position = new BABYLON.Vector3(basePos.x + idx * 0.05, basePos.y + 1.2 + idx * 0.9, basePos.z);
+      const cubeMat = new BABYLON.PBRMetallicRoughnessMaterial(`carddon:${cd.id}:cubeMat`, scene);
+      cubeMat.baseColor = new BABYLON.Color3(0.85, 0.35, 0.25); cubeMat.metallic = 0.0; cubeMat.roughness = 0.5;
+      cube.material = cubeMat; cube.isPickable = false;
+
+      // Label plane above the cube
       const plane = BABYLON.MeshBuilder.CreatePlane(`carddon:${cd.id}:label`, { width: 1.9, height: 0.8 }, scene);
       plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
-      plane.position = new BABYLON.Vector3(basePos.x + idx * 0.05, basePos.y + 1.6 + idx * 0.35, basePos.z);
+      plane.position = new BABYLON.Vector3(cube.position.x, cube.position.y + 0.6, cube.position.z);
       plane.isPickable = false;
 
       const dt = new BABYLON.DynamicTexture(`carddon:${cd.id}:dt`, { width: 512, height: 192 }, scene, false);
@@ -63,6 +89,7 @@ export function buildSceneFromBarrow(scene, barrow) {
       mat.specularColor = new BABYLON.Color3(0,0,0);
       plane.material = mat;
       built.carddons.push({ id: cd.id, mesh: plane, dt, mat });
+      built.carddons.push({ id: cd.id, mesh: cube, mat: cubeMat });
     }
   }
 
@@ -86,6 +113,7 @@ export function disposeBuilt(built) {
   if (!built) return;
   for (const x of built.caverns || []) x.mesh?.dispose();
   for (const x of built.links || []) x.mesh?.dispose();
+  for (const x of built.cavernLabels || []) { x.mesh?.dispose(); x.dt?.dispose(); }
   for (const x of built.carddons || []) { x.mesh?.dispose(); x.dt?.dispose(); }
   built.label?.dispose();
 }

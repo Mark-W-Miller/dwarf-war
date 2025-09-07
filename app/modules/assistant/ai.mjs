@@ -1,4 +1,5 @@
 import { openaiChat } from './providers/openai.mjs';
+import { ollamaGenerate } from './providers/ollama.mjs';
 
 const KEY = 'dw:ai:settings';
 
@@ -14,6 +15,31 @@ export function saveAISettings(cfg) {
 export async function askAI(cfg, { mode, text }) {
   // mode: 'instructions' | 'commands'
   if (!cfg || cfg.provider === 'none') throw new Error('AI provider not configured');
+  if (cfg.provider === 'ollama') {
+    // Default to Shadax generation: English -> Shadax DSL
+    const shadaxSpec = `You are Shadax Writer, producing only Shadax (Shield & Axe) scripts.
+Shadax is a line-oriented build language for a dwarven barrow. Allowed commands:
+BARROW name "<name>"
+CAVERN <id> NAME "<name>" [ROLE central] [SIZE small|medium|large] [AT <DIR> OF <anchorId>]
+LINK <fromId> <toId> [DIR <DIR>] [TYPE tunnel|door]
+CARDDON "<name>" [IN <cavernId>]
+RENAME CAVERN <fromId> TO <toId>
+RENAME CARDDON "<from>" TO "<to>"
+DIR is one of: N S E W NE NW SE SW UP DOWN
+Rules:
+- Output only Shadax lines, no prose, no JSON.
+- Derive ids by slugging names (lowercase, dashes).
+- Favor concise commands; one logical action per line.`;
+    const model = (cfg.model || '').trim();
+    const resolvedModel = (!model || /^gpt/i.test(model)) ? 'llama3.1:8b' : model;
+    const resp = await ollamaGenerate({
+      baseUrl: cfg.baseUrl || 'http://localhost:11434',
+      model: resolvedModel,
+      prompt: String(text || ''),
+      system: shadaxSpec
+    });
+    return resp;
+  }
   if (cfg.provider === 'local') {
     const base = (cfg.baseUrl || 'http://localhost:8787').replace(/\/$/, '');
     const path = mode === 'commands' ? '/parse-commands' : '/parse-instructions';

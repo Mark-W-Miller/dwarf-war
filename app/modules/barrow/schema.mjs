@@ -8,10 +8,8 @@ export const directions = {
 
 export function makeDefaultBarrow() {
   return {
-    id: `barrow-${Date.now()}`,
-    caverns: [
-      { id: 'dento', name: 'Dento', role: 'central', tags: ['ornate'], size: 'medium', pos: { x: 0, y: 0, z: 0 } },
-    ],
+    id: 'Your Barrow',
+    caverns: [],
     carddons: [],
     links: [],
     meta: { version: 1, createdAt: Date.now(), updatedAt: Date.now() },

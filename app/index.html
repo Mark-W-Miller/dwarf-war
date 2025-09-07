@@ -41,8 +41,13 @@
       .tab.active { background: #162028; color: #e3edf3; border-color: #2b3a42; }
       .tab-pane { display: none; }
       .tab-pane.active { display: block; }
+      /* DB view */
+      .db-view details { border: 1px solid #1e2a30; border-radius: 6px; padding: 6px 8px; margin: 6px 0; background: #0f151a; }
+      .db-view summary { cursor: pointer; color: #cfe1ea; }
+      .db-view .kv { color: #9fb2bb; font-size: 12px; }
     </style>
     <script src="https://cdn.babylonjs.com/babylon.js"></script>
+    <script src="https://cdn.babylonjs.com/materialsLibrary/babylonjs.materials.min.js"></script>
   </head>
   <body>
     <canvas id="renderCanvas"></canvas>
@@ -65,16 +70,15 @@
           <input type="file" id="importFile" style="display:none" />
           <button class="btn" id="import">Import</button>
         </div>
-        <h3>Assistant Bus</h3>
-        <textarea id="assistantInput" placeholder='Type natural language or paste JSON (e.g., "Dento is the central cavern..." or {"caverns":[...],"links":[...]})'></textarea>
+        <h3>Assistant</h3>
+        <textarea id="assistantInput" placeholder='Talk to the local assistant. Examples: "Dento is the central cavern, connected north and south" or "Add cavern North north of Dento"'></textarea>
         <div class="row">
-          <button class="btn" id="parse">Parse Text</button>
-          <button class="btn" id="askAI">Ask AI</button>
-          <button class="btn" id="execute">Run Command</button>
-          <button class="btn" id="apply">Apply to Barrow</button>
-          <button class="btn warn" id="clear">Clear Text</button>
+          <button class="btn" id="enter">Enter</button>
         </div>
-        <pre id="assistantOutput" style="margin-top:8px; max-height: 200px; overflow:auto; background:#0f151a; border:1px solid #1e2a30; border-radius:6px; padding:8px;"></pre>
+        <textarea id="assistantOutputTa" placeholder='Assistant response (JSON). Review/edit, then Apply.' style="min-height: 160px;"></textarea>
+        <div class="row">
+          <button class="btn" id="apply">Apply</button>
+        </div>
         <div class="hint">Tip: Try describing a central cavern and connections. We’ll map directions to a quick layout and persist to local history.</div>
       </div>
     </div>
@@ -91,6 +95,7 @@
               <select id="aiProvider">
                 <option value="none">None (local parser)</option>
                 <option value="local">Local Assistant (HTTP)</option>
+                <option value="ollama">Ollama (local LLM)</option>
                 <option value="openai">OpenAI</option>
               </select>
             </label>
@@ -107,7 +112,7 @@
           </div>
           <div class="field" style="grid-column: 1 / -1;">
             <label>Base URL
-              <input id="aiBaseUrl" type="text" placeholder="https://api.openai.com or http://localhost:8787" />
+              <input id="aiBaseUrl" type="text" placeholder="https://api.openai.com or http://localhost:8787 or http://localhost:11434" />
             </label>
           </div>
         </div>
