@@ -4,9 +4,29 @@ function slugId(name) {
   return String(name).toLowerCase().trim().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'');
 }
 
+function stripComments(line) {
+  // Remove everything after an unquoted #
+  let out = '';
+  let inQuote = false;
+  let esc = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (esc) { out += ch; esc = false; continue; }
+    if (ch === '\\') { out += ch; esc = true; continue; }
+    if (ch === '"') { inQuote = !inQuote; out += ch; continue; }
+    if (!inQuote && ch === '#') break;
+    out += ch;
+  }
+  return out.trim();
+}
+
 export function parseShadaxToCommands(text) {
   const cmds = [];
-  const lines = String(text||'').split(/\r?\n/).map(s => s.trim()).filter(s => s && !s.startsWith('#'));
+  const lines = String(text||'')
+    .split(/\r?\n/)
+    .map(stripComments)
+    .map(s => s.trim())
+    .filter(Boolean);
   for (const line of lines) {
     let m;
     if ((m = line.match(/^BARROW\s+name\s+"([^"]+)"/i))) {

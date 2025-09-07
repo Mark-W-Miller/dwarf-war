@@ -28,13 +28,63 @@ hemi.intensity = 0.2;
 
 // Ground (subtle green grid), open environment (no enclosing sphere)
 const ground = BABYLON.MeshBuilder.CreateGround('ground', { width: 800, height: 800 }, scene);
-ground.position.y = -2;
+ground.position.y = 0;
 const grid = new BABYLON.GridMaterial('grid', scene);
 grid.mainColor = new BABYLON.Color3(0.08, 0.12, 0.08); // dark greenish base
 grid.lineColor = new BABYLON.Color3(0.25, 0.65, 0.25); // subtle green lines
 grid.gridRatio = 2; // meters per cell
 grid.opacity = 0.95;
 ground.material = grid;
+
+// Vertical YX grid at Z=0 with numbers
+const vGrid = BABYLON.MeshBuilder.CreatePlane('gridYX', { width: 800, height: 800 }, scene);
+vGrid.position = new BABYLON.Vector3(0, 0, 0);
+// Plane default is XY at Z=0 facing +Z
+const gridVMat = new BABYLON.GridMaterial('gridV', scene);
+gridVMat.mainColor = new BABYLON.Color3(0.08, 0.12, 0.08);
+gridVMat.lineColor = new BABYLON.Color3(0.25, 0.55, 0.25);
+gridVMat.gridRatio = 2;
+gridVMat.opacity = 0.6;
+gridVMat.backFaceCulling = false;
+vGrid.material = gridVMat;
+
+// Axis numbers along X/Z=0 and X/Y at coarse intervals
+(function addAxisLabels() {
+  const tick = 20; // spacing in world units
+  const range = 200; // +/- range
+  const font = 'bold 22px system-ui, sans-serif';
+  const color = '#7fbf7f';
+
+  function makeTextPlane(name, text) {
+    const size = 128;
+    const dt = new BABYLON.DynamicTexture(name+':dt', { width: size, height: size }, scene, false);
+    dt.hasAlpha = true; const ctx = dt.getContext(); ctx.clearRect(0,0,size,size);
+    dt.drawText(text, null, 90, font, color, 'transparent', true);
+    const mat = new BABYLON.StandardMaterial(name+':mat', scene);
+    mat.diffuseTexture = dt; mat.emissiveTexture = dt; mat.backFaceCulling = false; mat.specularColor = new BABYLON.Color3(0,0,0);
+    const p = BABYLON.MeshBuilder.CreatePlane(name, { size: 1.2 }, scene);
+    p.material = mat; p.isPickable = false;
+    return p;
+  }
+
+  // Ground X axis labels (Z=0, Y slightly above 0)
+  for (let x = -range; x <= range; x += tick) {
+    const plane = makeTextPlane('lblX_'+x, String(x));
+    plane.position = new BABYLON.Vector3(x, 0.05, 0.01);
+    plane.rotation.x = -Math.PI/2; // face up
+  }
+  // Vertical grid X axis labels along Y=0 (Z slightly towards camera)
+  for (let x = -range; x <= range; x += tick) {
+    const plane = makeTextPlane('lblVX_'+x, String(x));
+    plane.position = new BABYLON.Vector3(x, -0.05, 0.05);
+    // faces camera by default on XY plane
+  }
+  // Vertical grid Y axis labels at X=0
+  for (let y = -range; y <= range; y += tick) {
+    const plane = makeTextPlane('lblVY_'+y, String(y));
+    plane.position = new BABYLON.Vector3(0.05, y, 0.05);
+  }
+})();
 
 // App state
 const state = {

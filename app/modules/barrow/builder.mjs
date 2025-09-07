@@ -5,9 +5,9 @@ export function buildSceneFromBarrow(scene, barrow) {
 
   // Materials
   const cavernMat = new BABYLON.PBRMetallicRoughnessMaterial('cavernMat', scene);
-  cavernMat.baseColor = new BABYLON.Color3(0.8, 0.75, 0.65); cavernMat.metallic = 0.0; cavernMat.roughness = 0.7;
+  cavernMat.baseColor = new BABYLON.Color3(0.8, 0.75, 0.65); cavernMat.metallic = 0.0; cavernMat.roughness = 0.7; cavernMat.alpha = 0.55;
   const centralMat = new BABYLON.PBRMetallicRoughnessMaterial('centralMat', scene);
-  centralMat.baseColor = new BABYLON.Color3(0.95, 0.85, 0.2); centralMat.metallic = 0.1; centralMat.roughness = 0.5;
+  centralMat.baseColor = new BABYLON.Color3(0.95, 0.85, 0.2); centralMat.metallic = 0.1; centralMat.roughness = 0.5; centralMat.alpha = 0.5;
   const linkMat = new BABYLON.PBRMetallicRoughnessMaterial('linkMat', scene);
   linkMat.baseColor = new BABYLON.Color3(0.5, 0.65, 0.8); linkMat.metallic = 0.0; linkMat.roughness = 0.4;
 
@@ -30,9 +30,10 @@ export function buildSceneFromBarrow(scene, barrow) {
     dt.hasAlpha = true;
     const ctx = dt.getContext(); ctx.clearRect(0,0,512,192);
     const title = c.id || sphere.name || 'cavern';
-    const sub = c.role ? String(c.role) : '';
     dt.drawText(title, null, 98, 'bold 56px system-ui, sans-serif', '#e9f1f7', 'transparent', true);
-    if (sub) dt.drawText(sub, null, 160, 'normal 30px system-ui, sans-serif', '#9fb2bb', 'transparent', true);
+    const cx = Math.round(sphere.position.x), cy = Math.round(sphere.position.y), cz = Math.round(sphere.position.z);
+    const coords = `i=${cx}  j=${cy}  k=${cz}`;
+    dt.drawText(coords, null, 160, 'normal 30px system-ui, sans-serif', '#9fb2bb', 'transparent', true);
     const lmat = new BABYLON.StandardMaterial(`cavern:${c.id}:mat`, scene);
     lmat.diffuseTexture = dt; lmat.emissiveTexture = dt; lmat.backFaceCulling = false; lmat.specularColor = new BABYLON.Color3(0,0,0);
     labelPlane.material = lmat;
