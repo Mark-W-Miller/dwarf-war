@@ -16,6 +16,10 @@ camera.attachControl(canvas, true);
 camera.lowerRadiusLimit = 2; camera.upperRadiusLimit = 5000;
 camera.minZ = 0.1; camera.maxZ = 10000;
 camera.wheelPrecision = 1; // use percentage-based zoom below
+// Middle mouse (button=1) pans the view; adjust panning speed/inertia
+camera.panningMouseButton = 2; // right button pans
+camera.panningSensibility = 40; // lower = faster
+camera.panningInertia = 0.2;
 
 // Lighting
 const dir = new BABYLON.DirectionalLight('dir', new BABYLON.Vector3(-1, -2, -1), scene);
@@ -125,8 +129,9 @@ state.built = buildSceneFromBarrow(scene, state.barrow);
 renderDbView(state.barrow);
 updateUnitGrids();
 applyZoomBase();
+applyPanBase();
 rebuildHalos();
-updateGridExtent();
+scheduleGridUpdate();
 // Highlight layer for selection glow
 state.hl = new BABYLON.HighlightLayer('hl', scene, { blurHorizontalSize: 1.0, blurVerticalSize: 1.0 });
 state.hl.innerGlow = false; state.hl.outerGlow = true;
@@ -252,6 +257,7 @@ newSpaceBtn?.addEventListener('click', () => {
   renderDbView(state.barrow);
   // Focus camera
   camera.target.copyFrom(new BABYLON.Vector3(s.origin.x, s.origin.y, s.origin.z));
+  scheduleGridUpdate();
 });
 
 // Fit camera to all spaces
@@ -313,24 +319,23 @@ engine.runRenderLoop(() => {
   const dt = engine.getDeltaTime() / 1000;
   // Keep grids near the camera target so they don't "disappear" when moving far
   try {
-    if (ground && camera && camera.target) {
-      ground.position.x = camera.target.x;
-      ground.position.z = camera.target.z;
-    }
-    if (typeof vGrid !== 'undefined' && vGrid && camera && camera.target) {
-      vGrid.position.x = camera.target.x;
-      vGrid.position.z = camera.target.z;
-    }
-    if (typeof wGrid !== 'undefined' && wGrid && camera && camera.target) {
-      wGrid.position.x = camera.target.x;
-      wGrid.position.z = camera.target.z;
-    }
+    // Grids are centered at the world origin (0,0,0); do not follow camera.
+    if (ground) { ground.position.x = 0; ground.position.z = 0; ground.position.y = 0; }
+    if (typeof vGrid !== 'undefined' && vGrid) { vGrid.position.x = 0; vGrid.position.z = 0; }
+    if (typeof wGrid !== 'undefined' && wGrid) { wGrid.position.x = 0; wGrid.position.z = 0; }
     // Keep the barrow label near the target for visibility
     if (state?.built?.label && camera?.target) {
       state.built.label.position.x = camera.target.x;
       state.built.label.position.z = camera.target.z;
     }
+    // Adapt pan speed with distance: farther = faster (lower sensibility)
+    const panBase = getPanBase();
+    const r = Math.max(1, camera.radius);
+    const f = Math.max(0.2, r / 100); // grows with distance
+    const baseSens = Math.max(1, 300 / panBase); // invert mapping (higher base = faster = lower sens)
+    camera.panningSensibility = Math.max(1, baseSens / f);
   } catch {}
+  // Grid extent updates are debounced (2s) via scheduleGridUpdate()
   // Percentage-based zoom handles near/far scaling; settings slider updates base percentage.
   // Render
   scene.render();
@@ -467,19 +472,33 @@ collapsePanelBtn.addEventListener('click', () => {
 // ——————————— Settings UI (Zoom speed) ———————————
 (function setupSettings(){
   const pane = document.getElementById('tab-settings'); if (!pane) return;
+  // Zoom speed slider
   const row = document.createElement('div'); row.className = 'row';
   const label = document.createElement('label'); label.textContent = 'Zoom Speed'; label.style.display = 'flex'; label.style.alignItems = 'center'; label.style.gap = '8px';
   const slider = document.createElement('input'); slider.type = 'range'; slider.min = '5'; slider.max = '100'; slider.step = '1'; slider.id = 'zoomSpeed';
   const valueSpan = document.createElement('span'); valueSpan.id = 'zoomSpeedVal';
   label.appendChild(slider); label.appendChild(valueSpan);
   row.appendChild(label); pane.appendChild(row);
+
+  // Pan speed slider (controls panningSensibility; lower = faster)
+  const row2 = document.createElement('div'); row2.className = 'row';
+  const label2 = document.createElement('label'); label2.textContent = 'Pan Speed'; label2.style.display = 'flex'; label2.style.alignItems = 'center'; label2.style.gap = '8px';
+  const slider2 = document.createElement('input'); slider2.type = 'range'; slider2.min = '5'; slider2.max = '200'; slider2.step = '1'; slider2.id = 'panSpeed';
+  const valueSpan2 = document.createElement('span'); valueSpan2.id = 'panSpeedVal';
+  label2.appendChild(slider2); label2.appendChild(valueSpan2);
+  row2.appendChild(label2); pane.appendChild(row2);
   const KEY = 'dw:ui:zoomBase';
   const stored = Number(localStorage.getItem(KEY) || '30') || 30;
   slider.value = String(stored); valueSpan.textContent = String(stored);
   slider.addEventListener('input', () => { valueSpan.textContent = slider.value; localStorage.setItem(KEY, slider.value); applyZoomBase(); });
+  const PKEY = 'dw:ui:panBase';
+  const pstored = Number(localStorage.getItem(PKEY) || '200') || 200;
+  slider2.value = String(pstored); valueSpan2.textContent = String(pstored);
+  slider2.addEventListener('input', () => { valueSpan2.textContent = slider2.value; localStorage.setItem(PKEY, slider2.value); applyPanBase(); });
 })();
 
 function getZoomBase(){ return Number(localStorage.getItem('dw:ui:zoomBase') || '30') || 30; }
+function getPanBase(){ return Number(localStorage.getItem('dw:ui:panBase') || '200') || 200; }
 
 // Apply percentage-based zoom based on settings. Percentage auto-scales with distance.
 function applyZoomBase(){
@@ -489,6 +508,13 @@ function applyZoomBase(){
   camera.wheelDeltaPercentage = pct;
   camera.pinchDeltaPercentage = pct;
   Log.log('UI', 'Apply zoom base', { base, wheelDeltaPercentage: pct });
+}
+
+function applyPanBase(){
+  const base = getPanBase(); // higher = faster
+  const baseSens = Math.max(1, 300 / base); // invert: 200 -> 1.5, 100 -> 3, 50 -> 6
+  camera.panningSensibility = baseSens;
+  Log.log('UI', 'Apply pan base', { panBase: base, panningSensibility: camera.panningSensibility });
 }
 
 // ——————————— DB View Renderer ———————————
@@ -535,7 +561,7 @@ function rebuildScene() {
   state.built = buildSceneFromBarrow(scene, state.barrow);
   updateUnitGrids();
   rebuildHalos();
-  updateGridExtent();
+  scheduleGridUpdate();
 }
 
 function rebuildHalos() {
@@ -575,17 +601,30 @@ function moveSelection(dx=0, dy=0, dz=0) {
   saveBarrow(state.barrow); snapshot(state.barrow);
   rebuildScene();
   renderDbView(state.barrow);
+  scheduleGridUpdate();
 }
 
 function bindTransformButtons() {
   const stepEl = tStepEl;
   function step() { const v = Number(stepEl?.value)||1; return v; }
-  txMinus?.addEventListener('click', () => moveSelection(-step(),0,0));
-  txPlus?.addEventListener('click', () => moveSelection(step(),0,0));
-  tyMinus?.addEventListener('click', () => moveSelection(0,-step(),0));
-  tyPlus?.addEventListener('click', () => moveSelection(0, step(),0));
-  tzMinus?.addEventListener('click', () => moveSelection(0,0,-step()));
-  tzPlus?.addEventListener('click', () => moveSelection(0,0, step()));
+  function addRepeat(btn, fn){
+    if (!btn) return;
+    let timer = null;
+    const fire = () => fn();
+    btn.addEventListener('click', fire);
+    btn.addEventListener('mousedown', () => {
+      if (timer) clearInterval(timer);
+      fire();
+      timer = setInterval(fire, 120);
+    });
+    ['mouseup','mouseleave'].forEach(ev => btn.addEventListener(ev, () => { if (timer) { clearInterval(timer); timer = null; } }));
+  }
+  addRepeat(txMinus, () => moveSelection(-step(),0,0));
+  addRepeat(txPlus,  () => moveSelection( step(),0,0));
+  addRepeat(tyMinus, () => moveSelection(0,-step(),0));
+  addRepeat(tyPlus,  () => moveSelection(0, step(),0));
+  addRepeat(tzMinus, () => moveSelection(0,0,-step()));
+  addRepeat(tzPlus,  () => moveSelection(0,0, step()));
 }
 bindTransformButtons();
 
@@ -608,6 +647,34 @@ scene.onPointerObservable.add((pi) => {
   }
   Log.log('UI', 'Select space(s)', { selection: Array.from(state.selection) });
   rebuildHalos();
+});
+
+// Double-click/tap a space or cavern to center the view on it
+scene.onPointerObservable.add((pi) => {
+  if (state.mode !== 'edit') return;
+  if (pi.type !== BABYLON.PointerEventTypes.POINTERDOUBLETAP) return;
+  const pick = scene.pick(scene.pointerX, scene.pointerY, (m) => m && typeof m.name === 'string' && (m.name.startsWith('space:') || m.name.startsWith('cavern:')));
+  if (!pick?.hit || !pick.pickedMesh) return;
+  const m = pick.pickedMesh;
+  try {
+    const bb = m.getBoundingInfo()?.boundingBox;
+    const min = bb?.minimumWorld, max = bb?.maximumWorld;
+    if (min && max) {
+      const cx = (min.x + max.x) / 2, cy = (min.y + max.y) / 2, cz = (min.z + max.z) / 2;
+      const spanX = max.x - min.x, spanY = max.y - min.y, spanZ = max.z - min.z;
+      const span = Math.max(spanX, spanY, spanZ);
+      const radius = Math.max(10, span * 0.9 + 10);
+      camera.target.set(cx, cy, cz);
+      camera.radius = radius;
+      if (camera.upperRadiusLimit < radius * 1.2) camera.upperRadiusLimit = radius * 1.2;
+      Log.log('UI', 'Center on item (double-click)', { name: m.name, center: { x: cx, y: cy, z: cz }, span: { x: spanX, y: spanY, z: spanZ }, radius });
+    } else {
+      camera.target.copyFrom(m.position);
+      Log.log('UI', 'Center on item (double-click)', { name: m.name, center: m.position });
+    }
+  } catch (err) {
+    Log.log('ERROR', 'Center on item failed', { error: String(err) });
+  }
 });
 
 // Compute grid extents to contain all spaces (min 1000 yards)
@@ -638,13 +705,22 @@ function updateGridExtent(){
     return;
   }
 
-  const spanX = maxX - minX, spanY = maxY - minY, spanZ = maxZ - minZ;
   const pad = 100;
-  const sizeXZ = Math.max(1000, Math.max(spanX, spanZ) + pad);
-  const sizeXY = Math.max(1000, Math.max(spanX, spanY) + pad);
-  const sizeYZ = Math.max(1000, Math.max(spanY, spanZ) + pad);
+  // Center grids at origin; allow asymmetric extents by sizing to cover max absolute reach
+  const maxAbsX = Math.max(Math.abs(minX), Math.abs(maxX));
+  const maxAbsY = Math.max(Math.abs(minY), Math.abs(maxY));
+  const maxAbsZ = Math.max(Math.abs(minZ), Math.abs(maxZ));
+  const sizeXZ = Math.max(1000, 2 * Math.max(maxAbsX, maxAbsZ) + pad);
+  const sizeXY = Math.max(1000, 2 * Math.max(maxAbsX, maxAbsY) + pad);
+  const sizeYZ = Math.max(1000, 2 * Math.max(maxAbsY, maxAbsZ) + pad);
   // base plane sizes were 800; scale accordingly
   ground.scaling.x = sizeXZ / 800; ground.scaling.z = sizeXZ / 800;
   vGrid.scaling.x = vGrid.scaling.y = sizeXY / 800;
   wGrid.scaling.x = wGrid.scaling.y = sizeYZ / 800;
+}
+
+// Debounced grid update: schedule an update 2s after the last edit
+function scheduleGridUpdate(){
+  try { if (state._gridTimer) { clearTimeout(state._gridTimer); } } catch {}
+  state._gridTimer = setTimeout(() => { try { updateGridExtent(); } catch {} }, 2000);
 }
