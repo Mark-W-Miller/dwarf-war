@@ -4,6 +4,9 @@ import { buildSceneFromBarrow, disposeBuilt } from './modules/barrow/builder.mjs
 import { Log } from './modules/util/log.mjs';
 import { initCamera } from './modules/view/camera.mjs';
 import { initGrids } from './modules/view/grids.mjs';
+import { renderDbView } from './modules/view/dbView.mjs';
+import { initLogTab } from './modules/view/logTab.mjs';
+import { initSettingsTab } from './modules/view/settings.mjs';
 
 // Babylon setup
 const canvas = document.getElementById('renderCanvas');
@@ -381,114 +384,14 @@ collapsePanelBtn.addEventListener('click', () => {
 })();
 // removed legacy Parse button wiring; Enter now handles parsing
 // ——————————— Log Tab ———————————
-(function setupLogTab(){
-  const panelContent = document.querySelector('.panel-content');
-  if (!panelContent) return;
-  const tabsBar = panelContent.querySelector('.tabs');
-  const dbPane = panelContent.querySelector('#tab-db');
-  const editPane = panelContent.querySelector('#tab-edit');
-  if (!tabsBar || !dbPane || !editPane) return;
-  const tabBtn = document.createElement('button');
-  tabBtn.className = 'tab'; tabBtn.dataset.tab = 'tab-log'; tabBtn.textContent = 'Log';
-  tabsBar.appendChild(tabBtn);
-  const logPane = document.createElement('div'); logPane.id = 'tab-log'; logPane.className = 'tab-pane';
-  const filterRow = document.createElement('div'); filterRow.className = 'row';
-  const filtersBox = document.createElement('div'); filtersBox.id = 'logClassFilters'; filtersBox.style.display = 'flex'; filtersBox.style.flexWrap = 'wrap'; filtersBox.style.gap = '8px';
-  filterRow.appendChild(filtersBox);
-  logPane.appendChild(filterRow);
-  const entries = document.createElement('div'); entries.id = 'logEntries'; entries.style.whiteSpace = 'pre-wrap'; entries.style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'; entries.style.fontSize = '12px'; entries.style.maxHeight = '240px'; entries.style.overflow = 'auto'; entries.style.border = '1px solid #1e2a30'; entries.style.borderRadius = '6px'; entries.style.padding = '8px'; entries.style.background = '#0f151a';
-  logPane.appendChild(entries);
-  panelContent.appendChild(logPane);
-  function activateLog() {
-    editPane.classList.remove('active'); dbPane.classList.remove('active'); logPane.classList.add('active');
-    const allTabs = tabsBar.querySelectorAll('.tab');
-    allTabs.forEach(b => b.classList.toggle('active', b.dataset.tab === 'tab-log'));
-    renderFilters(); renderEntries();
-  }
-  tabBtn.addEventListener('click', activateLog);
-  const selected = new Set();
-  function renderFilters() {
-    const classes = Array.from(Log.getClasses()).sort();
-    if (selected.size === 0) classes.forEach(c => selected.add(c));
-    filtersBox.innerHTML = '';
-    classes.forEach(c => {
-      const label = document.createElement('label'); label.style.display = 'inline-flex'; label.style.alignItems = 'center'; label.style.gap = '6px';
-      const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = selected.has(c);
-      cb.addEventListener('change', () => { if (cb.checked) selected.add(c); else selected.delete(c); renderEntries(); });
-      label.appendChild(cb); label.appendChild(document.createTextNode(c));
-      filtersBox.appendChild(label);
-    });
-  }
-  function renderEntries() {
-    const list = Log.getEntries();
-    const filtered = list.filter(e => selected.size === 0 || selected.has(e.cls));
-    const lines = filtered.slice(-500).map(e => {
-      const t = new Date(e.time).toLocaleTimeString();
-      const d = e.data != null ? ` ${JSON.stringify(e.data, (k,v) => (typeof v === 'number' ? parseFloat(Number(v).toPrecision(2)) : v))}` : '';
-      return `[${t}] [${e.cls}] ${e.msg}${d}`;
-    });
-    entries.textContent = lines.join('\n');
-    entries.scrollTop = entries.scrollHeight;
-  }
-  Log.on(() => { renderFilters(); renderEntries(); });
-})();
+initLogTab(document.querySelector('.panel-content'));
 
-// ——————————— Settings UI (Zoom speed) ———————————
-(function setupSettings(){
-  const pane = document.getElementById('tab-settings'); if (!pane) return;
-  // Zoom speed slider
-  const row = document.createElement('div'); row.className = 'row';
-  const label = document.createElement('label'); label.textContent = 'Zoom Speed'; label.style.display = 'flex'; label.style.alignItems = 'center'; label.style.gap = '8px';
-  const slider = document.createElement('input'); slider.type = 'range'; slider.min = '5'; slider.max = '100'; slider.step = '1'; slider.id = 'zoomSpeed';
-  const valueSpan = document.createElement('span'); valueSpan.id = 'zoomSpeedVal';
-  label.appendChild(slider); label.appendChild(valueSpan);
-  row.appendChild(label); pane.appendChild(row);
-
-  // Pan speed slider (controls panningSensibility; lower = faster)
-  const row2 = document.createElement('div'); row2.className = 'row';
-  const label2 = document.createElement('label'); label2.textContent = 'Pan Speed'; label2.style.display = 'flex'; label2.style.alignItems = 'center'; label2.style.gap = '8px';
-  const slider2 = document.createElement('input'); slider2.type = 'range'; slider2.min = '5'; slider2.max = '200'; slider2.step = '1'; slider2.id = 'panSpeed';
-  const valueSpan2 = document.createElement('span'); valueSpan2.id = 'panSpeedVal';
-  label2.appendChild(slider2); label2.appendChild(valueSpan2);
-  row2.appendChild(label2); pane.appendChild(row2);
-  const KEY = 'dw:ui:zoomBase';
-  const stored = Number(localStorage.getItem(KEY) || '30') || 30;
-  slider.value = String(stored); valueSpan.textContent = String(stored);
-  slider.addEventListener('input', () => { valueSpan.textContent = slider.value; localStorage.setItem(KEY, slider.value); camApi.applyZoomBase(); });
-  const PKEY = 'dw:ui:panBase';
-  const pstored = Number(localStorage.getItem(PKEY) || '200') || 200;
-  slider2.value = String(pstored); valueSpan2.textContent = String(pstored);
-  slider2.addEventListener('input', () => { valueSpan2.textContent = slider2.value; localStorage.setItem(PKEY, slider2.value); camApi.applyPanBase(); });
-})();
+// ——————————— Settings UI ———————————
+initSettingsTab(camApi);
 
 // Zoom/pan helpers now live in camApi (camera module)
 
-// ——————————— DB View Renderer ———————————
-function renderDbView(barrow) {
-  const root = document.getElementById('dbView');
-  if (!root) return;
-  const meta = barrow.meta || {};
-
-  function kv(label, value) {
-    return `<div class="kv"><b>${label}:</b> ${value}</div>`;
-  }
-
-  function s2(n){ if (typeof n !== 'number') return n; return parseFloat(Number(n).toPrecision(2)); }
-  root.innerHTML = `
-    <details open>
-      <summary>Summary</summary>
-      ${kv('barrowId', barrow.id || '-')}
-      ${kv('units', meta.units || '-')}
-      ${kv('voxelSize', s2(meta.voxelSize ?? '-'))}
-      ${kv('spaces', (barrow.spaces||[]).length)}
-      ${kv('version', meta.version ?? '-')}
-    </details>
-    <details>
-      <summary>Spaces ${(barrow.spaces||[]).length}</summary>
-      ${(barrow.spaces||[]).map(s => `<div class=\"kv\">${s.id} — ${s.type} size ${s2(s.size?.x||0)}×${s2(s.size?.y||0)}×${s2(s.size?.z||0)} @${s2(s.res)} origin (${s2(s.origin?.x||0)},${s2(s.origin?.y||0)},${s2(s.origin?.z||0)})</div>`).join('') || '<div class=\"kv\">(none)</div>'}
-    </details>
-  `;
-}
+// DB view renderer provided by modules/view/dbView.mjs
 
 // ——————————— Units and selection/transform ———————————
 function getVoxelSize() {
