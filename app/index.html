@@ -70,58 +70,45 @@
           <input type="file" id="importFile" style="display:none" />
           <button class="btn" id="import">Import</button>
         </div>
-        <h3>Assistant</h3>
-        <textarea id="assistantInput" placeholder='Talk to the local assistant. Examples: "Dento is the central cavern, connected north and south" or "Add cavern North north of Dento"'></textarea>
+        <h3>Spaces</h3>
         <div class="row">
-          <button class="btn" id="enter">Enter</button>
+          <label>Type
+            <select id="spaceType">
+              <option value="Carddon">Carddon</option>
+              <option value="Cavern">Cavern</option>
+              <option value="Tunnel">Tunnel</option>
+              <option value="Room">Room</option>
+              <option value="Space">Space</option>
+            </select>
+          </label>
+          <button class="btn" id="newSpace">New Space</button>
+          <button class="btn" id="fitView">Fit View</button>
         </div>
-        <textarea id="assistantOutputTa" placeholder='Assistant response (JSON). Review/edit, then Apply.' style="min-height: 160px;"></textarea>
         <div class="row">
-          <button class="btn" id="apply">Apply</button>
+          <label>Size X <input id="sizeX" type="number" value="200" step="1" style="width:72px;background:#0f151a;color:#cfe1ea;border:1px solid #1e2a30;border-radius:6px;padding:4px 6px;" /></label>
+          <label>Y <input id="sizeY" type="number" value="100" step="1" style="width:72px;background:#0f151a;color:#cfe1ea;border:1px solid #1e2a30;border-radius:6px;padding:4px 6px;" /></label>
+          <label>Z <input id="sizeZ" type="number" value="200" step="1" style="width:72px;background:#0f151a;color:#cfe1ea;border:1px solid #1e2a30;border-radius:6px;padding:4px 6px;" /></label>
+          <span class="hint">(voxels)</span>
+        </div>
+        <h3>Transform (Edit Mode)</h3>
+        <div class="row">
+          <label>Step <input id="tStep" type="number" value="10" min="0.1" step="0.1" style="width:64px;background:#0f151a;color:#cfe1ea;border:1px solid #1e2a30;border-radius:6px;padding:4px 6px;" /> yard</label>
+        </div>
+        <div class="row">
+          <span>X</span>
+          <button class="btn" id="txMinus">-</button>
+          <button class="btn" id="txPlus">+</button>
+          <span>Y</span>
+          <button class="btn" id="tyMinus">-</button>
+          <button class="btn" id="tyPlus">+</button>
+          <span>Z</span>
+          <button class="btn" id="tzMinus">-</button>
+          <button class="btn" id="tzPlus">+</button>
         </div>
         <div class="hint">Tip: Try describing a central cavern and connections. We’ll map directions to a quick layout and persist to local history.</div>
       </div>
     </div>
-    <!-- Settings Modal -->
-    <div class="modal" id="settingsModal">
-      <div class="modal-card" role="dialog" aria-modal="true">
-        <div style="display:flex; align-items:center; justify-content: space-between; gap:8px; margin-bottom:8px;">
-          <h3 style="margin:0;">Assistant Settings</h3>
-          <button class="icon-btn" id="settingsClose" title="Close">✕</button>
-        </div>
-        <div class="grid">
-          <div class="field">
-            <label>Provider
-              <select id="aiProvider">
-                <option value="none">None (local parser)</option>
-                <option value="local">Local Assistant (HTTP)</option>
-                <option value="ollama">Ollama (local LLM)</option>
-                <option value="openai">OpenAI</option>
-              </select>
-            </label>
-          </div>
-          <div class="field">
-            <label>Model
-              <input id="aiModel" type="text" value="gpt-4o-mini" />
-            </label>
-          </div>
-          <div class="field" style="grid-column: 1 / -1;">
-            <label>API Key
-              <input id="aiKey" type="password" placeholder="sk-..." />
-            </label>
-          </div>
-          <div class="field" style="grid-column: 1 / -1;">
-            <label>Base URL
-              <input id="aiBaseUrl" type="text" placeholder="https://api.openai.com or http://localhost:8787 or http://localhost:11434" />
-            </label>
-          </div>
-        </div>
-        <div class="modal-actions">
-          <button class="btn" id="testAI">Test AI</button>
-          <button class="btn" id="saveAI">Save Settings</button>
-        </div>
-      </div>
-    </div>
+    
     <script type="module" src="./main.mjs"></script>
   </body>
   </html>

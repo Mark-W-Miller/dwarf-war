@@ -1,7 +1,7 @@
 // Build Babylon meshes from Barrow data
 
 export function buildSceneFromBarrow(scene, barrow) {
-  const built = { caverns: [], links: [], carddons: [], cavernLabels: [] };
+  const built = { caverns: [], links: [], carddons: [], cavernLabels: [], spaces: [], spaceLabels: [] };
 
   // Materials
   const cavernMat = new BABYLON.PBRMetallicRoughnessMaterial('cavernMat', scene);
@@ -107,6 +107,54 @@ export function buildSceneFromBarrow(scene, barrow) {
   plane.material = mat;
   built.label = plane;
 
+  // Render new-model spaces as translucent boxes with labels
+  if (Array.isArray(barrow.spaces)) {
+    for (const s of barrow.spaces) {
+      const res = s.res || (barrow.meta?.voxelSize || 1);
+      const w = Math.max(0.001, (s.size?.x || 0) * res);
+      const h = Math.max(0.001, (s.size?.y || 0) * res);
+      const d = Math.max(0.001, (s.size?.z || 0) * res);
+
+      // Material by type
+      const mat = new BABYLON.StandardMaterial(`space:${s.id}:mat`, scene);
+      const color = s.type === 'Carddon' ? new BABYLON.Color3(0.85, 0.35, 0.25)
+        : s.type === 'Cavern' ? new BABYLON.Color3(0.95, 0.85, 0.2)
+        : s.type === 'Tunnel' ? new BABYLON.Color3(0.4, 0.8, 0.9)
+        : s.type === 'Room' ? new BABYLON.Color3(0.7, 0.6, 0.9)
+        : new BABYLON.Color3(0.6, 0.8, 0.6);
+      mat.diffuseColor = color.scale(0.25); mat.emissiveColor = color.scale(0.35); mat.alpha = 0.35; mat.specularColor = new BABYLON.Color3(0,0,0);
+
+      let mesh;
+      if (s.type === 'Cavern') {
+        const dia = Math.min(w, h, d);
+        mesh = BABYLON.MeshBuilder.CreateSphere(`space:${s.id}`, { diameter: dia, segments: 24 }, scene);
+      } else if (s.type === 'Carddon') {
+        mesh = BABYLON.MeshBuilder.CreateBox(`space:${s.id}`, { width: w, height: h, depth: d }, scene);
+      } else {
+        mesh = BABYLON.MeshBuilder.CreateBox(`space:${s.id}`, { width: w, height: h, depth: d }, scene);
+      }
+      mesh.position.set(s.origin?.x||0, s.origin?.y||0, s.origin?.z||0);
+      mesh.material = mat; mesh.isPickable = true;
+      built.spaces.push({ id: s.id, mesh, mat });
+
+      const label = BABYLON.MeshBuilder.CreatePlane(`space:${s.id}:label`, { width: 2.2, height: 0.8 }, scene);
+      label.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
+      const topY = mesh.position.y + (s.type === 'Cavern' ? Math.min(w,h,d)/2 : h/2);
+      label.position = new BABYLON.Vector3(mesh.position.x, topY + 0.8, mesh.position.z);
+      label.isPickable = false;
+      const dt = new BABYLON.DynamicTexture(`space:${s.id}:dt`, { width: 512, height: 192 }, scene, false);
+      dt.hasAlpha = true; const ctx2 = dt.getContext(); ctx2.clearRect(0,0,512,192);
+      const title = `${s.id} (${s.type})`;
+      const dims = `${s.size?.x||0}×${s.size?.y||0}×${s.size?.z||0} @${res}`;
+      dt.drawText(title, null, 96, 'bold 48px system-ui, sans-serif', '#e9f1f7', 'transparent', true);
+      dt.drawText(dims, null, 160, 'normal 28px system-ui, sans-serif', '#9fb2bb', 'transparent', true);
+      const lmat2 = new BABYLON.StandardMaterial(`space:${s.id}:mat2`, scene);
+      lmat2.diffuseTexture = dt; lmat2.emissiveTexture = dt; lmat2.backFaceCulling = false; lmat2.specularColor = new BABYLON.Color3(0,0,0);
+      label.material = lmat2;
+      built.spaceLabels.push({ id: s.id, mesh: label, dt, mat: lmat2 });
+    }
+  }
+
   return built;
 }
 
@@ -116,5 +164,7 @@ export function disposeBuilt(built) {
   for (const x of built.links || []) x.mesh?.dispose();
   for (const x of built.cavernLabels || []) { x.mesh?.dispose(); x.dt?.dispose(); }
   for (const x of built.carddons || []) { x.mesh?.dispose(); x.dt?.dispose(); }
+  for (const x of built.spaces || []) x.mesh?.dispose();
+  for (const x of built.spaceLabels || []) { x.mesh?.dispose(); x.dt?.dispose(); }
   built.label?.dispose();
 }

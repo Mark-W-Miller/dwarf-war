@@ -9,11 +9,29 @@ export const directions = {
 export function makeDefaultBarrow() {
   return {
     id: 'Your Barrow',
-    caverns: [],
-    carddons: [],
-    links: [],
-    meta: { version: 1, createdAt: Date.now(), updatedAt: Date.now() },
+    caverns: [], // legacy
+    carddons: [], // legacy
+    links: [], // legacy
+    spaces: [], // new model
+    meta: { version: 1, createdAt: Date.now(), updatedAt: Date.now(), units: 'yard', voxelSize: 1 },
   };
+}
+
+export function makeSpace(id, type = 'Space', origin = { x:0, y:0, z:0 }, size = { x:200, y:100, z:200 }, res = 10) {
+  return { id, type, origin, size, res, chunks: {}, attrs: {} };
+}
+
+export function aabbFromSpace(space) {
+  const w = (space.size?.x || 0) * (space.res || 1);
+  const h = (space.size?.y || 0) * (space.res || 1);
+  const d = (space.size?.z || 0) * (space.res || 1);
+  const cx = space.origin?.x || 0, cy = space.origin?.y || 0, cz = space.origin?.z || 0;
+  // Space origin is interpreted as center
+  return { min:{x:cx - w/2, y:cy - h/2, z:cz - d/2}, max:{x:cx + w/2, y:cy + h/2, z:cz + d/2} };
+}
+
+export function aabbIntersects(a, b) {
+  return !(a.max.x < b.min.x || a.min.x > b.max.x || a.max.y < b.min.y || a.min.y > b.max.y || a.max.z < b.min.z || a.min.z > b.max.z);
 }
 
 export function mergeInstructions(base, instr) {
@@ -37,11 +55,13 @@ export function mergeInstructions(base, instr) {
 
 // Simple layout pass: place caverns around central based on link directions if missing positions
 export function layoutBarrow(barrow) {
+  if (!barrow || !Array.isArray(barrow.caverns) || barrow.caverns.length === 0) return barrow;
   const center = barrow.caverns.find(c => c.role === 'central') || barrow.caverns[0];
-  if (!center.pos) center.pos = { x: 0, y: 0, z: 0 };
+  if (center && !center.pos) center.pos = { x: 0, y: 0, z: 0 };
   const scale = 6; // spacing units
   const byId = new Map(barrow.caverns.map(c => [c.id, c]));
-  for (const link of barrow.links) {
+  const links = Array.isArray(barrow.links) ? barrow.links : [];
+  for (const link of links) {
     const from = byId.get(link.from); const to = byId.get(link.to);
     if (!from || !to) continue;
     if (!to.pos) {
