@@ -2,6 +2,8 @@ import { makeDefaultBarrow, mergeInstructions, directions, layoutBarrow } from '
 import { loadBarrow, saveBarrow, snapshot } from './modules/barrow/store.mjs';
 import { buildSceneFromBarrow, disposeBuilt } from './modules/barrow/builder.mjs';
 import { Log } from './modules/util/log.mjs';
+import { initCamera } from './modules/view/camera.mjs';
+import { initGrids } from './modules/view/grids.mjs';
 
 // Babylon setup
 const canvas = document.getElementById('renderCanvas');
@@ -11,15 +13,8 @@ const scene = new BABYLON.Scene(engine);
 scene.clearColor = new BABYLON.Color4(0.03, 0.05, 0.07, 1.0);
 
 // Camera
-const camera = new BABYLON.ArcRotateCamera('cam', Math.PI * 1.2, Math.PI / 3, 24, new BABYLON.Vector3(0, 1, 0), scene);
-camera.attachControl(canvas, true);
-camera.lowerRadiusLimit = 2; camera.upperRadiusLimit = 5000;
-camera.minZ = 0.1; camera.maxZ = 10000;
-camera.wheelPrecision = 1; // use percentage-based zoom below
-// Middle mouse (button=1) pans the view; adjust panning speed/inertia
-camera.panningMouseButton = 2; // right button pans
-camera.panningSensibility = 40; // lower = faster
-camera.panningInertia = 0.2;
+const camApi = initCamera(scene, canvas, Log);
+const camera = camApi.camera;
 
 // Lighting
 const dir = new BABYLON.DirectionalLight('dir', new BABYLON.Vector3(-1, -2, -1), scene);
@@ -27,38 +22,11 @@ dir.position = new BABYLON.Vector3(10, 20, 10); dir.intensity = 1.1;
 const hemi = new BABYLON.HemisphericLight('hemi', new BABYLON.Vector3(0, 1, 0), scene);
 hemi.intensity = 0.2;
 
-// Ground (subtle green grid), open environment (no enclosing sphere)
-const ground = BABYLON.MeshBuilder.CreateGround('ground', { width: 800, height: 800 }, scene);
-ground.position.y = 0;
-const grid = new BABYLON.GridMaterial('grid', scene);
-grid.mainColor = new BABYLON.Color3(0.10, 0.06, 0.06); // dark base
-grid.lineColor = new BABYLON.Color3(0.75, 0.25, 0.25); // XZ (red-ish)
-grid.gridRatio = 2; // meters per cell
-grid.opacity = 0.95;
-ground.material = grid;
-
-// Vertical YX grid at Z=0 with numbers
-const vGrid = BABYLON.MeshBuilder.CreatePlane('gridYX', { width: 800, height: 800 }, scene);
-vGrid.position = new BABYLON.Vector3(0, 0, 0);
-// Plane default is XY at Z=0 facing +Z
-const gridVMat = new BABYLON.GridMaterial('gridV', scene);
-gridVMat.mainColor = new BABYLON.Color3(0.06, 0.10, 0.06);
-gridVMat.lineColor = new BABYLON.Color3(0.25, 0.85, 0.25); // XY includes Y axis (green)
-gridVMat.gridRatio = 2;
-gridVMat.opacity = 0.6;
-gridVMat.backFaceCulling = false;
-vGrid.material = gridVMat;
-
-// Third grid: YZ plane at X=0 (vertical), with numbers
-const wGrid = BABYLON.MeshBuilder.CreatePlane('gridYZ', { width: 800, height: 800 }, scene);
-wGrid.position = new BABYLON.Vector3(0, 0, 0);
-wGrid.rotation.y = Math.PI / 2; // rotate to YZ
-const gridWMat = new BABYLON.GridMaterial('gridW', scene);
-gridWMat.mainColor = new BABYLON.Color3(0.06, 0.08, 0.12);
-gridWMat.lineColor = new BABYLON.Color3(0.25, 0.35, 0.85); // YZ plane (blue-ish)
-gridWMat.gridRatio = 2;
-gridWMat.opacity = 0.6; gridWMat.backFaceCulling = false;
-wGrid.material = gridWMat;
+// Grids
+const grids = initGrids(scene);
+const ground = grids.ground;
+const vGrid = grids.vGrid;
+const wGrid = grids.wGrid;
 
 // Axis numbers along X/Z=0 and X/Y and Z/Y at coarse intervals
 (function addAxisLabels() {
@@ -127,11 +95,11 @@ state.barrow = loadBarrow() || makeDefaultBarrow();
 layoutBarrow(state.barrow); // ensure positions from directions
 state.built = buildSceneFromBarrow(scene, state.barrow);
 renderDbView(state.barrow);
-updateUnitGrids();
-applyZoomBase();
-applyPanBase();
+grids.updateUnitGrids(state.barrow?.meta?.voxelSize || 1);
+camApi.applyZoomBase();
+camApi.applyPanBase();
 rebuildHalos();
-scheduleGridUpdate();
+grids.scheduleGridUpdate(state.built);
 // Highlight layer for selection glow
 state.hl = new BABYLON.HighlightLayer('hl', scene, { blurHorizontalSize: 1.0, blurVerticalSize: 1.0 });
 state.hl.innerGlow = false; state.hl.outerGlow = true;
@@ -285,7 +253,7 @@ function fitViewAll() {
   Log.log('UI', 'Fit view', { center: { x: cx, y: cy, z: cz }, span: { x: spanX, y: spanY, z: spanZ }, radius });
 }
 
-fitViewBtn?.addEventListener('click', fitViewAll);
+fitViewBtn?.addEventListener('click', () => camApi.fitViewAll(state.barrow?.spaces || [], state.barrow?.meta?.voxelSize || 1));
 
 // Defaults per type and update size fields when type changes
 function defaultSizeForType(t) {
@@ -328,12 +296,8 @@ engine.runRenderLoop(() => {
       state.built.label.position.x = camera.target.x;
       state.built.label.position.z = camera.target.z;
     }
-    // Adapt pan speed with distance: farther = faster (lower sensibility)
-    const panBase = getPanBase();
-    const r = Math.max(1, camera.radius);
-    const f = Math.max(0.2, r / 100); // grows with distance
-    const baseSens = Math.max(1, 300 / panBase); // invert mapping (higher base = faster = lower sens)
-    camera.panningSensibility = Math.max(1, baseSens / f);
+    // Adapt pan speed with distance
+    camApi.updatePanDynamics();
   } catch {}
   // Grid extent updates are debounced (2s) via scheduleGridUpdate()
   // Percentage-based zoom handles near/far scaling; settings slider updates base percentage.
@@ -490,32 +454,14 @@ collapsePanelBtn.addEventListener('click', () => {
   const KEY = 'dw:ui:zoomBase';
   const stored = Number(localStorage.getItem(KEY) || '30') || 30;
   slider.value = String(stored); valueSpan.textContent = String(stored);
-  slider.addEventListener('input', () => { valueSpan.textContent = slider.value; localStorage.setItem(KEY, slider.value); applyZoomBase(); });
+  slider.addEventListener('input', () => { valueSpan.textContent = slider.value; localStorage.setItem(KEY, slider.value); camApi.applyZoomBase(); });
   const PKEY = 'dw:ui:panBase';
   const pstored = Number(localStorage.getItem(PKEY) || '200') || 200;
   slider2.value = String(pstored); valueSpan2.textContent = String(pstored);
-  slider2.addEventListener('input', () => { valueSpan2.textContent = slider2.value; localStorage.setItem(PKEY, slider2.value); applyPanBase(); });
+  slider2.addEventListener('input', () => { valueSpan2.textContent = slider2.value; localStorage.setItem(PKEY, slider2.value); camApi.applyPanBase(); });
 })();
 
-function getZoomBase(){ return Number(localStorage.getItem('dw:ui:zoomBase') || '30') || 30; }
-function getPanBase(){ return Number(localStorage.getItem('dw:ui:panBase') || '200') || 200; }
-
-// Apply percentage-based zoom based on settings. Percentage auto-scales with distance.
-function applyZoomBase(){
-  const base = getZoomBase(); // 5..100
-  // Map 5..100 to 0.0025..0.05 (0.25%..5% per wheel step)
-  const pct = Math.max(0.001, Math.min(0.08, base / 2000));
-  camera.wheelDeltaPercentage = pct;
-  camera.pinchDeltaPercentage = pct;
-  Log.log('UI', 'Apply zoom base', { base, wheelDeltaPercentage: pct });
-}
-
-function applyPanBase(){
-  const base = getPanBase(); // higher = faster
-  const baseSens = Math.max(1, 300 / base); // invert: 200 -> 1.5, 100 -> 3, 50 -> 6
-  camera.panningSensibility = baseSens;
-  Log.log('UI', 'Apply pan base', { panBase: base, panningSensibility: camera.panningSensibility });
-}
+// Zoom/pan helpers now live in camApi (camera module)
 
 // ——————————— DB View Renderer ———————————
 function renderDbView(barrow) {
@@ -655,26 +601,7 @@ scene.onPointerObservable.add((pi) => {
   if (pi.type !== BABYLON.PointerEventTypes.POINTERDOUBLETAP) return;
   const pick = scene.pick(scene.pointerX, scene.pointerY, (m) => m && typeof m.name === 'string' && (m.name.startsWith('space:') || m.name.startsWith('cavern:')));
   if (!pick?.hit || !pick.pickedMesh) return;
-  const m = pick.pickedMesh;
-  try {
-    const bb = m.getBoundingInfo()?.boundingBox;
-    const min = bb?.minimumWorld, max = bb?.maximumWorld;
-    if (min && max) {
-      const cx = (min.x + max.x) / 2, cy = (min.y + max.y) / 2, cz = (min.z + max.z) / 2;
-      const spanX = max.x - min.x, spanY = max.y - min.y, spanZ = max.z - min.z;
-      const span = Math.max(spanX, spanY, spanZ);
-      const radius = Math.max(10, span * 0.9 + 10);
-      camera.target.set(cx, cy, cz);
-      camera.radius = radius;
-      if (camera.upperRadiusLimit < radius * 1.2) camera.upperRadiusLimit = radius * 1.2;
-      Log.log('UI', 'Center on item (double-click)', { name: m.name, center: { x: cx, y: cy, z: cz }, span: { x: spanX, y: spanY, z: spanZ }, radius });
-    } else {
-      camera.target.copyFrom(m.position);
-      Log.log('UI', 'Center on item (double-click)', { name: m.name, center: m.position });
-    }
-  } catch (err) {
-    Log.log('ERROR', 'Center on item failed', { error: String(err) });
-  }
+  const m = pick.pickedMesh; try { camApi.centerOnMesh(m); } catch (err) { Log.log('ERROR', 'Center on item failed', { error: String(err) }); }
 });
 
 // Compute grid extents to contain all spaces (min 1000 yards)
