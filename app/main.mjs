@@ -104,18 +104,19 @@ camApi.applyZoomBase();
 camApi.applyPanBase();
 rebuildHalos();
 grids.scheduleGridUpdate(state.built);
+applyViewToggles();
+applyTextScale?.();
+updateHud();
 // Highlight layer for selection glow
 state.hl = new BABYLON.HighlightLayer('hl', scene, { blurHorizontalSize: 1.0, blurVerticalSize: 1.0 });
 state.hl.innerGlow = false; state.hl.outerGlow = true;
 
-function setMode(mode) {
-  state.mode = mode;
-  hud.textContent = `Dwarf War • ${mode === 'edit' ? 'Edit' : 'Game'} mode ${state.running ? '• Running' : '• Paused'}`;
+function updateHud() {
+  const barrowName = state.barrow?.id || 'Barrow';
+  hud.textContent = `Dwarf War • ${barrowName} • ${state.mode === 'edit' ? 'Edit' : 'Game'} ${state.running ? '• Running' : '• Paused'}`;
 }
-function setRunning(run) {
-  state.running = run;
-  hud.textContent = `Dwarf War • ${state.mode === 'edit' ? 'Edit' : 'Game'} mode ${run ? '• Running' : '• Paused'}`;
-}
+function setMode(mode) { state.mode = mode; updateHud(); }
+function setRunning(run) { state.running = run; updateHud(); }
 
 // UI wiring
 const toggleRunBtn = document.getElementById('toggleRun');
@@ -153,7 +154,7 @@ initEventHandlers({
   camApi,
   camera,
   state,
-  helpers: { setMode, setRunning, rebuildScene, rebuildHalos, moveSelection, scheduleGridUpdate }
+  helpers: { setMode, setRunning, rebuildScene, rebuildHalos, moveSelection, scheduleGridUpdate, applyViewToggles, updateHud }
 });
 
 // Fit camera to all spaces
@@ -222,7 +223,7 @@ engine.runRenderLoop(() => {
 initLogTab(document.querySelector('.panel-content'));
 
 // ——————————— Settings UI ———————————
-initSettingsTab(camApi);
+initSettingsTab(camApi, { applyTextScale });
 
 // Zoom/pan helpers now live in camApi (camera module)
 
@@ -235,8 +236,44 @@ function getVoxelSize() {
 
 function updateUnitGrids() {
   const s = getVoxelSize();
-  if (grid) grid.gridRatio = s;
-  if (gridVMat) gridVMat.gridRatio = s;
+  try { grids.updateUnitGrids(s); } catch {}
+}
+
+function applyViewToggles() {
+  // Grid visibility
+  try {
+    const gOn = localStorage.getItem('dw:ui:gridGround') !== '0';
+    const xyOn = localStorage.getItem('dw:ui:gridXY') !== '0';
+    const yzOn = localStorage.getItem('dw:ui:gridYZ') !== '0';
+    if (ground) ground.setEnabled(!!gOn);
+    if (vGrid) vGrid.setEnabled(!!xyOn);
+    if (wGrid) wGrid.setEnabled(!!yzOn);
+  } catch {}
+  // Labels visibility (spaces + caverns)
+  try {
+    const namesOn = localStorage.getItem('dw:ui:showNames') !== '0';
+    for (const x of state?.built?.spaceLabels || []) x.mesh?.setEnabled(!!namesOn);
+    for (const x of state?.built?.cavernLabels || []) x.mesh?.setEnabled(!!namesOn);
+  } catch {}
+}
+
+function applyTextScale() {
+  let scale = 1;
+  try {
+    const val = Number(localStorage.getItem('dw:ui:textScale') || '100') || 100;
+    scale = Math.max(0.1, Math.min(100, val / 100));
+  } catch {}
+  const apply = (mesh) => {
+    if (!mesh) return;
+    try {
+      mesh.scaling.x = scale;
+      mesh.scaling.y = scale;
+      if (mesh.scaling.z !== undefined) mesh.scaling.z = 1;
+    } catch {}
+  };
+  try { for (const x of state?.built?.spaceLabels || []) apply(x.mesh); } catch {}
+  try { for (const x of state?.built?.cavernLabels || []) apply(x.mesh); } catch {}
+  try { for (const x of state?.built?.carddons || []) if (x?.mesh?.name?.includes(':label')) apply(x.mesh); } catch {}
 }
 
 function rebuildScene() {
@@ -246,6 +283,8 @@ function rebuildScene() {
   updateUnitGrids();
   rebuildHalos();
   scheduleGridUpdate();
+  applyViewToggles();
+  applyTextScale?.();
 }
 
 function rebuildHalos() {

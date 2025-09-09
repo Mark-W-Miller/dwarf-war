@@ -94,18 +94,7 @@ export function buildSceneFromBarrow(scene, barrow) {
     }
   }
 
-  // Label
-  const plane = BABYLON.MeshBuilder.CreatePlane('barrowLabel', { size: 3 }, scene);
-  plane.position = new BABYLON.Vector3(0, 3, 0);
-  plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
-  const dt = new BABYLON.DynamicTexture('barrowLabelTex', { width: 1024, height: 256 }, scene, false);
-  dt.hasAlpha = true;
-  const ctx = dt.getContext(); ctx.clearRect(0,0,1024,256);
-  dt.drawText(barrow.id || 'Barrow', null, null, 'bold 64px sans-serif', '#e0e6ed', 'transparent', true);
-  const mat = new BABYLON.StandardMaterial('barrowLabelMat', scene);
-  mat.diffuseTexture = dt; mat.emissiveTexture = dt; mat.backFaceCulling = false;
-  plane.material = mat;
-  built.label = plane;
+  // Remove 3D barrow label; name shown in HUD overlay instead
 
   // Render new-model spaces as translucent boxes with labels
   if (Array.isArray(barrow.spaces)) {
@@ -137,17 +126,17 @@ export function buildSceneFromBarrow(scene, barrow) {
       mesh.material = mat; mesh.isPickable = true;
       built.spaces.push({ id: s.id, mesh, mat });
 
-      const label = BABYLON.MeshBuilder.CreatePlane(`space:${s.id}:label`, { width: 2.2, height: 0.8 }, scene);
+      const label = BABYLON.MeshBuilder.CreatePlane(`space:${s.id}:label`, { width: 3.0, height: 1.1 }, scene);
       label.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
       const topY = mesh.position.y + (s.type === 'Cavern' ? Math.min(w,h,d)/2 : h/2);
-      label.position = new BABYLON.Vector3(mesh.position.x, topY + 0.8, mesh.position.z);
+      label.position = new BABYLON.Vector3(mesh.position.x, topY + 1.0, mesh.position.z);
       label.isPickable = false;
-      const dt = new BABYLON.DynamicTexture(`space:${s.id}:dt`, { width: 512, height: 192 }, scene, false);
-      dt.hasAlpha = true; const ctx2 = dt.getContext(); ctx2.clearRect(0,0,512,192);
+      const dt = new BABYLON.DynamicTexture(`space:${s.id}:dt`, { width: 768, height: 288 }, scene, false);
+      dt.hasAlpha = true; const ctx2 = dt.getContext(); ctx2.clearRect(0,0,768,288);
       const title = `${s.id} (${s.type})`;
       const dims = `${s.size?.x||0}×${s.size?.y||0}×${s.size?.z||0} @${res}`;
-      dt.drawText(title, null, 96, 'bold 48px system-ui, sans-serif', '#e9f1f7', 'transparent', true);
-      dt.drawText(dims, null, 160, 'normal 28px system-ui, sans-serif', '#9fb2bb', 'transparent', true);
+      dt.drawText(title, null, 132, 'bold 64px system-ui, sans-serif', '#e9f1f7', 'transparent', true);
+      dt.drawText(dims, null, 220, 'normal 34px system-ui, sans-serif', '#9fb2bb', 'transparent', true);
       const lmat2 = new BABYLON.StandardMaterial(`space:${s.id}:mat2`, scene);
       lmat2.diffuseTexture = dt; lmat2.emissiveTexture = dt; lmat2.backFaceCulling = false; lmat2.specularColor = new BABYLON.Color3(0,0,0);
       label.material = lmat2;

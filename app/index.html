@@ -45,6 +45,9 @@
       .db-view details { border: 1px solid #1e2a30; border-radius: 6px; padding: 6px 8px; margin: 6px 0; background: #0f151a; }
       .db-view summary { cursor: pointer; color: #cfe1ea; }
       .db-view .kv { color: #9fb2bb; font-size: 12px; }
+      /* DB row highlight */
+      .db-view details { transition: background 0.6s ease, box-shadow 0.6s ease; }
+      .db-view details.flash-highlight { background: #132430 !important; box-shadow: 0 0 0 2px rgba(90,169,230,0.45) inset; }
     </style>
     <script src="https://cdn.babylonjs.com/babylon.js"></script>
     <script src="https://cdn.babylonjs.com/materialsLibrary/babylonjs.materials.min.js"></script>
@@ -81,14 +84,24 @@
               <option value="Space">Space</option>
             </select>
           </label>
+          <label>Name <input id="spaceName" type="text" placeholder="space-1" style="width:140px;background:#0f151a;color:#cfe1ea;border:1px solid #1e2a30;border-radius:6px;padding:4px 6px;" /></label>
           <button class="btn" id="newSpace">New Space</button>
           <button class="btn" id="fitView">Fit View</button>
+        </div>
+        <div class="row">
+          <label><input type="checkbox" id="showNames" checked /> Names On</label>
         </div>
         <div class="row">
           <label>Size X <input id="sizeX" type="number" value="200" step="1" style="width:72px;background:#0f151a;color:#cfe1ea;border:1px solid #1e2a30;border-radius:6px;padding:4px 6px;" /></label>
           <label>Y <input id="sizeY" type="number" value="100" step="1" style="width:72px;background:#0f151a;color:#cfe1ea;border:1px solid #1e2a30;border-radius:6px;padding:4px 6px;" /></label>
           <label>Z <input id="sizeZ" type="number" value="200" step="1" style="width:72px;background:#0f151a;color:#cfe1ea;border:1px solid #1e2a30;border-radius:6px;padding:4px 6px;" /></label>
           <span class="hint">(voxels)</span>
+        </div>
+        <h3>View</h3>
+        <div class="row">
+          <label><input type="checkbox" id="gridGround" checked /> Ground Grid</label>
+          <label><input type="checkbox" id="gridXY" checked /> XY Grid</label>
+          <label><input type="checkbox" id="gridYZ" checked /> YZ Grid</label>
         </div>
         <h3>Transform (Edit Mode)</h3>
         <div class="row">

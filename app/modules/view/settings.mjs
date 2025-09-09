@@ -1,5 +1,5 @@
 // Settings tab UI: zoom and pan speed controls
-export function initSettingsTab(camApi) {
+export function initSettingsTab(camApi, ui = {}) {
   const pane = document.getElementById('tab-settings'); if (!pane) return;
   // Zoom speed slider
   const row = document.createElement('div'); row.className = 'row';
@@ -24,5 +24,20 @@ export function initSettingsTab(camApi) {
   const pstored = Number(localStorage.getItem(PKEY) || '200') || 200;
   slider2.value = String(pstored); valueSpan2.textContent = String(pstored);
   slider2.addEventListener('input', () => { valueSpan2.textContent = slider2.value; localStorage.setItem(PKEY, slider2.value); camApi.applyPanBase(); });
-}
 
+  // Label text size slider
+  const row3 = document.createElement('div'); row3.className = 'row';
+  const label3 = document.createElement('label'); label3.textContent = 'Label Text Size'; label3.style.display = 'flex'; label3.style.alignItems = 'center'; label3.style.gap = '8px';
+  const slider3 = document.createElement('input'); slider3.type = 'range'; slider3.min = '10'; slider3.max = '10000'; slider3.step = '100'; slider3.id = 'textSize';
+  const valueSpan3 = document.createElement('span'); valueSpan3.id = 'textSizeVal';
+  label3.appendChild(slider3); label3.appendChild(valueSpan3); row3.appendChild(label3); pane.appendChild(row3);
+
+  const TSKEY = 'dw:ui:textScale';
+  const tstored = Number(localStorage.getItem(TSKEY) || '100') || 100;
+  slider3.value = String(tstored); valueSpan3.textContent = String(tstored + '%');
+  slider3.addEventListener('input', () => {
+    valueSpan3.textContent = slider3.value + '%';
+    try { localStorage.setItem(TSKEY, slider3.value); } catch {}
+    try { ui.applyTextScale?.(); } catch {}
+  });
+}

@@ -6,7 +6,7 @@ import { renderDbView } from './dbView.mjs';
 
 // Initialize all UI and scene event handlers that were previously in main.mjs
 export function initEventHandlers({ scene, engine, camApi, camera, state, helpers }) {
-  const { setMode, setRunning, rebuildScene, rebuildHalos, moveSelection, scheduleGridUpdate } = helpers;
+  const { setMode, setRunning, rebuildScene, rebuildHalos, moveSelection, scheduleGridUpdate, applyViewToggles, updateHud } = helpers;
 
   // ——— Controls and elements ———
   const toggleRunBtn = document.getElementById('toggleRun');
@@ -23,11 +23,16 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
   const tzMinus = document.getElementById('tzMinus');
   const tzPlus = document.getElementById('tzPlus');
   const spaceTypeEl = document.getElementById('spaceType');
+  const spaceNameEl = document.getElementById('spaceName');
   const newSpaceBtn = document.getElementById('newSpace');
   const fitViewBtn = document.getElementById('fitView');
   const sizeXEl = document.getElementById('sizeX');
   const sizeYEl = document.getElementById('sizeY');
   const sizeZEl = document.getElementById('sizeZ');
+  const showNamesCb = document.getElementById('showNames');
+  const gridGroundCb = document.getElementById('gridGround');
+  const gridXYCb = document.getElementById('gridXY');
+  const gridYZCb = document.getElementById('gridYZ');
 
   const panel = document.getElementById('rightPanel');
   const collapsePanelBtn = document.getElementById('collapsePanel');
@@ -42,6 +47,29 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     Log.log('UI', 'Toggle run', { running: state.running });
   });
 
+  // ——————————— View toggles (names + grids) ———————————
+  function readBool(key, dflt = true) { try { const v = localStorage.getItem(key); return v == null ? dflt : v !== '0'; } catch { return dflt; } }
+  function writeBool(key, val) { try { localStorage.setItem(key, val ? '1' : '0'); } catch {} }
+
+  if (showNamesCb) { showNamesCb.checked = readBool('dw:ui:showNames', true); }
+  if (gridGroundCb) { gridGroundCb.checked = readBool('dw:ui:gridGround', true); }
+  if (gridXYCb) { gridXYCb.checked = readBool('dw:ui:gridXY', true); }
+  if (gridYZCb) { gridYZCb.checked = readBool('dw:ui:gridYZ', true); }
+
+  function applyTogglesFromUI() {
+    if (showNamesCb) writeBool('dw:ui:showNames', !!showNamesCb.checked);
+    if (gridGroundCb) writeBool('dw:ui:gridGround', !!gridGroundCb.checked);
+    if (gridXYCb) writeBool('dw:ui:gridXY', !!gridXYCb.checked);
+    if (gridYZCb) writeBool('dw:ui:gridYZ', !!gridYZCb.checked);
+    try { applyViewToggles?.(); } catch {}
+  }
+  showNamesCb?.addEventListener('change', applyTogglesFromUI);
+  gridGroundCb?.addEventListener('change', applyTogglesFromUI);
+  gridXYCb?.addEventListener('change', applyTogglesFromUI);
+  gridYZCb?.addEventListener('change', applyTogglesFromUI);
+  // Apply once on init
+  applyTogglesFromUI();
+
   // ——————————— Reset/Export/Import ———————————
   resetBtn?.addEventListener('click', () => {
     disposeBuilt(state.built);
@@ -51,6 +79,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     saveBarrow(state.barrow); snapshot(state.barrow);
     renderDbView(state.barrow);
     rebuildScene();
+    try { updateHud?.(); } catch {}
   });
 
   exportBtn?.addEventListener('click', () => {
@@ -74,9 +103,32 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       saveBarrow(state.barrow); snapshot(state.barrow);
       renderDbView(state.barrow);
       rebuildScene();
+      try { updateHud?.(); } catch {}
     } catch (err) { console.error('Import failed', err); }
     if (importFile) importFile.value = '';
   });
+
+  // ——————————— Name suggestion and validation ———————————
+  function suggestSpaceName(baseType) {
+    const base = (baseType || spaceTypeEl?.value || 'Space').toLowerCase();
+    const used = new Set((state.barrow.spaces||[]).map(s => s.id));
+    let n = 1; let candidate = base;
+    while (used.has(candidate)) { candidate = `${base}-${++n}`; }
+    return candidate;
+  }
+  function ensureNameInput() {
+    if (!spaceNameEl) return;
+    // If empty, suggest
+    if (!spaceNameEl.value || spaceNameEl.value.trim() === '') {
+      spaceNameEl.value = suggestSpaceName(spaceTypeEl?.value);
+    }
+    updateNewBtnEnabled();
+  }
+  function updateNewBtnEnabled() {
+    const ok = (spaceNameEl?.value || '').trim().length >= 1;
+    if (newSpaceBtn) { newSpaceBtn.disabled = !ok; }
+  }
+  spaceNameEl?.addEventListener('input', updateNewBtnEnabled);
 
   // ——————————— New Space ———————————
   newSpaceBtn?.addEventListener('click', () => {
@@ -92,10 +144,12 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       if (sizeYEl) sizeYEl.value = String(sy);
     }
     const size = { x: sx, y: sy, z: sz };
-    const idBase = type.toLowerCase();
-    let n = 1, id = idBase;
+    // Read desired id from textbox and ensure uniqueness
+    const desiredRaw = (spaceNameEl?.value || '').trim();
+    const baseName = desiredRaw || suggestSpaceName(type);
     const used = new Set((state.barrow.spaces||[]).map(s => s.id));
-    while (used.has(id)) { id = idBase + '-' + (++n); }
+    let n = 1; let id = baseName;
+    while (used.has(id)) { id = `${baseName}-${++n}`; }
     const origin = camera.target.clone();
     const s = { id, type, res, size, origin: { x: origin.x, y: origin.y, z: origin.z }, chunks: {}, attrs: {} };
 
@@ -122,6 +176,8 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     // Focus camera
     camera.target.copyFrom(new BABYLON.Vector3(s.origin.x, s.origin.y, s.origin.z));
     scheduleGridUpdate();
+    // Suggest next name
+    ensureNameInput();
   });
 
   // ——————————— Fit view ———————————
@@ -147,8 +203,11 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
   spaceTypeEl?.addEventListener('change', () => {
     applyDefaultSizeFields();
     Log.log('UI', 'Change type defaults', { type: spaceTypeEl.value, defaults: defaultSizeForType(spaceTypeEl.value) });
+    // Suggest a name if empty
+    ensureNameInput();
   });
   applyDefaultSizeFields();
+  ensureNameInput();
 
   // ——————————— Transform buttons ———————————
   function bindTransformButtons() {
@@ -202,6 +261,10 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     const now = performance.now();
     if (name === lastPickName && (now - lastPickTime) <= DOUBLE_CLICK_MS) {
       try { camApi.centerOnMesh(pick.pickedMesh); } catch (err) { Log.log('ERROR', 'Center on item failed', { error: String(err) }); }
+      // If double-clicking a space, open the Database tab and focus that space
+      if (name.startsWith('space:')) {
+        try { window.dispatchEvent(new CustomEvent('dw:showDbForSpace', { detail: { id } })); } catch {}
+      }
     }
     lastPickName = name;
     lastPickTime = now;
@@ -281,5 +344,80 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     tabDbBtn.addEventListener('click', () => activate('tab-db'));
     tabSettingsBtn.addEventListener('click', () => activate('tab-settings'));
   })();
-}
 
+  // ——————————— DB edit events ———————————
+  window.addEventListener('dw:dbEdit', (e) => {
+    const { path, value, prev } = e.detail || {};
+    try {
+      // Ensure unique space id on rename
+      const m = String(path || '').match(/^spaces\.(\d+)\.id$/);
+      if (m) {
+        const idx = Number(m[1]);
+        const arr = state.barrow.spaces || [];
+        if (arr[idx]) {
+          const desired = String(value || '').trim();
+          if (desired.length >= 1) {
+            const used = new Set(arr.map((s, i) => i === idx ? null : (s?.id || '')).filter(Boolean));
+            let candidate = desired; let n = 1;
+            while (used.has(candidate)) candidate = `${desired}-${++n}`;
+            arr[idx].id = candidate;
+            // Update selection if needed
+            if (prev && state.selection.has(prev)) { state.selection.delete(prev); state.selection.add(candidate); try { rebuildHalos(); } catch {} }
+          }
+        }
+      }
+    } catch {}
+    try { saveBarrow(state.barrow); snapshot(state.barrow); } catch {}
+    try { rebuildScene(); } catch {}
+    try { renderDbView(state.barrow); } catch {}
+    try { scheduleGridUpdate(); } catch {}
+    try { applyViewToggles?.(); } catch {}
+    try { updateHud?.(); } catch {}
+  });
+
+  // ——————————— DB navigation and centering ———————————
+  // Center camera when a DB row (space summary) is clicked
+  window.addEventListener('dw:dbRowClick', (e) => {
+    const { type, id } = e.detail || {};
+    if (type !== 'space' || !id) return;
+    try {
+      const mesh = (state?.built?.spaces || []).find(x => x.id === id)?.mesh || scene.getMeshByName(`space:${id}`);
+      if (mesh) camApi.centerOnMesh(mesh);
+      // Update selection to the clicked space and refresh halos
+      try { state.selection.clear(); state.selection.add(id); rebuildHalos(); } catch {}
+      Log.log('UI', 'DB row center', { id });
+    } catch (err) { Log.log('ERROR', 'Center from DB failed', { id, error: String(err) }); }
+  });
+
+  // Open the Database tab and expand to a specific space
+  window.addEventListener('dw:showDbForSpace', (e) => {
+    const { id } = e.detail || {};
+    if (!id) return;
+    try {
+      // Ensure panel is expanded/visible
+      try { applyPanelCollapsed(false); localStorage.setItem(PANEL_STATE_KEY, '0'); } catch {}
+      // Activate DB tab
+      const dbBtn = document.querySelector('.tabs .tab[data-tab="tab-db"]');
+      dbBtn?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      // Ensure dbView exists
+      const dbView = document.getElementById('dbView'); if (!dbView) return;
+      // Open Spaces section
+      const spaces = dbView.querySelector('#dbSpaces'); if (spaces) spaces.open = true;
+      // Open specific space details and scroll into view
+      let target = null;
+      try { target = dbView.querySelector(`details[data-space-id="${id}"]`); } catch {}
+      if (!target) {
+        target = Array.from(dbView.querySelectorAll('details[data-space-id]')).find(d => (d.dataset.spaceId || '') === String(id));
+      }
+      if (target) {
+        target.open = true;
+        try { target.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch { target.scrollIntoView(); }
+        // Flash highlight the target for a moment
+        try {
+          target.classList.add('flash-highlight');
+          setTimeout(() => target.classList.remove('flash-highlight'), 1300);
+        } catch {}
+      }
+    } catch (err) { Log.log('ERROR', 'Open DB to space failed', { id, error: String(err) }); }
+  });
+}
