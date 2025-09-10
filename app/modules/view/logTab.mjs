@@ -29,7 +29,9 @@ export function initLogTab(panelContent) {
   const selected = new Set();
   function renderFilters() {
     const classes = Array.from(Log.getClasses()).sort();
+    // If nothing selected yet, select all. Otherwise, auto-include any new classes by default
     if (selected.size === 0) classes.forEach(c => selected.add(c));
+    else classes.forEach(c => { if (!selected.has(c)) selected.add(c); });
     filtersBox.innerHTML = '';
     classes.forEach(c => {
       const label = document.createElement('label'); label.style.display = 'inline-flex'; label.style.alignItems = 'center'; label.style.gap = '6px';
@@ -51,4 +53,3 @@ export function initLogTab(panelContent) {
   }
   Log.on(() => { renderFilters(); renderEntries(); });
 }
-

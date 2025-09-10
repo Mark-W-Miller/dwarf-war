@@ -123,6 +123,12 @@ export function buildSceneFromBarrow(scene, barrow) {
         mesh = BABYLON.MeshBuilder.CreateBox(`space:${s.id}`, { width: w, height: h, depth: d }, scene);
       }
       mesh.position.set(s.origin?.x||0, s.origin?.y||0, s.origin?.z||0);
+      try {
+        const rx = Number(s.rotation?.x ?? 0) || 0;
+        const ry = (s.rotation && typeof s.rotation.y === 'number') ? Number(s.rotation.y) : Number(s.rotY || 0) || 0;
+        const rz = Number(s.rotation?.z ?? 0) || 0;
+        mesh.rotation.set(rx, ry, rz);
+      } catch {}
       mesh.material = mat; mesh.isPickable = true;
       built.spaces.push({ id: s.id, mesh, mat });
 

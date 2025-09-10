@@ -42,6 +42,8 @@ export function renderDbView(barrow) {
     dSpaces.appendChild(make('div', { class: 'kv', text: '(none)' }));
   } else {
     barrow.spaces.forEach((s, idx) => {
+      // Ensure rotation object exists for editing
+      if (!s.rotation || typeof s.rotation !== 'object') s.rotation = { x: 0, y: (typeof s.rotY === 'number' ? s.rotY : 0), z: 0 };
       const d = make('details');
       d.dataset.spaceId = s.id || String(idx);
       d.appendChild(make('summary', { text: `${s.id} — ${s.type}` }));
@@ -60,6 +62,12 @@ export function renderDbView(barrow) {
       dOrigin.appendChild(kv('y', s2(s.origin?.y||0), { path: `spaces.${idx}.origin.y`, type: 'number' }));
       dOrigin.appendChild(kv('z', s2(s.origin?.z||0), { path: `spaces.${idx}.origin.z`, type: 'number' }));
       d.appendChild(dOrigin);
+
+      const dRot = make('details'); dRot.appendChild(make('summary', { text: 'Rotation (rad)' }));
+      dRot.appendChild(kv('x', s2(s.rotation?.x||0), { path: `spaces.${idx}.rotation.x`, type: 'number' }));
+      dRot.appendChild(kv('y', s2(s.rotation?.y||0), { path: `spaces.${idx}.rotation.y`, type: 'number' }));
+      dRot.appendChild(kv('z', s2(s.rotation?.z||0), { path: `spaces.${idx}.rotation.z`, type: 'number' }));
+      d.appendChild(dRot);
 
       dSpaces.appendChild(d);
     });
@@ -105,7 +113,12 @@ export function renderDbView(barrow) {
     let cur = obj;
     for (let i = 0; i < parts.length - 1; i++) {
       const key = parts[i];
-      if (/^\d+$/.test(key)) cur = cur[Number(key)]; else cur = cur[key];
+      if (/^\d+$/.test(key)) {
+        cur = cur[Number(key)];
+      } else {
+        if (cur[key] == null) cur[key] = {};
+        cur = cur[key];
+      }
       if (cur == null) return;
     }
     const last = parts[parts.length - 1];

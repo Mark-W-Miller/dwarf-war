@@ -3,6 +3,11 @@
 export function initCamera(scene, canvas, Log) {
   const camera = new BABYLON.ArcRotateCamera('cam', Math.PI * 1.2, Math.PI / 3, 24, new BABYLON.Vector3(0, 1, 0), scene);
   camera.attachControl(canvas, true);
+  // Enforce Y-up: never allow upside-down or roll
+  camera.upVector = new BABYLON.Vector3(0, 1, 0);
+  camera.allowUpsideDown = false;
+  camera.lowerBetaLimit = 0.01;
+  camera.upperBetaLimit = Math.PI - 0.01;
   camera.lowerRadiusLimit = 2; camera.upperRadiusLimit = 5000;
   camera.minZ = 0.1; camera.maxZ = 10000;
   camera.wheelPrecision = 1; // percentage-based zoom
@@ -77,4 +82,3 @@ export function initCamera(scene, canvas, Log) {
 
   return { camera, applyZoomBase, applyPanBase, getZoomBase, getPanBase, updatePanDynamics, centerOnMesh, fitViewAll };
 }
-

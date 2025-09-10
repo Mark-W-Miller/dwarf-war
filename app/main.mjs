@@ -155,7 +155,7 @@ initEventHandlers({
   camApi,
   camera,
   state,
-  helpers: { setMode, setRunning, rebuildScene, rebuildHalos, moveSelection, scheduleGridUpdate, applyViewToggles, updateHud }
+  helpers: { setMode, setRunning, rebuildScene, rebuildHalos, moveSelection, scheduleGridUpdate, applyViewToggles, updateHud, updateGridExtent }
 });
 
 // Fit camera to all spaces
