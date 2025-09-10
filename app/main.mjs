@@ -224,7 +224,15 @@ engine.runRenderLoop(() => {
 initLogTab(document.querySelector('.panel-content'));
 
 // ——————————— Settings UI ———————————
-initSettingsTab(camApi, { applyTextScale });
+function applyGridArrowVisuals() {
+  const gs = Number(localStorage.getItem('dw:ui:gridStrength') || '80') || 80;
+  const as = Number(localStorage.getItem('dw:ui:arrowStrength') || '40') || 40;
+  try { grids.applyVisualStrengths(gs, as); } catch {}
+}
+// Initialize Settings UI and bind sliders
+initSettingsTab(camApi, { applyTextScale, applyGridArrowVisuals });
+// Apply grid/arrow visuals on startup
+applyGridArrowVisuals();
 
 // Zoom/pan helpers now live in camApi (camera module)
 

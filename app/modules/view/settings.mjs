@@ -40,4 +40,34 @@ export function initSettingsTab(camApi, ui = {}) {
     try { localStorage.setItem(TSKEY, slider3.value); } catch {}
     try { ui.applyTextScale?.(); } catch {}
   });
+
+  // Grid intensity slider
+  const row4 = document.createElement('div'); row4.className = 'row';
+  const label4 = document.createElement('label'); label4.textContent = 'Grid Strength'; label4.style.display = 'flex'; label4.style.alignItems = 'center'; label4.style.gap = '8px';
+  const slider4 = document.createElement('input'); slider4.type = 'range'; slider4.min = '0'; slider4.max = '100'; slider4.step = '1'; slider4.id = 'gridStrength';
+  const valueSpan4 = document.createElement('span'); valueSpan4.id = 'gridStrengthVal';
+  label4.appendChild(slider4); label4.appendChild(valueSpan4); row4.appendChild(label4); pane.appendChild(row4);
+  const GKEY = 'dw:ui:gridStrength';
+  const gstored = Number(localStorage.getItem(GKEY) || '80') || 80;
+  slider4.value = String(gstored); valueSpan4.textContent = String(gstored);
+  slider4.addEventListener('input', () => {
+    valueSpan4.textContent = slider4.value;
+    try { localStorage.setItem(GKEY, slider4.value); } catch {}
+    try { ui.applyGridArrowVisuals?.(); } catch {}
+  });
+
+  // Axis arrow brightness slider
+  const row5 = document.createElement('div'); row5.className = 'row';
+  const label5 = document.createElement('label'); label5.textContent = 'Arrow Brightness'; label5.style.display = 'flex'; label5.style.alignItems = 'center'; label5.style.gap = '8px';
+  const slider5 = document.createElement('input'); slider5.type = 'range'; slider5.min = '0'; slider5.max = '100'; slider5.step = '1'; slider5.id = 'arrowStrength';
+  const valueSpan5 = document.createElement('span'); valueSpan5.id = 'arrowStrengthVal';
+  label5.appendChild(slider5); label5.appendChild(valueSpan5); row5.appendChild(label5); pane.appendChild(row5);
+  const AKEY = 'dw:ui:arrowStrength';
+  const astored = Number(localStorage.getItem(AKEY) || '40') || 40;
+  slider5.value = String(astored); valueSpan5.textContent = String(astored);
+  slider5.addEventListener('input', () => {
+    valueSpan5.textContent = slider5.value;
+    try { localStorage.setItem(AKEY, slider5.value); } catch {}
+    try { ui.applyGridArrowVisuals?.(); } catch {}
+  });
 }

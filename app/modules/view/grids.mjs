@@ -5,24 +5,30 @@ export function initGrids(scene) {
   const ground = BABYLON.MeshBuilder.CreateGround('ground', { width: 800, height: 800 }, scene);
   ground.position.y = 0;
   const grid = new BABYLON.GridMaterial('grid', scene);
-  grid.mainColor = new BABYLON.Color3(0.10, 0.06, 0.06);
-  grid.lineColor = new BABYLON.Color3(0.75, 0.25, 0.25);
+  const baseMainXZ = new BABYLON.Color3(0.10, 0.06, 0.06);
+  const baseLineXZ = new BABYLON.Color3(0.75, 0.25, 0.25);
+  grid.mainColor = baseMainXZ.clone();
+  grid.lineColor = baseLineXZ.clone();
   grid.gridRatio = 2; grid.opacity = 0.95; ground.material = grid;
 
   // XY at Z=0
   const vGrid = BABYLON.MeshBuilder.CreatePlane('gridYX', { width: 800, height: 800 }, scene);
   vGrid.position = new BABYLON.Vector3(0, 0, 0);
   const gridVMat = new BABYLON.GridMaterial('gridV', scene);
-  gridVMat.mainColor = new BABYLON.Color3(0.06, 0.10, 0.06);
-  gridVMat.lineColor = new BABYLON.Color3(0.25, 0.85, 0.25);
+  const baseMainXY = new BABYLON.Color3(0.06, 0.10, 0.06);
+  const baseLineXY = new BABYLON.Color3(0.25, 0.85, 0.25);
+  gridVMat.mainColor = baseMainXY.clone();
+  gridVMat.lineColor = baseLineXY.clone();
   gridVMat.gridRatio = 2; gridVMat.opacity = 0.6; gridVMat.backFaceCulling = false; vGrid.material = gridVMat;
 
   // YZ at X=0
   const wGrid = BABYLON.MeshBuilder.CreatePlane('gridYZ', { width: 800, height: 800 }, scene);
   wGrid.position = new BABYLON.Vector3(0, 0, 0); wGrid.rotation.y = Math.PI / 2;
   const gridWMat = new BABYLON.GridMaterial('gridW', scene);
-  gridWMat.mainColor = new BABYLON.Color3(0.06, 0.08, 0.12);
-  gridWMat.lineColor = new BABYLON.Color3(0.25, 0.35, 0.85);
+  const baseMainYZ = new BABYLON.Color3(0.06, 0.08, 0.12);
+  const baseLineYZ = new BABYLON.Color3(0.25, 0.35, 0.85);
+  gridWMat.mainColor = baseMainYZ.clone();
+  gridWMat.lineColor = baseLineYZ.clone();
   gridWMat.gridRatio = 2; gridWMat.opacity = 0.6; gridWMat.backFaceCulling = false; wGrid.material = gridWMat;
 
   // Axis arrows along +X, +Y, +Z for orientation
@@ -52,6 +58,7 @@ export function initGrids(scene) {
       // Material
       const mat = new BABYLON.StandardMaterial(name+':mat', scene);
       mat.diffuseColor = color.scale(0.2); mat.emissiveColor = color; mat.specularColor = new BABYLON.Color3(0,0,0);
+      try { mat.metadata = { baseColor: color.clone() }; } catch {}
       shaft.material = mat; tip.material = mat;
       shaft.isPickable = false; tip.isPickable = false;
 
@@ -139,11 +146,36 @@ export function initGrids(scene) {
     try { arrows.set(Math.max(1, halfXZ - margin), Math.max(1, halfY - margin), Math.max(1, halfXZ - margin)); } catch {}
   }
 
+  // Visual strength controls for grid and arrows
+  function applyVisualStrengths(gridStrength = 80, arrowStrength = 40) {
+    const gs = Math.max(0, Math.min(100, Number(gridStrength) || 0)) / 100; // 0..1
+    const as = Math.max(0, Math.min(100, Number(arrowStrength) || 0)) / 100; // 0..1
+    try {
+      const k = 0.25 + 0.85 * gs; // line brightness multiplier
+      grid.lineColor = new BABYLON.Color3(baseLineXZ.r * k, baseLineXZ.g * k, baseLineXZ.b * k);
+      grid.opacity = 0.4 + 0.6 * gs; // ground more opaque
+      gridVMat.lineColor = new BABYLON.Color3(baseLineXY.r * k, baseLineXY.g * k, baseLineXY.b * k);
+      gridVMat.opacity = 0.15 + 0.85 * gs;
+      gridWMat.lineColor = new BABYLON.Color3(baseLineYZ.r * k, baseLineYZ.g * k, baseLineYZ.b * k);
+      gridWMat.opacity = 0.15 + 0.85 * gs;
+    } catch {}
+    try {
+      // Adjust arrow emissive/diffuse based on base color
+      const setMat = (m) => {
+        const base = m?.metadata?.baseColor || m?.emissiveColor || new BABYLON.Color3(1,1,1);
+        m.emissiveColor = base.scale(Math.max(0, as));
+        m.diffuseColor = base.scale(0.05 + 0.25 * as);
+      };
+      [arrows.x.shaft, arrows.x.tip, arrows.y.shaft, arrows.y.tip, arrows.z.shaft, arrows.z.tip]
+        .forEach(mesh => { try { setMat(mesh.material); } catch {} });
+    } catch {}
+  }
+
   let gridTimer = null;
   function scheduleGridUpdate(built){
     if (gridTimer) clearTimeout(gridTimer);
     gridTimer = setTimeout(() => updateGridExtent(built), 2000);
   }
 
-  return { ground, vGrid, wGrid, arrows, updateUnitGrids, updateGridExtent, scheduleGridUpdate };
+  return { ground, vGrid, wGrid, arrows, updateUnitGrids, updateGridExtent, scheduleGridUpdate, applyVisualStrengths };
 }
