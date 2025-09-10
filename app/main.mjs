@@ -112,6 +112,16 @@ updateHud();
 state.hl = new BABYLON.HighlightLayer('hl', scene, { blurHorizontalSize: 0.45, blurVerticalSize: 0.45 });
 state.hl.innerGlow = true; state.hl.outerGlow = false;
 
+function applyGlowStrength() {
+  let strength = 70;
+  try { strength = Math.max(0, Math.min(100, Number(localStorage.getItem('dw:ui:glowStrength') || '70') || 70)); } catch {}
+  const k = strength / 100; // 0..1
+  // Blur size: from subtle (0.2) to strong (~2.2)
+  const blur = 0.2 + 2.0 * k;
+  try { state.hl.blurHorizontalSize = blur; state.hl.blurVerticalSize = blur; } catch {}
+}
+applyGlowStrength();
+
 function updateHud() {
   const barrowName = state.barrow?.id || 'Barrow';
   hud.textContent = `Dwarf War • ${barrowName} • ${state.mode === 'edit' ? 'Edit' : 'Game'} ${state.running ? '• Running' : '• Paused'}`;
@@ -259,7 +269,7 @@ function applyGridArrowVisuals() {
   try { grids.applyVisualStrengths(gs, as); } catch {}
 }
 // Initialize Settings UI and bind sliders
-initSettingsTab(camApi, { applyTextScale, applyGridArrowVisuals, rebuildScene });
+initSettingsTab(camApi, { applyTextScale, applyGridArrowVisuals, rebuildScene, applyGlowStrength, rebuildHalos });
 // Apply grid/arrow visuals on startup
 applyGridArrowVisuals();
 
@@ -333,9 +343,12 @@ function rebuildHalos() {
   // update highlight layer
   try { state.hl.removeAllMeshes(); } catch {}
   const bySpace = new Map((state.built.spaces||[]).map(x => [x.id, x.mesh]));
+  // Glow color intensity from setting
+  let glowK = 0.7;
+  try { const s = Number(localStorage.getItem('dw:ui:glowStrength') || '70') || 70; glowK = Math.max(0.2, Math.min(1.25, s / 70)); } catch {}
   const byCav = new Map((state.built.caverns||[]).map(x => [x.id, x.mesh]));
-  const blue = new BABYLON.Color3(0.12, 0.35, 0.7);
-  const yellow = new BABYLON.Color3(0.7, 0.65, 0.15);
+  const blue = new BABYLON.Color3(0.12 * glowK, 0.35 * glowK, 0.7 * glowK);
+  const yellow = new BABYLON.Color3(0.7 * glowK, 0.65 * glowK, 0.15 * glowK);
   for (const id of state.selection) {
     const m = bySpace.get(id) || byCav.get(id);
     if (!m) continue;

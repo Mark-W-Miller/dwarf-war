@@ -71,6 +71,22 @@ export function initSettingsTab(camApi, ui = {}) {
     try { ui.applyGridArrowVisuals?.(); } catch {}
   });
 
+  // Selection glow strength slider
+  const row7 = document.createElement('div'); row7.className = 'row';
+  const label7 = document.createElement('label'); label7.textContent = 'Selection Glow'; label7.style.display = 'flex'; label7.style.alignItems = 'center'; label7.style.gap = '8px';
+  const slider7 = document.createElement('input'); slider7.type = 'range'; slider7.min = '0'; slider7.max = '100'; slider7.step = '1'; slider7.id = 'glowStrength';
+  const valueSpan7 = document.createElement('span'); valueSpan7.id = 'glowStrengthVal';
+  label7.appendChild(slider7); label7.appendChild(valueSpan7); row7.appendChild(label7); pane.appendChild(row7);
+  const HKEY = 'dw:ui:glowStrength';
+  const hstored = Number(localStorage.getItem(HKEY) || '70') || 70;
+  slider7.value = String(hstored); valueSpan7.textContent = String(hstored);
+  slider7.addEventListener('input', () => {
+    valueSpan7.textContent = slider7.value;
+    try { localStorage.setItem(HKEY, slider7.value); } catch {}
+    try { ui.applyGlowStrength?.(); } catch {}
+    try { ui.rebuildHalos?.(); } catch {}
+  });
+
   // Exact Intersection (CSG) toggle — performance note
   const row6 = document.createElement('div'); row6.className = 'row'; row6.style.alignItems = 'flex-start';
   const label6 = document.createElement('label'); label6.style.display = 'flex'; label6.style.alignItems = 'center'; label6.style.gap = '8px';

@@ -282,7 +282,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
   bindTransformButtons();
 
   // ——————————— Rotation widget (Y-axis) ———————————
-  let rotWidget = { mesh: null, spaceId: null, dragging: false, startAngle: 0, startRot: 0, centerY: 0, lastRot: 0, baseDiam: 0 };
+  let rotWidget = { mesh: null, spaceId: null, dragging: false, preDrag: false, downX: 0, downY: 0, startAngle: 0, startRot: 0, centerY: 0, lastRot: 0, baseDiam: 0 };
   let _lastDbRefresh = 0;
   function disposeRotWidget() {
     try {
@@ -291,7 +291,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
         rotWidget.mesh.dispose();
       }
     } catch {}
-    rotWidget = { mesh: null, spaceId: null, dragging: false, startAngle: 0, startRot: 0, centerY: 0 };
+    rotWidget = { mesh: null, spaceId: null, dragging: false, preDrag: false, downX: 0, downY: 0, startAngle: 0, startRot: 0, centerY: 0 };
   }
   function ensureRotWidget() {
     try {
@@ -494,10 +494,10 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
   }
 
   // ——————————— Move widget (drag on XZ plane) ———————————
-  let moveWidget = { mesh: null, spaceId: null, dragging: false, startPoint: null, startOrigin: null, offset: null, planeY: 0 };
+  let moveWidget = { mesh: null, spaceId: null, dragging: false, preDrag: false, downX: 0, downY: 0, startPoint: null, startOrigin: null, offset: null, planeY: 0 };
   function disposeMoveWidget() {
     try { if (moveWidget.mesh) { Log.log('GIZMO', 'Dispose move widget', { id: moveWidget.spaceId }); moveWidget.mesh.dispose(); } } catch {}
-    moveWidget = { mesh: null, spaceId: null, dragging: false, startPoint: null, startOrigin: null, offset: null, planeY: 0 };
+    moveWidget = { mesh: null, spaceId: null, dragging: false, preDrag: false, downX: 0, downY: 0, startPoint: null, startOrigin: null, offset: null, planeY: 0 };
   }
   function ensureMoveWidget() {
     try {
@@ -536,50 +536,16 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     if (type === BABYLON.PointerEventTypes.POINTERDOWN) {
       const pick = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('rotGizmo:'));
       if (pick?.hit && pick.pickedMesh && rotWidget.mesh && pick.pickedMesh === rotWidget.mesh) {
-        // Swallow this click from other handlers and camera
-        try { pi.event?.stopImmediatePropagation?.(); pi.event?.stopPropagation?.(); pi.event?.preventDefault?.(); pi.skipOnPointerObservable = true; } catch {}
-        const { space, mesh } = getSelectedSpaceAndMesh(); if (!mesh) { Log.log('GIZMO', 'No mesh on drag start'); return; }
-        const p0 = pickPointOnYPlane(mesh.position.y) || pick.pickedPoint || mesh.position.clone();
-        const v = new BABYLON.Vector3(p0.x - mesh.position.x, 0, p0.z - mesh.position.z);
-        rotWidget.startAngle = Math.atan2(v.z, v.x);
-        const ry = (space?.rotation && typeof space.rotation.y === 'number') ? space.rotation.y : (space?.rotY || mesh.rotation.y || 0);
-        rotWidget.startRot = ry;
-        rotWidget.dragging = true;
-        try {
-          const canvas = engine.getRenderingCanvas();
-          camera.inputs?.attached?.pointers?.detachControl(canvas);
-          Log.log('GIZMO', 'Drag start', { id: rotWidget.spaceId, startAngle: rotWidget.startAngle, startRot: rotWidget.startRot, action: 'detachCameraPointers' });
-        } catch {}
-        // Hide built intersections during drag to avoid stale boxes
-        try { for (const x of state?.built?.intersections || []) { try { state.hl?.removeMesh(x.mesh); } catch {}; x.mesh?.setEnabled(false); } } catch {}
-        // Sync DB view immediately with current values
-        try {
-          if (space) {
-            if (!space.rotation || typeof space.rotation !== 'object') space.rotation = { x: 0, y: ry, z: 0 };
-            else space.rotation.y = ry;
-            space.rotY = ry;
-            renderDbView(state.barrow);
-          }
-        } catch {}
+        // Prepare possible drag; do not swallow yet (allow selection clicks)
+        rotWidget.preDrag = true;
+        rotWidget.downX = scene.pointerX; rotWidget.downY = scene.pointerY;
       }
       // Move widget start
       const pick2 = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('moveGizmo:'));
       if (pick2?.hit && pick2.pickedMesh && moveWidget.mesh && pick2.pickedMesh === moveWidget.mesh) {
-        try { pi.event?.stopImmediatePropagation?.(); pi.event?.stopPropagation?.(); pi.event?.preventDefault?.(); pi.skipOnPointerObservable = true; } catch {}
-        const { space, mesh } = getSelectedSpaceAndMesh(); if (!mesh || !space) return;
-        const p0 = pickPointOnYPlane(mesh.position.y) || pick2.pickedPoint || mesh.position.clone();
-        moveWidget.startPoint = p0.clone();
-        moveWidget.startOrigin = { x: space.origin?.x || mesh.position.x, y: space.origin?.y || mesh.position.y, z: space.origin?.z || mesh.position.z };
-        moveWidget.offset = { x: (moveWidget.startOrigin.x - p0.x), z: (moveWidget.startOrigin.z - p0.z) };
-        moveWidget.planeY = mesh.position.y;
-        moveWidget.dragging = true;
-        try {
-          const canvas = engine.getRenderingCanvas();
-          camera.inputs?.attached?.pointers?.detachControl(canvas);
-          Log.log('GIZMO', 'Move start', { id: moveWidget.spaceId, start: moveWidget.startOrigin, offset: moveWidget.offset });
-        } catch {}
-        // Hide built intersections during drag to avoid stale boxes
-        try { for (const x of state?.built?.intersections || []) { try { state.hl?.removeMesh(x.mesh); } catch {}; x.mesh?.setEnabled(false); } } catch {}
+        // Prepare possible drag; do not swallow yet
+        moveWidget.preDrag = true;
+        moveWidget.downX = scene.pointerX; moveWidget.downY = scene.pointerY;
       }
     } else if (type === BABYLON.PointerEventTypes.POINTERUP) {
       if (rotWidget.dragging) {
@@ -607,6 +573,9 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
           }
         } catch {}
       }
+      // Clear pending pre-drag state on mouse up
+      rotWidget.preDrag = false;
+      moveWidget.preDrag = false;
       if (moveWidget.dragging) {
         moveWidget.dragging = false;
         try { const canvas = engine.getRenderingCanvas(); camera.inputs?.attached?.pointers?.attachControl(canvas, true); Log.log('GIZMO', 'Move end', { id: moveWidget.spaceId }); } catch {}
@@ -628,6 +597,36 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       }
     } else if (type === BABYLON.PointerEventTypes.POINTERMOVE) {
       const { space, mesh, id } = getSelectedSpaceAndMesh(); if (!mesh) return;
+      const dragThreshold = 6; // pixels
+      // Possibly start rotation drag if moved enough after pressing ring
+      if (!rotWidget.dragging && rotWidget.preDrag) {
+        const dx = (scene.pointerX - rotWidget.downX); const dy = (scene.pointerY - rotWidget.downY);
+        if (Math.hypot(dx, dy) >= dragThreshold) {
+          try { pi.event?.stopImmediatePropagation?.(); pi.event?.stopPropagation?.(); pi.event?.preventDefault?.(); pi.skipOnPointerObservable = true; } catch {}
+          const p0 = pickPointOnYPlane(mesh.position.y) || mesh.position.clone();
+          const v = new BABYLON.Vector3(p0.x - mesh.position.x, 0, p0.z - mesh.position.z);
+          rotWidget.startAngle = Math.atan2(v.z, v.x);
+          const ry = (space?.rotation && typeof space.rotation.y === 'number') ? space.rotation.y : (space?.rotY || mesh.rotation.y || 0);
+          rotWidget.startRot = ry;
+          rotWidget.dragging = true; rotWidget.preDrag = false;
+          try {
+            const canvas = engine.getRenderingCanvas();
+            camera.inputs?.attached?.pointers?.detachControl(canvas);
+            Log.log('GIZMO', 'Drag start', { id: rotWidget.spaceId, startAngle: rotWidget.startAngle, startRot: rotWidget.startRot, action: 'detachCameraPointers' });
+          } catch {}
+          // Hide built intersections during drag to avoid stale boxes
+          try { for (const x of state?.built?.intersections || []) { try { state.hl?.removeMesh(x.mesh); } catch {}; x.mesh?.setEnabled(false); } } catch {}
+          // Sync DB view immediately with current values
+          try {
+            if (space) {
+              if (!space.rotation || typeof space.rotation !== 'object') space.rotation = { x: 0, y: ry, z: 0 };
+              else space.rotation.y = ry;
+              space.rotY = ry;
+              renderDbView(state.barrow);
+            }
+          } catch {}
+        }
+      }
       // Rotation drag
       if (rotWidget.dragging) {
         try { pi.event?.stopImmediatePropagation?.(); pi.event?.stopPropagation?.(); pi.event?.preventDefault?.(); pi.skipOnPointerObservable = true; } catch {}
@@ -664,6 +663,26 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
           }
         } catch {}
         return;
+      }
+      // Possibly start move drag if moved enough after pressing disc
+      if (!moveWidget.dragging && moveWidget.preDrag) {
+        const dx = (scene.pointerX - moveWidget.downX); const dy = (scene.pointerY - moveWidget.downY);
+        if (Math.hypot(dx, dy) >= dragThreshold) {
+          try { pi.event?.stopImmediatePropagation?.(); pi.event?.stopPropagation?.(); pi.event?.preventDefault?.(); pi.skipOnPointerObservable = true; } catch {}
+          const p0 = pickPointOnYPlane(mesh.position.y) || mesh.position.clone();
+          moveWidget.startPoint = p0.clone();
+          moveWidget.startOrigin = { x: space?.origin?.x || mesh.position.x, y: space?.origin?.y || mesh.position.y, z: space?.origin?.z || mesh.position.z };
+          moveWidget.offset = { x: (moveWidget.startOrigin.x - p0.x), z: (moveWidget.startOrigin.z - p0.z) };
+          moveWidget.planeY = mesh.position.y;
+          moveWidget.dragging = true; moveWidget.preDrag = false;
+          try {
+            const canvas = engine.getRenderingCanvas();
+            camera.inputs?.attached?.pointers?.detachControl(canvas);
+            Log.log('GIZMO', 'Move start', { id: moveWidget.spaceId, start: moveWidget.startOrigin, offset: moveWidget.offset });
+          } catch {}
+          // Hide built intersections during drag to avoid stale boxes
+          try { for (const x of state?.built?.intersections || []) { try { state.hl?.removeMesh(x.mesh); } catch {}; x.mesh?.setEnabled(false); } } catch {}
+        }
       }
       // Move drag
       if (moveWidget.dragging) {
@@ -704,7 +723,24 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     if (pi.type !== BABYLON.PointerEventTypes.POINTERDOWN) return;
     if (rotWidget.dragging || moveWidget.dragging) return; // do not interfere while dragging gizmo
     const ev = pi.event || window.event;
-    const pick = scene.pick(scene.pointerX, scene.pointerY, (m) => m && typeof m.name === 'string' && (m.name.startsWith('space:') || m.name.startsWith('cavern:')));
+    let pick = scene.pick(scene.pointerX, scene.pointerY, (m) => m && typeof m.name === 'string' && (m.name.startsWith('space:') || m.name.startsWith('cavern:')));
+    // Fallback: robust ray/mesh intersection if Babylon pick misses
+    if (!pick?.hit || !pick.pickedMesh) {
+      try {
+        const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), camera);
+        let best = null;
+        for (const entry of (state?.built?.spaces || [])) {
+          const mesh = entry?.mesh; if (!mesh) continue;
+          const info = ray.intersectsMesh(mesh, false);
+          if (info?.hit) {
+            if (!best || info.distance < best.distance) best = { info, mesh, id: entry.id };
+          }
+        }
+        if (best) {
+          pick = { hit: true, pickedMesh: best.mesh };
+        }
+      } catch {}
+    }
     if (!pick?.hit || !pick.pickedMesh) return;
     const name = pick.pickedMesh.name; // space:<id> or cavern:<id>
     let id = '';
