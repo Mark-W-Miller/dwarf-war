@@ -100,6 +100,7 @@ layoutBarrow(state.barrow); // ensure positions from directions
 state.built = buildSceneFromBarrow(scene, state.barrow);
 renderDbView(state.barrow);
 grids.updateUnitGrids(state.barrow?.meta?.voxelSize || 1);
+try { grids.updateGridExtent(state.built); } catch {}
 camApi.applyZoomBase();
 camApi.applyPanBase();
 rebuildHalos();
@@ -281,6 +282,7 @@ function rebuildScene() {
   layoutBarrow(state.barrow);
   state.built = buildSceneFromBarrow(scene, state.barrow);
   updateUnitGrids();
+  try { grids.updateGridExtent(state.built); } catch {}
   rebuildHalos();
   scheduleGridUpdate();
   applyViewToggles();
@@ -334,48 +336,11 @@ function moveSelection(dx=0, dy=0, dz=0) {
 
 // Compute grid extents to contain all spaces (min 1000 yards)
 function updateGridExtent(){
-  // Compute extents from built meshes (spaces + caverns), in world space
-  const meshes = [];
-  if (state?.built?.spaces) for (const s of state.built.spaces) if (s.mesh) meshes.push(s.mesh);
-  if (state?.built?.caverns) for (const c of state.built.caverns) if (c.mesh) meshes.push(c.mesh);
-
-  let minX = Infinity, minY = Infinity, minZ = Infinity;
-  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
-  for (const m of meshes) {
-    const bb = m.getBoundingInfo()?.boundingBox;
-    if (!bb) continue;
-    const vmin = bb.minimumWorld, vmax = bb.maximumWorld;
-    if (!vmin || !vmax) continue;
-    minX = Math.min(minX, vmin.x); maxX = Math.max(maxX, vmax.x);
-    minY = Math.min(minY, vmin.y); maxY = Math.max(maxY, vmax.y);
-    minZ = Math.min(minZ, vmin.z); maxZ = Math.max(maxZ, vmax.z);
-  }
-
-  // If nothing found, default large
-  if (meshes.length === 0 || !isFinite(minX)) {
-    const minSize = 1000;
-    ground.scaling.x = ground.scaling.z = minSize / 800;
-    vGrid.scaling.x = vGrid.scaling.y = minSize / 800;
-    wGrid.scaling.x = wGrid.scaling.y = minSize / 800;
-    return;
-  }
-
-  const pad = 100;
-  // Center grids at origin; allow asymmetric extents by sizing to cover max absolute reach
-  const maxAbsX = Math.max(Math.abs(minX), Math.abs(maxX));
-  const maxAbsY = Math.max(Math.abs(minY), Math.abs(maxY));
-  const maxAbsZ = Math.max(Math.abs(minZ), Math.abs(maxZ));
-  const sizeXZ = Math.max(1000, 2 * Math.max(maxAbsX, maxAbsZ) + pad);
-  const sizeXY = Math.max(1000, 2 * Math.max(maxAbsX, maxAbsY) + pad);
-  const sizeYZ = Math.max(1000, 2 * Math.max(maxAbsY, maxAbsZ) + pad);
-  // base plane sizes were 800; scale accordingly
-  ground.scaling.x = sizeXZ / 800; ground.scaling.z = sizeXZ / 800;
-  vGrid.scaling.x = vGrid.scaling.y = sizeXY / 800;
-  wGrid.scaling.x = wGrid.scaling.y = sizeYZ / 800;
+  // Delegate to grids module for a single source of truth
+  try { grids.updateGridExtent(state.built); } catch {}
 }
 
 // Debounced grid update: schedule an update 2s after the last edit
 function scheduleGridUpdate(){
-  try { if (state._gridTimer) { clearTimeout(state._gridTimer); } } catch {}
-  state._gridTimer = setTimeout(() => { try { updateGridExtent(); } catch {} }, 2000);
+  try { grids.scheduleGridUpdate(state.built); } catch { updateGridExtent(); }
 }
