@@ -112,6 +112,7 @@ export function buildSceneFromBarrow(scene, barrow) {
         : s.type === 'Room' ? new BABYLON.Color3(0.7, 0.6, 0.9)
         : new BABYLON.Color3(0.6, 0.8, 0.6);
       mat.diffuseColor = color.scale(0.25); mat.emissiveColor = color.scale(0.35); mat.alpha = 0.35; mat.specularColor = new BABYLON.Color3(0,0,0);
+      mat.backFaceCulling = false; // ensure click/pick works from both sides
 
       let mesh;
       if (s.type === 'Cavern') {

@@ -109,7 +109,7 @@ applyViewToggles();
 applyTextScale?.();
 updateHud();
 // Highlight layer for selection glow
-state.hl = new BABYLON.HighlightLayer('hl', scene, { blurHorizontalSize: 0.35, blurVerticalSize: 0.35 });
+state.hl = new BABYLON.HighlightLayer('hl', scene, { blurHorizontalSize: 0.45, blurVerticalSize: 0.45 });
 state.hl.innerGlow = true; state.hl.outerGlow = false;
 
 function updateHud() {
@@ -334,8 +334,8 @@ function rebuildHalos() {
   try { state.hl.removeAllMeshes(); } catch {}
   const bySpace = new Map((state.built.spaces||[]).map(x => [x.id, x.mesh]));
   const byCav = new Map((state.built.caverns||[]).map(x => [x.id, x.mesh]));
-  const blue = new BABYLON.Color3(0.08, 0.22, 0.45);
-  const yellow = new BABYLON.Color3(0.55, 0.5, 0.12);
+  const blue = new BABYLON.Color3(0.12, 0.35, 0.7);
+  const yellow = new BABYLON.Color3(0.7, 0.65, 0.15);
   for (const id of state.selection) {
     const m = bySpace.get(id) || byCav.get(id);
     if (!m) continue;
@@ -369,6 +369,7 @@ function moveSelection(dx=0, dy=0, dz=0) {
   rebuildScene();
   renderDbView(state.barrow);
   scheduleGridUpdate();
+  try { window.dispatchEvent(new CustomEvent('dw:transform', { detail: { kind: 'move', dx, dy, dz, selection: Array.from(state.selection) } })); } catch {}
 }
 
 // Transform buttons handled in eventHandler.mjs

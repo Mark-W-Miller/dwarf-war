@@ -643,6 +643,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
           return;
         }
         mesh.rotation.y = rot;
+        try { mesh.computeWorldMatrix(true); mesh.refreshBoundingInfo(); } catch {}
         rotWidget.lastRot = rot;
         try { updateRotWidgetFromMesh(mesh); } catch {}
         // Live update model rotation (Y) and DB display (throttled)
@@ -672,6 +673,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
         const nz = p.z + (moveWidget.offset?.z || 0);
         // Apply new position
         mesh.position.x = nx; mesh.position.z = nz;
+        try { mesh.computeWorldMatrix(true); mesh.refreshBoundingInfo(); } catch {}
         // Keep gizmos following and scaling with the mesh while dragging
         try { if (moveWidget.mesh) moveWidget.mesh.position.copyFrom(mesh.position); } catch {}
         try { updateRotWidgetFromMesh(mesh); } catch {}
@@ -835,6 +837,11 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     try { applyViewToggles?.(); } catch {}
     try { updateHud?.(); } catch {}
     try { ensureRotWidget(); ensureMoveWidget(); } catch {}
+  });
+
+  // ——————————— External transforms (buttons/commands) ———————————
+  window.addEventListener('dw:transform', (e) => {
+    try { ensureRotWidget(); ensureMoveWidget(); rebuildHalos(); } catch {}
   });
 
   // ——————————— DB navigation and centering ———————————
