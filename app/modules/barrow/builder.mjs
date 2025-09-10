@@ -1,7 +1,7 @@
 // Build Babylon meshes from Barrow data
 
 export function buildSceneFromBarrow(scene, barrow) {
-  const built = { caverns: [], links: [], carddons: [], cavernLabels: [], spaces: [], spaceLabels: [] };
+  const built = { caverns: [], links: [], carddons: [], cavernLabels: [], spaces: [], spaceLabels: [], intersections: [] };
 
   // Materials
   const cavernMat = new BABYLON.PBRMetallicRoughnessMaterial('cavernMat', scene);
@@ -150,6 +150,55 @@ export function buildSceneFromBarrow(scene, barrow) {
     }
   }
 
+  // Intersections between world AABBs of built meshes (aligns with visible shapes)
+  try {
+    const arr = Array.isArray(built.spaces) ? built.spaces : [];
+    for (let i = 0; i < arr.length; i++) {
+      const A = arr[i]; if (!A?.mesh) continue;
+      try { A.mesh.computeWorldMatrix(true); A.mesh.refreshBoundingInfo(); } catch {}
+      const bba = A.mesh.getBoundingInfo()?.boundingBox; if (!bba) continue;
+      const amin = bba.minimumWorld, amax = bba.maximumWorld;
+      for (let j = i + 1; j < arr.length; j++) {
+        const B = arr[j]; if (!B?.mesh) continue;
+        try { B.mesh.computeWorldMatrix(true); B.mesh.refreshBoundingInfo(); } catch {}
+        const bbb = B.mesh.getBoundingInfo()?.boundingBox; if (!bbb) continue;
+        const bmin = bbb.minimumWorld, bmax = bbb.maximumWorld;
+        const ixmin = { x: Math.max(amin.x, bmin.x), y: Math.max(amin.y, bmin.y), z: Math.max(amin.z, bmin.z) };
+        const ixmax = { x: Math.min(amax.x, bmax.x), y: Math.min(amax.y, bmax.y), z: Math.min(amax.z, bmax.z) };
+        const dx = ixmax.x - ixmin.x, dy = ixmax.y - ixmin.y, dz = ixmax.z - ixmin.z;
+        if (dx > 0.001 && dy > 0.001 && dz > 0.001) {
+          const cx = (ixmin.x + ixmax.x) / 2, cy = (ixmin.y + ixmax.y) / 2, cz = (ixmin.z + ixmax.z) / 2;
+          if (!isFinite(dx) || !isFinite(dy) || !isFinite(dz) || !isFinite(cx) || !isFinite(cy) || !isFinite(cz)) continue;
+          let mesh = null; let mat = null;
+          // Prefer exact intersection via CSG if available; fall back to AABB box
+          const exactOn = (() => { try { return localStorage.getItem('dw:ui:exactCSG') === '1'; } catch { return false; } })();
+          try {
+            if (exactOn && BABYLON.CSG && A.mesh && B.mesh) {
+              const csgA = BABYLON.CSG.FromMesh(A.mesh);
+              const csgB = BABYLON.CSG.FromMesh(B.mesh);
+              const inter = csgA.intersect(csgB);
+              mat = new BABYLON.StandardMaterial(`inter:${A.id}&${B.id}:mat`, scene);
+              mat.diffuseColor = new BABYLON.Color3(0,0,0);
+              mat.emissiveColor = new BABYLON.Color3(0.75, 0.7, 0.2);
+              mat.alpha = 0.25; mat.specularColor = new BABYLON.Color3(0,0,0);
+              mesh = inter.toMesh(`inter:${A.id}&${B.id}`, mat, scene, true);
+              mesh.isPickable = false; mesh.alwaysSelectAsActiveMesh = false; mesh.renderingGroupId = 1;
+            }
+          } catch {}
+          if (!mesh) {
+            mat = new BABYLON.StandardMaterial(`inter:${A.id}&${B.id}:mat`, scene);
+            mat.diffuseColor = new BABYLON.Color3(0.0, 0.0, 0.0);
+            mat.emissiveColor = new BABYLON.Color3(0.75, 0.7, 0.2);
+            mat.alpha = 0.25; mat.specularColor = new BABYLON.Color3(0,0,0);
+            mesh = BABYLON.MeshBuilder.CreateBox(`inter:${A.id}&${B.id}`, { width: dx, height: dy, depth: dz }, scene);
+            mesh.material = mat; mesh.isPickable = false; mesh.position.set(cx, cy, cz);
+          }
+          built.intersections.push({ a: A.id, b: B.id, mesh, mat });
+        }
+      }
+    }
+  } catch {}
+
   return built;
 }
 
@@ -161,5 +210,6 @@ export function disposeBuilt(built) {
   for (const x of built.carddons || []) { x.mesh?.dispose(); x.dt?.dispose(); }
   for (const x of built.spaces || []) x.mesh?.dispose();
   for (const x of built.spaceLabels || []) { x.mesh?.dispose(); x.dt?.dispose(); }
+  for (const x of built.intersections || []) { x.mesh?.dispose(); }
   built.label?.dispose();
 }

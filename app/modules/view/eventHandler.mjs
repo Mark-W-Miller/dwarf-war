@@ -387,6 +387,112 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     return { space, mesh, id };
   }
 
+  // ——————————— Live intersection preview (selected vs others) ———————————
+  const liveIx = new Map(); // key -> mesh
+  const ixLastExact = new Map(); // key -> last CSG timestamp
+  const ixMat = (() => {
+    try {
+      const m = new BABYLON.StandardMaterial('ixLive:mat', scene);
+      m.diffuseColor = new BABYLON.Color3(0,0,0);
+      m.emissiveColor = new BABYLON.Color3(0.95, 0.9, 0.2);
+      m.alpha = 0.25; m.specularColor = new BABYLON.Color3(0,0,0); m.zOffset = 3;
+      return m;
+    } catch { return null; }
+  })();
+  function disposeLiveIntersections(){
+    try { for (const m of liveIx.values()) { try { state.hl?.removeMesh(m); } catch {}; try { m.dispose(); } catch {} } } catch {}
+    liveIx.clear();
+  }
+  function aabbForSpace(space) {
+    const res = (space?.res || (state.barrow?.meta?.voxelSize || 1));
+    const w = Math.max(0, (space?.size?.x || 0) * res);
+    const h = Math.max(0, (space?.size?.y || 0) * res);
+    const d = Math.max(0, (space?.size?.z || 0) * res);
+    const cx = space?.origin?.x || 0, cy = space?.origin?.y || 0, cz = space?.origin?.z || 0;
+    return { min:{x:cx-w/2,y:cy-h/2,z:cz-d/2}, max:{x:cx+w/2,y:cy+h/2,z:cz+d/2} };
+  }
+  function updateLiveIntersectionsFor(selectedId){
+    try {
+      if (!selectedId) { disposeLiveIntersections(); return; }
+      const builtSpaces = Array.isArray(state?.built?.spaces) ? state.built.spaces : [];
+      const selEntry = builtSpaces.find(x => x.id === selectedId); if (!selEntry?.mesh) { disposeLiveIntersections(); return; }
+      const bba = selEntry.mesh.getBoundingInfo()?.boundingBox; if (!bba) { disposeLiveIntersections(); return; }
+      const amin = bba.minimumWorld, amax = bba.maximumWorld;
+      const seen = new Set();
+      const exactOn = (() => { try { return localStorage.getItem('dw:ui:exactCSG') === '1'; } catch { return false; } })();
+      const canCSG = exactOn && !!(BABYLON && BABYLON.CSG);
+      for (const entry of builtSpaces) {
+        if (!entry || entry.id === selectedId || !entry.mesh) continue;
+        const bbb = entry.mesh.getBoundingInfo()?.boundingBox; if (!bbb) continue;
+        const bmin = bbb.minimumWorld, bmax = bbb.maximumWorld;
+        const ixmin = { x: Math.max(amin.x, bmin.x), y: Math.max(amin.y, bmin.y), z: Math.max(amin.z, bmin.z) };
+        const ixmax = { x: Math.min(amax.x, bmax.x), y: Math.min(amax.y, bmax.y), z: Math.min(amax.z, bmax.z) };
+        const dx = ixmax.x - ixmin.x, dy = ixmax.y - ixmin.y, dz = ixmax.z - ixmin.z;
+        const key = `live:${selectedId}&${entry.id}`;
+        if (dx > 0.001 && dy > 0.001 && dz > 0.001) {
+          seen.add(key);
+          const cx = (ixmin.x + ixmax.x) / 2, cy = (ixmin.y + ixmax.y) / 2, cz = (ixmin.z + ixmax.z) / 2;
+          if (!isFinite(cx) || !isFinite(cy) || !isFinite(cz) || !isFinite(dx) || !isFinite(dy) || !isFinite(dz)) continue;
+
+          let mesh = liveIx.get(key);
+          if (canCSG) {
+            const now = performance.now();
+            const last = ixLastExact.get(key) || 0;
+            const needExact = (!mesh) || (now - last > 220);
+            if (needExact) {
+              try {
+                if (mesh) { try { state.hl?.removeMesh(mesh); } catch {}; try { mesh.dispose(); } catch {}; liveIx.delete(key); }
+                const csgA = BABYLON.CSG.FromMesh(selEntry.mesh);
+                const csgB = BABYLON.CSG.FromMesh(entry.mesh);
+                const inter = csgA.intersect(csgB);
+                const csgMesh = inter.toMesh(key, ixMat || undefined, scene, true);
+                csgMesh.isPickable = false; csgMesh.renderingGroupId = 1;
+                liveIx.set(key, csgMesh);
+                ixLastExact.set(key, now);
+                try { state.hl?.addMesh(csgMesh, new BABYLON.Color3(0.95, 0.9, 0.2)); } catch {}
+              } catch {
+                // If exact fails on first pass, fallback to AABB to show something
+                if (!mesh) {
+                  const box = BABYLON.MeshBuilder.CreateBox(key, { width: dx, height: dy, depth: dz }, scene);
+                  if (ixMat) box.material = ixMat; box.isPickable = false; box.renderingGroupId = 1;
+                  liveIx.set(key, box);
+                  box.position.set(cx, cy, cz);
+                  try { state.hl?.addMesh(box, new BABYLON.Color3(0.95, 0.9, 0.2)); } catch {}
+                }
+              }
+            } else {
+              // keep existing CSG mesh until next exact tick (no AABB toggling)
+            }
+          } else {
+            // AABB-only preview
+            if (!mesh) {
+              mesh = BABYLON.MeshBuilder.CreateBox(key, { width: dx, height: dy, depth: dz }, scene);
+              if (ixMat) mesh.material = ixMat;
+              mesh.isPickable = false; mesh.renderingGroupId = 1;
+              liveIx.set(key, mesh);
+              mesh.position.set(cx, cy, cz);
+              try { state.hl?.addMesh(mesh, new BABYLON.Color3(0.95, 0.9, 0.2)); } catch {}
+            } else {
+              try { state.hl?.removeMesh(mesh); mesh.dispose(); } catch {}
+              const box = BABYLON.MeshBuilder.CreateBox(key, { width: dx, height: dy, depth: dz }, scene);
+              if (ixMat) box.material = ixMat; box.isPickable = false; box.renderingGroupId = 1;
+              liveIx.set(key, box);
+              box.position.set(cx, cy, cz);
+              try { state.hl?.addMesh(box, new BABYLON.Color3(0.95, 0.9, 0.2)); } catch {}
+            }
+          }
+        } else {
+          // remove if existed
+          if (liveIx.has(key)) { try { const old = liveIx.get(key); state.hl?.removeMesh(old); old?.dispose(); } catch {}; liveIx.delete(key); ixLastExact.delete(key); }
+        }
+      }
+      // cleanup any not seen
+      for (const [k, m] of Array.from(liveIx.entries())) {
+        if (!k.startsWith(`live:${selectedId}&`) || !seen.has(k)) { try { state.hl?.removeMesh(m); m.dispose(); } catch {}; liveIx.delete(k); ixLastExact.delete(k); }
+      }
+    } catch {}
+  }
+
   // ——————————— Move widget (drag on XZ plane) ———————————
   let moveWidget = { mesh: null, spaceId: null, dragging: false, startPoint: null, startOrigin: null, offset: null, planeY: 0 };
   function disposeMoveWidget() {
@@ -444,6 +550,8 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
           camera.inputs?.attached?.pointers?.detachControl(canvas);
           Log.log('GIZMO', 'Drag start', { id: rotWidget.spaceId, startAngle: rotWidget.startAngle, startRot: rotWidget.startRot, action: 'detachCameraPointers' });
         } catch {}
+        // Hide built intersections during drag to avoid stale boxes
+        try { for (const x of state?.built?.intersections || []) { try { state.hl?.removeMesh(x.mesh); } catch {}; x.mesh?.setEnabled(false); } } catch {}
         // Sync DB view immediately with current values
         try {
           if (space) {
@@ -470,6 +578,8 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
           camera.inputs?.attached?.pointers?.detachControl(canvas);
           Log.log('GIZMO', 'Move start', { id: moveWidget.spaceId, start: moveWidget.startOrigin, offset: moveWidget.offset });
         } catch {}
+        // Hide built intersections during drag to avoid stale boxes
+        try { for (const x of state?.built?.intersections || []) { try { state.hl?.removeMesh(x.mesh); } catch {}; x.mesh?.setEnabled(false); } } catch {}
       }
     } else if (type === BABYLON.PointerEventTypes.POINTERUP) {
       if (rotWidget.dragging) {
@@ -493,6 +603,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
             saveBarrow(state.barrow); snapshot(state.barrow);
             renderDbView(state.barrow);
             scheduleGridUpdate();
+            try { disposeLiveIntersections(); rebuildScene(); ensureRotWidget(); ensureMoveWidget(); } catch {}
           }
         } catch {}
       }
@@ -511,11 +622,12 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
             saveBarrow(state.barrow); snapshot(state.barrow);
             renderDbView(state.barrow);
             scheduleGridUpdate();
+            try { disposeLiveIntersections(); rebuildScene(); ensureRotWidget(); ensureMoveWidget(); } catch {}
           }
         } catch {}
       }
     } else if (type === BABYLON.PointerEventTypes.POINTERMOVE) {
-      const { space, mesh } = getSelectedSpaceAndMesh(); if (!mesh) return;
+      const { space, mesh, id } = getSelectedSpaceAndMesh(); if (!mesh) return;
       // Rotation drag
       if (rotWidget.dragging) {
         try { pi.event?.stopImmediatePropagation?.(); pi.event?.stopPropagation?.(); pi.event?.preventDefault?.(); pi.skipOnPointerObservable = true; } catch {}
@@ -546,6 +658,8 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
               Log.log('GIZMO', 'Drag update', { id: rotWidget.spaceId, angle: ang, delta, rot, deg: isFinite(deg) ? Math.round(deg*10)/10 : null });
               try { renderDbView(state.barrow); } catch {}
             }
+            // Live intersection preview
+            try { updateLiveIntersectionsFor(id); } catch {}
           }
         } catch {}
         return;
@@ -571,6 +685,8 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
               Log.log('GIZMO', 'Move update', { id: moveWidget.spaceId, origin: space.origin });
               try { renderDbView(state.barrow); } catch {}
             }
+            // Live intersection preview (selected vs others)
+            try { updateLiveIntersectionsFor(id); } catch {}
           }
         } catch {}
       }
@@ -600,7 +716,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     }
     Log.log('UI', 'Select space(s)', { selection: Array.from(state.selection) });
     rebuildHalos();
-    ensureRotWidget(); ensureMoveWidget();
+    ensureRotWidget(); ensureMoveWidget(); disposeLiveIntersections();
 
     // Handle double-click/tap with adjustable threshold
     const now = performance.now();

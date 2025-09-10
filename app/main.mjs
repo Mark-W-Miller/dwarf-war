@@ -109,8 +109,8 @@ applyViewToggles();
 applyTextScale?.();
 updateHud();
 // Highlight layer for selection glow
-state.hl = new BABYLON.HighlightLayer('hl', scene, { blurHorizontalSize: 1.0, blurVerticalSize: 1.0 });
-state.hl.innerGlow = false; state.hl.outerGlow = true;
+state.hl = new BABYLON.HighlightLayer('hl', scene, { blurHorizontalSize: 0.35, blurVerticalSize: 0.35 });
+state.hl.innerGlow = true; state.hl.outerGlow = false;
 
 function updateHud() {
   const barrowName = state.barrow?.id || 'Barrow';
@@ -222,6 +222,35 @@ engine.runRenderLoop(() => {
 // removed legacy Parse button wiring; Enter now handles parsing
 // ——————————— Log Tab ———————————
 initLogTab(document.querySelector('.panel-content'));
+// Global error logging into Log tab
+try {
+  window.addEventListener('error', (e) => {
+    const payload = { type: 'error', message: e.message, file: e.filename, line: e.lineno, col: e.colno, stack: (e.error && e.error.stack) ? String(e.error.stack) : undefined };
+    try { Log.log('ERROR', 'Unhandled error', payload); } catch {}
+    try { sendToAssistant(payload); } catch {}
+  });
+  window.addEventListener('unhandledrejection', (e) => {
+    const payload = { type: 'unhandledrejection', reason: String(e.reason), stack: (e.reason && e.reason.stack) ? String(e.reason.stack) : undefined };
+    try { Log.log('ERROR', 'Unhandled rejection', payload); } catch {}
+    try { sendToAssistant(payload); } catch {}
+  });
+} catch {}
+
+function sendToAssistant(obj) {
+  try {
+    if (localStorage.getItem('dw:dev:sendErrors') !== '1') return;
+  } catch { return; }
+  try {
+    const url = 'http://localhost:6060/log';
+    const data = { app: 'dwarf-war', at: Date.now(), ...obj };
+    if (navigator.sendBeacon) {
+      const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+      navigator.sendBeacon(url, blob);
+      return;
+    }
+    fetch(url, { method: 'POST', body: JSON.stringify(data), keepalive: true, mode: 'no-cors' }).catch(() => {});
+  } catch {}
+}
 
 // ——————————— Settings UI ———————————
 function applyGridArrowVisuals() {
@@ -230,7 +259,7 @@ function applyGridArrowVisuals() {
   try { grids.applyVisualStrengths(gs, as); } catch {}
 }
 // Initialize Settings UI and bind sliders
-initSettingsTab(camApi, { applyTextScale, applyGridArrowVisuals });
+initSettingsTab(camApi, { applyTextScale, applyGridArrowVisuals, rebuildScene });
 // Apply grid/arrow visuals on startup
 applyGridArrowVisuals();
 
@@ -305,12 +334,17 @@ function rebuildHalos() {
   try { state.hl.removeAllMeshes(); } catch {}
   const bySpace = new Map((state.built.spaces||[]).map(x => [x.id, x.mesh]));
   const byCav = new Map((state.built.caverns||[]).map(x => [x.id, x.mesh]));
-  const blue = new BABYLON.Color3(0.2, 0.6, 1.0);
+  const blue = new BABYLON.Color3(0.08, 0.22, 0.45);
+  const yellow = new BABYLON.Color3(0.55, 0.5, 0.12);
   for (const id of state.selection) {
     const m = bySpace.get(id) || byCav.get(id);
     if (!m) continue;
     state.hl.addMesh(m, blue);
   }
+  // Always glow intersections in yellow
+  try {
+    for (const x of state?.built?.intersections || []) if (x?.mesh) state.hl.addMesh(x.mesh, yellow);
+  } catch {}
 }
 
 function moveSelection(dx=0, dy=0, dz=0) {

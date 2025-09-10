@@ -70,4 +70,20 @@ export function initSettingsTab(camApi, ui = {}) {
     try { localStorage.setItem(AKEY, slider5.value); } catch {}
     try { ui.applyGridArrowVisuals?.(); } catch {}
   });
+
+  // Exact Intersection (CSG) toggle — performance note
+  const row6 = document.createElement('div'); row6.className = 'row'; row6.style.alignItems = 'flex-start';
+  const label6 = document.createElement('label'); label6.style.display = 'flex'; label6.style.alignItems = 'center'; label6.style.gap = '8px';
+  const cb6 = document.createElement('input'); cb6.type = 'checkbox'; cb6.id = 'exactCSG';
+  const text6 = document.createElement('span'); text6.textContent = 'Exact Intersection (CSG)';
+  label6.appendChild(cb6); label6.appendChild(text6); row6.appendChild(label6);
+  const hint6 = document.createElement('div'); hint6.className = 'hint'; hint6.textContent = 'Computes true mesh intersections on rebuild. More accurate, potentially slower on large scenes.';
+  row6.appendChild(hint6); pane.appendChild(row6);
+  const CKEY = 'dw:ui:exactCSG';
+  try { cb6.checked = (localStorage.getItem(CKEY) === '1'); } catch { cb6.checked = false; }
+  cb6.addEventListener('change', () => {
+    try { localStorage.setItem(CKEY, cb6.checked ? '1' : '0'); } catch {}
+    // Rebuild to apply intersection mode
+    try { ui.rebuildScene?.(); } catch {}
+  });
 }
