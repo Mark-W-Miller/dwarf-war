@@ -128,7 +128,9 @@ export function buildSceneFromBarrow(scene, barrow) {
         const rx = Number(s.rotation?.x ?? 0) || 0;
         const ry = (s.rotation && typeof s.rotation.y === 'number') ? Number(s.rotation.y) : Number(s.rotY || 0) || 0;
         const rz = Number(s.rotation?.z ?? 0) || 0;
-        mesh.rotation.set(rx, ry, rz);
+        // Prefer quaternion for consistent local-space rotations
+        try { mesh.rotationQuaternion = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz); mesh.rotation.set(0,0,0); }
+        catch { mesh.rotation.set(rx, ry, rz); }
       } catch {}
       mesh.material = mat; mesh.isPickable = true; mesh.alwaysSelectAsActiveMesh = true;
       built.spaces.push({ id: s.id, mesh, mat });

@@ -22,6 +22,18 @@ export function renderDbView(barrow) {
     return row;
   };
 
+  // Preserve open/closed state of details before rebuild
+  const openSet = new Set();
+  try {
+    root.querySelectorAll('details').forEach((d) => {
+      if (!d.open) return;
+      const sid = d.dataset.spaceId;
+      const sec = d.dataset.section;
+      if (sid && !sec) openSet.add(`space:${sid}`);
+      if (sid && sec) openSet.add(`sec:${sid}:${sec}`);
+    });
+  } catch {}
+
   // Build DOM
   root.textContent = '';
 
@@ -51,19 +63,19 @@ export function renderDbView(barrow) {
       d.appendChild(kv('type', s.type, { path: `spaces.${idx}.type`, type: 'text' }));
       d.appendChild(kv('res', s2(s.res), { path: `spaces.${idx}.res`, type: 'number' }));
 
-      const dSize = make('details'); dSize.appendChild(make('summary', { text: 'Size' }));
+      const dSize = make('details'); dSize.dataset.section = 'size'; dSize.appendChild(make('summary', { text: 'Size' }));
       dSize.appendChild(kv('x', s2(s.size?.x||0), { path: `spaces.${idx}.size.x`, type: 'number' }));
       dSize.appendChild(kv('y', s2(s.size?.y||0), { path: `spaces.${idx}.size.y`, type: 'number' }));
       dSize.appendChild(kv('z', s2(s.size?.z||0), { path: `spaces.${idx}.size.z`, type: 'number' }));
       d.appendChild(dSize);
 
-      const dOrigin = make('details'); dOrigin.appendChild(make('summary', { text: 'Origin' }));
+      const dOrigin = make('details'); dOrigin.dataset.section = 'origin'; dOrigin.appendChild(make('summary', { text: 'Origin' }));
       dOrigin.appendChild(kv('x', s2(s.origin?.x||0), { path: `spaces.${idx}.origin.x`, type: 'number' }));
       dOrigin.appendChild(kv('y', s2(s.origin?.y||0), { path: `spaces.${idx}.origin.y`, type: 'number' }));
       dOrigin.appendChild(kv('z', s2(s.origin?.z||0), { path: `spaces.${idx}.origin.z`, type: 'number' }));
       d.appendChild(dOrigin);
 
-      const dRot = make('details'); dRot.appendChild(make('summary', { text: 'Rotation (rad)' }));
+      const dRot = make('details'); dRot.dataset.section = 'rotation'; dRot.appendChild(make('summary', { text: 'Rotation (rad)' }));
       dRot.appendChild(kv('x', s2(s.rotation?.x||0), { path: `spaces.${idx}.rotation.x`, type: 'number' }));
       dRot.appendChild(kv('y', s2(s.rotation?.y||0), { path: `spaces.${idx}.rotation.y`, type: 'number' }));
       dRot.appendChild(kv('z', s2(s.rotation?.z||0), { path: `spaces.${idx}.rotation.z`, type: 'number' }));
@@ -73,6 +85,18 @@ export function renderDbView(barrow) {
     });
   }
   root.appendChild(dSpaces);
+
+  // Restore open/closed states
+  try {
+    root.querySelectorAll('details[data-space-id]').forEach((d) => {
+      const sid = d.dataset.spaceId;
+      if (openSet.has(`space:${sid}`)) d.open = true;
+      d.querySelectorAll('details[data-section]').forEach((sec) => {
+        const key = `sec:${sid}:${sec.dataset.section}`;
+        if (openSet.has(key)) sec.open = true;
+      });
+    });
+  } catch {}
 
   // Inline editing — double-click to edit a value
   const startEdit = (span) => {
@@ -131,24 +155,23 @@ export function renderDbView(barrow) {
     startEdit(span);
   });
 
-  // Toggle twist-open details and center on space when clicking within a space block
+  // Toggle twist-open details (use native <details> behavior) and center on space when clicking within a space block
   root.addEventListener('click', (e) => {
     // Ignore clicks on editors/controls
     if (e.target.closest('input,select,textarea,button')) return;
     const spaceDetails = e.target.closest('details[data-space-id]');
     const sum = e.target.closest('summary');
-    if (sum && root.contains(sum)) {
-      const parentDetails = sum.parentElement;
-      if (parentDetails && parentDetails.tagName === 'DETAILS') {
-        e.preventDefault();
-        parentDetails.open = !parentDetails.open;
-      }
-    }
+    // Let the browser handle <details>/<summary> toggling by default; do not preventDefault here
     if (spaceDetails && root.contains(spaceDetails)) {
       const id = spaceDetails.dataset.spaceId;
       if (id) {
         try { window.dispatchEvent(new CustomEvent('dw:dbRowClick', { detail: { type: 'space', id } })); } catch {}
       }
     }
+  });
+
+  // Also support toggling via the native 'toggle' event for <details>
+  root.addEventListener('toggle', (e) => {
+    // No-op, but ensures event bubbles and can be listened to elsewhere if needed
   });
 }

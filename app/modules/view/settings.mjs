@@ -71,6 +71,20 @@ export function initSettingsTab(camApi, ui = {}) {
     try { ui.applyGridArrowVisuals?.(); } catch {}
   });
 
+  // Rotation sensitivity slider
+  const rowRot = document.createElement('div'); rowRot.className = 'row';
+  const labelRot = document.createElement('label'); labelRot.textContent = 'Rotation Speed'; labelRot.style.display = 'flex'; labelRot.style.alignItems = 'center'; labelRot.style.gap = '8px';
+  const sliderRot = document.createElement('input'); sliderRot.type = 'range'; sliderRot.min = '10'; sliderRot.max = '200'; sliderRot.step = '5'; sliderRot.id = 'rotSens';
+  const valueRot = document.createElement('span'); valueRot.id = 'rotSensVal';
+  labelRot.appendChild(sliderRot); labelRot.appendChild(valueRot); rowRot.appendChild(labelRot); pane.appendChild(rowRot);
+  const RKEY = 'dw:ui:rotSens';
+  const rstored = Number(localStorage.getItem(RKEY) || '80') || 80;
+  sliderRot.value = String(rstored); valueRot.textContent = String(rstored + '%');
+  sliderRot.addEventListener('input', () => {
+    valueRot.textContent = sliderRot.value + '%';
+    try { localStorage.setItem(RKEY, sliderRot.value); } catch {}
+  });
+
   // Selection glow strength slider
   const row7 = document.createElement('div'); row7.className = 'row';
   const label7 = document.createElement('label'); label7.textContent = 'Selection Glow'; label7.style.display = 'flex'; label7.style.alignItems = 'center'; label7.style.gap = '8px';
