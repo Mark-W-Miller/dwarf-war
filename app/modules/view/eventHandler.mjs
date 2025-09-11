@@ -38,6 +38,71 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
   const panel = document.getElementById('rightPanel');
   const collapsePanelBtn = document.getElementById('collapsePanel');
 
+  // ——————————— Resizable panel ———————————
+  (function setupPanelResizer(){
+    if (!panel) return;
+    // Apply stored width
+    try {
+      const w = Number(localStorage.getItem('dw:ui:panelWidth')||'0')||0;
+      if (w >= 240 && w <= Math.max(260, window.innerWidth - 80)) panel.style.width = w + 'px';
+    } catch {}
+    // Create resizer handle on the left edge
+    const handle = document.createElement('div');
+    handle.id = 'panelResizer';
+    handle.style.position = 'absolute';
+    handle.style.left = '-6px';
+    handle.style.top = '0';
+    handle.style.width = '8px';
+    handle.style.height = '100%';
+    handle.style.cursor = 'ew-resize';
+    handle.style.background = 'transparent';
+    handle.style.zIndex = '5';
+    handle.title = 'Drag to resize panel';
+    panel.appendChild(handle);
+
+    let dragging = false; let startX = 0; let startW = 0;
+    function onMove(e){
+      if (!dragging) return;
+      const dx = (startX - (e.clientX || 0)); // dragging left increases width
+      let w = Math.round(startW + dx);
+      const maxW = Math.max(260, window.innerWidth - 80);
+      w = Math.max(240, Math.min(maxW, w));
+      panel.style.width = w + 'px';
+      try { localStorage.setItem('dw:ui:panelWidth', String(w)); } catch {}
+    }
+    function onUp(e){
+      if (!dragging) return;
+      dragging = false;
+      try { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); } catch {}
+      try { document.removeEventListener('touchmove', onMove); document.removeEventListener('touchend', onUp); } catch {}
+    }
+    handle.addEventListener('mousedown', (e) => {
+      if (panel.classList.contains('collapsed')) return;
+      dragging = true; startX = e.clientX || 0; startW = panel.getBoundingClientRect().width;
+      document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
+      e.preventDefault(); e.stopPropagation();
+    });
+    handle.addEventListener('touchstart', (e) => {
+      if (panel.classList.contains('collapsed')) return;
+      const t = e.touches && e.touches[0]; if (!t) return;
+      dragging = true; startX = t.clientX; startW = panel.getBoundingClientRect().width;
+      document.addEventListener('touchmove', onMove, { passive:false }); document.addEventListener('touchend', onUp);
+      e.preventDefault(); e.stopPropagation();
+    }, { passive:false });
+    // Hide resizer when collapsed
+    const obs = new MutationObserver(() => { handle.style.display = panel.classList.contains('collapsed') ? 'none' : 'block'; });
+    try { obs.observe(panel, { attributes:true, attributeFilter:['class'] }); } catch {}
+    handle.style.display = panel.classList.contains('collapsed') ? 'none' : 'block';
+    window.addEventListener('resize', () => {
+      // Clamp panel width on viewport resize
+      try {
+        const maxW = Math.max(260, window.innerWidth - 80);
+        const cur = panel.getBoundingClientRect().width;
+        if (cur > maxW) { panel.style.width = maxW + 'px'; localStorage.setItem('dw:ui:panelWidth', String(maxW)); }
+      } catch {}
+    });
+  })();
+
   // ——————————— Mode and run/pause ———————————
   document.querySelectorAll('input[name="mode"]').forEach(r => {
     r.addEventListener('change', () => setMode(r.value));

@@ -137,8 +137,11 @@ export function buildSceneFromBarrow(scene, barrow) {
 
       const label = BABYLON.MeshBuilder.CreatePlane(`space:${s.id}:label`, { width: 3.0, height: 1.1 }, scene);
       label.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
-      const topY = mesh.position.y + (s.type === 'Cavern' ? Math.min(w,h,d)/2 : h/2);
-      label.position = new BABYLON.Vector3(mesh.position.x, topY + 1.0, mesh.position.z);
+      // Parent label to the space mesh so it follows moves/rotations.
+      // Position relative to the mesh's local origin (center) just above its top face.
+      const yOff = (s.type === 'Cavern' ? Math.min(w,h,d)/2 : h/2) + 1.0;
+      try { label.parent = mesh; } catch {}
+      label.position = new BABYLON.Vector3(0, yOff, 0);
       label.isPickable = false;
       const dt = new BABYLON.DynamicTexture(`space:${s.id}:dt`, { width: 768, height: 288 }, scene, false);
       dt.hasAlpha = true; const ctx2 = dt.getContext(); ctx2.clearRect(0,0,768,288);
