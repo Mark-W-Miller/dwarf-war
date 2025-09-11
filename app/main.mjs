@@ -103,6 +103,8 @@ grids.updateUnitGrids(state.barrow?.meta?.voxelSize || 1);
 try { grids.updateGridExtent(state.built); } catch {}
 camApi.applyZoomBase();
 camApi.applyPanBase();
+// Fit view initially to frame all spaces
+try { camApi.fitViewAll(state.barrow?.spaces || [], state.barrow?.meta?.voxelSize || 1); } catch {}
 rebuildHalos();
 grids.scheduleGridUpdate(state.built);
 applyViewToggles();

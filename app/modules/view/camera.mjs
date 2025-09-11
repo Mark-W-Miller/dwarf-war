@@ -48,7 +48,7 @@ export function initCamera(scene, canvas, Log) {
       const cx = (min.x + max.x) / 2, cy = (min.y + max.y) / 2, cz = (min.z + max.z) / 2;
       const spanX = max.x - min.x, spanY = max.y - min.y, spanZ = max.z - min.z;
       const span = Math.max(spanX, spanY, spanZ);
-      const radius = Math.max(10, span * 0.9 + 10);
+      const radius = Math.max(10, span * 1.3 + 15);
       camera.target.set(cx, cy, cz);
       camera.radius = radius;
       if (camera.upperRadiusLimit < radius * 1.2) camera.upperRadiusLimit = radius * 1.2;
@@ -73,7 +73,7 @@ export function initCamera(scene, canvas, Log) {
     }
     const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2, cz = (minZ + maxZ) / 2;
     const span = Math.max(maxX - minX, maxY - minY, maxZ - minZ);
-    const radius = Math.max(10, span * 0.8 + 10);
+    const radius = Math.max(10, span * 1.3 + 15);
     camera.target.set(cx, cy, cz);
     camera.radius = radius;
     if (camera.upperRadiusLimit < radius * 1.2) camera.upperRadiusLimit = radius * 1.2;
