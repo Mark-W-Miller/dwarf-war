@@ -33,6 +33,9 @@ export function renderDbView(barrow) {
       if (sid && sec) openSet.add(`sec:${sid}:${sec}`);
     });
   } catch {}
+  // Preserve top-level Spaces section open state
+  let spacesWasOpen = true;
+  try { const prev = root.querySelector('#dbSpaces'); if (prev) spacesWasOpen = !!prev.open; } catch {}
 
   // Build DOM
   root.textContent = '';
@@ -63,19 +66,19 @@ export function renderDbView(barrow) {
       d.appendChild(kv('type', s.type, { path: `spaces.${idx}.type`, type: 'text' }));
       d.appendChild(kv('res', s2(s.res), { path: `spaces.${idx}.res`, type: 'number' }));
 
-      const dSize = make('details'); dSize.dataset.section = 'size'; dSize.appendChild(make('summary', { text: 'Size' }));
+      const dSize = make('details'); dSize.dataset.section = 'size'; dSize.dataset.spaceId = s.id || String(idx); dSize.appendChild(make('summary', { text: 'Size' }));
       dSize.appendChild(kv('x', s2(s.size?.x||0), { path: `spaces.${idx}.size.x`, type: 'number' }));
       dSize.appendChild(kv('y', s2(s.size?.y||0), { path: `spaces.${idx}.size.y`, type: 'number' }));
       dSize.appendChild(kv('z', s2(s.size?.z||0), { path: `spaces.${idx}.size.z`, type: 'number' }));
       d.appendChild(dSize);
 
-      const dOrigin = make('details'); dOrigin.dataset.section = 'origin'; dOrigin.appendChild(make('summary', { text: 'Origin' }));
+      const dOrigin = make('details'); dOrigin.dataset.section = 'origin'; dOrigin.dataset.spaceId = s.id || String(idx); dOrigin.appendChild(make('summary', { text: 'Origin' }));
       dOrigin.appendChild(kv('x', s2(s.origin?.x||0), { path: `spaces.${idx}.origin.x`, type: 'number' }));
       dOrigin.appendChild(kv('y', s2(s.origin?.y||0), { path: `spaces.${idx}.origin.y`, type: 'number' }));
       dOrigin.appendChild(kv('z', s2(s.origin?.z||0), { path: `spaces.${idx}.origin.z`, type: 'number' }));
       d.appendChild(dOrigin);
 
-      const dRot = make('details'); dRot.dataset.section = 'rotation'; dRot.appendChild(make('summary', { text: 'Rotation (rad)' }));
+      const dRot = make('details'); dRot.dataset.section = 'rotation'; dRot.dataset.spaceId = s.id || String(idx); dRot.appendChild(make('summary', { text: 'Rotation (rad)' }));
       dRot.appendChild(kv('x', s2(s.rotation?.x||0), { path: `spaces.${idx}.rotation.x`, type: 'number' }));
       dRot.appendChild(kv('y', s2(s.rotation?.y||0), { path: `spaces.${idx}.rotation.y`, type: 'number' }));
       dRot.appendChild(kv('z', s2(s.rotation?.z||0), { path: `spaces.${idx}.rotation.z`, type: 'number' }));
@@ -85,8 +88,10 @@ export function renderDbView(barrow) {
     });
   }
   root.appendChild(dSpaces);
+  // Restore top-level Spaces open state
+  try { dSpaces.open = !!spacesWasOpen; } catch {}
 
-  // Restore open/closed states
+  // Restore open/closed states for each space and its subsections
   try {
     root.querySelectorAll('details[data-space-id]').forEach((d) => {
       const sid = d.dataset.spaceId;
