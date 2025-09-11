@@ -102,4 +102,16 @@ export function initSettingsTab(camApi, ui = {}) {
     // Rebuild to apply intersection mode
     try { ui.rebuildScene?.(); } catch {}
   });
+
+  // Pick Debug Logs toggle
+  const row8 = document.createElement('div'); row8.className = 'row';
+  const label8 = document.createElement('label'); label8.style.display = 'flex'; label8.style.alignItems = 'center'; label8.style.gap = '8px';
+  const cb8 = document.createElement('input'); cb8.type = 'checkbox'; cb8.id = 'pickDebug';
+  const text8 = document.createElement('span'); text8.textContent = 'Pick Debug Logs';
+  label8.appendChild(cb8); label8.appendChild(text8); row8.appendChild(label8); pane.appendChild(row8);
+  const DKEY = 'dw:debug:picking';
+  try { cb8.checked = (localStorage.getItem(DKEY) === '1'); } catch { cb8.checked = false; }
+  cb8.addEventListener('change', () => {
+    try { localStorage.setItem(DKEY, cb8.checked ? '1' : '0'); } catch {}
+  });
 }

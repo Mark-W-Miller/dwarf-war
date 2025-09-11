@@ -130,7 +130,7 @@ export function buildSceneFromBarrow(scene, barrow) {
         const rz = Number(s.rotation?.z ?? 0) || 0;
         mesh.rotation.set(rx, ry, rz);
       } catch {}
-      mesh.material = mat; mesh.isPickable = true;
+      mesh.material = mat; mesh.isPickable = true; mesh.alwaysSelectAsActiveMesh = true;
       built.spaces.push({ id: s.id, mesh, mat });
 
       const label = BABYLON.MeshBuilder.CreatePlane(`space:${s.id}:label`, { width: 3.0, height: 1.1 }, scene);

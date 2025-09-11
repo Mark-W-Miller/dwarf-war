@@ -71,6 +71,10 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
   // Apply once on init
   applyTogglesFromUI();
 
+  // ——————————— Debug helpers ———————————
+  function pickDebugOn() { try { return localStorage.getItem('dw:debug:picking') === '1'; } catch { return false; } }
+  function dPick(event, data) { if (!pickDebugOn()) return; try { Log.log('PICK', event, data); } catch {} }
+
   // Manual grid resize to fit all spaces
   resizeGridBtn?.addEventListener('click', () => {
     try { helpers.updateGridExtent?.(); } catch {}
@@ -539,6 +543,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
         // Prepare possible drag; do not swallow yet (allow selection clicks)
         rotWidget.preDrag = true;
         rotWidget.downX = scene.pointerX; rotWidget.downY = scene.pointerY;
+        dPick('preDrag:rot', { x: rotWidget.downX, y: rotWidget.downY });
       }
       // Move widget start
       const pick2 = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('moveGizmo:'));
@@ -546,6 +551,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
         // Prepare possible drag; do not swallow yet
         moveWidget.preDrag = true;
         moveWidget.downX = scene.pointerX; moveWidget.downY = scene.pointerY;
+        dPick('preDrag:move', { x: moveWidget.downX, y: moveWidget.downY });
       }
     } else if (type === BABYLON.PointerEventTypes.POINTERUP) {
       if (rotWidget.dragging) {
@@ -614,6 +620,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
             camera.inputs?.attached?.pointers?.detachControl(canvas);
             Log.log('GIZMO', 'Drag start', { id: rotWidget.spaceId, startAngle: rotWidget.startAngle, startRot: rotWidget.startRot, action: 'detachCameraPointers' });
           } catch {}
+          dPick('dragStart:rot', {});
           // Hide built intersections during drag to avoid stale boxes
           try { for (const x of state?.built?.intersections || []) { try { state.hl?.removeMesh(x.mesh); } catch {}; x.mesh?.setEnabled(false); } } catch {}
           // Sync DB view immediately with current values
@@ -680,6 +687,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
             camera.inputs?.attached?.pointers?.detachControl(canvas);
             Log.log('GIZMO', 'Move start', { id: moveWidget.spaceId, start: moveWidget.startOrigin, offset: moveWidget.offset });
           } catch {}
+          dPick('dragStart:move', {});
           // Hide built intersections during drag to avoid stale boxes
           try { for (const x of state?.built?.intersections || []) { try { state.hl?.removeMesh(x.mesh); } catch {}; x.mesh?.setEnabled(false); } } catch {}
         }
@@ -723,7 +731,18 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     if (pi.type !== BABYLON.PointerEventTypes.POINTERDOWN) return;
     if (rotWidget.dragging || moveWidget.dragging) return; // do not interfere while dragging gizmo
     const ev = pi.event || window.event;
-    let pick = scene.pick(scene.pointerX, scene.pointerY, (m) => m && typeof m.name === 'string' && (m.name.startsWith('space:') || m.name.startsWith('cavern:')));
+    dPick('pointerdown', { x: scene.pointerX, y: scene.pointerY });
+    let pick = scene.pick(
+      scene.pointerX,
+      scene.pointerY,
+      (m) => {
+        if (!m || typeof m.name !== 'string') return false;
+        const n = m.name;
+        if (n.startsWith('space:')) return !n.includes(':label'); // ignore labels
+        return n.startsWith('cavern:');
+      }
+    );
+    dPick('primaryPick', { hit: !!pick?.hit, name: pick?.pickedMesh?.name || null, dist: pick?.distance ?? null });
     // Fallback: robust ray/mesh intersection if Babylon pick misses
     if (!pick?.hit || !pick.pickedMesh) {
       try {
@@ -737,15 +756,26 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
           }
         }
         if (best) {
-          pick = { hit: true, pickedMesh: best.mesh };
+          pick = { hit: true, pickedMesh: best.mesh, distance: best.info.distance };
+          dPick('fallbackPick', { id: best.id, name: best.mesh?.name || null, dist: best.info.distance });
+        } else {
+          dPick('fallbackPickMiss', {});
         }
       } catch {}
     }
     if (!pick?.hit || !pick.pickedMesh) return;
-    const name = pick.pickedMesh.name; // space:<id> or cavern:<id>
+    const pickedName = pick.pickedMesh.name; // space:<id> or cavern:<id> or space:<id>:label
     let id = '';
-    if (name.startsWith('space:')) id = name.slice('space:'.length);
-    else id = name.slice('cavern:'.length);
+    let name = pickedName;
+    if (pickedName.startsWith('space:')) {
+      id = pickedName.slice('space:'.length);
+      if (id.endsWith(':label')) id = id.slice(0, -(':label'.length));
+      name = 'space:' + id; // normalize for double-click detection
+    } else if (pickedName.startsWith('cavern:')) {
+      id = pickedName.slice('cavern:'.length);
+      name = 'cavern:' + id;
+    }
+    dPick('selectId', { id, name });
     if (ev && ev.shiftKey) {
       if (state.selection.has(id)) state.selection.delete(id); else state.selection.add(id);
     } else {
@@ -759,6 +789,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     // Handle double-click/tap with adjustable threshold
     const now = performance.now();
     if (name === lastPickName && (now - lastPickTime) <= DOUBLE_CLICK_MS) {
+      dPick('doubleClick', { name, id });
       try { camApi.centerOnMesh(pick.pickedMesh); } catch (err) { Log.log('ERROR', 'Center on item failed', { error: String(err) }); }
       // If double-clicking a space, open the Database tab and focus that space
       if (name.startsWith('space:')) {
