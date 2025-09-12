@@ -100,7 +100,8 @@ state.barrow = loadBarrow() || makeDefaultBarrow();
 layoutBarrow(state.barrow); // ensure positions from directions
 // Create highlight layer before first halo rebuild so it applies immediately
 state.hl = new BABYLON.HighlightLayer('hl', scene, { blurHorizontalSize: 0.45, blurVerticalSize: 0.45 });
-state.hl.innerGlow = true; state.hl.outerGlow = false;
+state.hl.innerGlow = true; state.hl.outerGlow = true;
+try { state.hl.renderingGroupId = 3; } catch {}
 state.built = buildSceneFromBarrow(scene, state.barrow);
 renderDbView(state.barrow);
 grids.updateUnitGrids(state.barrow?.meta?.voxelSize || 1);
@@ -394,6 +395,12 @@ function rebuildHalos() {
   const blue = new BABYLON.Color3(0.12 * glowK, 0.35 * glowK, 0.7 * glowK);
   const yellow = new BABYLON.Color3(0.7 * glowK, 0.65 * glowK, 0.15 * glowK);
   const subtleBlue = new BABYLON.Color3(0.10 * glowK, 0.28 * glowK, 0.55 * glowK);
+  // Clear any outlines from previous selection
+  try {
+    for (const part of (state?.built?.voxParts || [])) {
+      try { part.renderOutline = false; } catch {}
+    }
+  } catch {}
   for (const id of state.selection) {
     const m = bySpace.get(id) || byCav.get(id);
     if (!m) continue;
@@ -402,7 +409,11 @@ function rebuildHalos() {
     try {
       for (const part of (state?.built?.voxParts || [])) {
         const nm = String(part?.name || '');
-        if (nm.startsWith(`space:${id}:`)) state.hl.addMesh(part, subtleBlue);
+        if (nm.startsWith(`space:${id}:`)) {
+          state.hl.addMesh(part, subtleBlue);
+          // Add outline for better visibility at grazing angles
+          try { part.outlineColor = subtleBlue; part.renderOutline = true; part.outlineWidth = 0.02; } catch {}
+        }
       }
     } catch {}
   }

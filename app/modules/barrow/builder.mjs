@@ -240,13 +240,14 @@ export function buildSceneFromBarrow(scene, barrow) {
     const arr = Array.isArray(built.spaces) ? built.spaces : [];
     for (let i = 0; i < arr.length; i++) {
       const A = arr[i]; if (!A?.mesh) continue;
-      if (voxIds.has(A.id)) continue; // skip intersections for voxelized spaces
       try { A.mesh.computeWorldMatrix(true); A.mesh.refreshBoundingInfo(); } catch {}
       const bba = A.mesh.getBoundingInfo()?.boundingBox; if (!bba) continue;
       const amin = bba.minimumWorld, amax = bba.maximumWorld;
       for (let j = i + 1; j < arr.length; j++) {
         const B = arr[j]; if (!B?.mesh) continue;
-        if (voxIds.has(B.id)) continue; // skip intersections for voxelized spaces
+        // Show intersections if at least one space is non-voxed; skip only when both are voxed
+        const bothVoxed = voxIds.has(A.id) && voxIds.has(B.id);
+        if (bothVoxed) continue;
         try { B.mesh.computeWorldMatrix(true); B.mesh.refreshBoundingInfo(); } catch {}
         const bbb = B.mesh.getBoundingInfo()?.boundingBox; if (!bbb) continue;
         const bmin = bbb.minimumWorld, bmax = bbb.maximumWorld;
