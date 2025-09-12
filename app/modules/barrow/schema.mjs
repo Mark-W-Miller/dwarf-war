@@ -73,3 +73,40 @@ export function layoutBarrow(barrow) {
   }
   return barrow;
 }
+
+// World-aligned AABB of a possibly rotated box/sphere space
+export function worldAabbFromSpace(space, voxelSize = 1) {
+  const sr = space.res || voxelSize || 1;
+  if (space.type === 'Cavern') {
+    const w = (space.size?.x||0) * sr, h = (space.size?.y||0) * sr, d = (space.size?.z||0) * sr;
+    const r = Math.min(w,h,d) / 2;
+    const cx = space.origin?.x||0, cy = space.origin?.y||0, cz = space.origin?.z||0;
+    return { min:{x:cx-r,y:cy-r,z:cz-r}, max:{x:cx+r,y:cy+r,z:cz+r} };
+  }
+  const w = (space.size?.x||0) * sr, h = (space.size?.y||0) * sr, d = (space.size?.z||0) * sr;
+  const hx = w/2, hy = h/2, hz = d/2;
+  const cx = space.origin?.x||0, cy = space.origin?.y||0, cz = space.origin?.z||0;
+  const rx = (space.rotation && typeof space.rotation.x === 'number') ? space.rotation.x : 0;
+  const ry = (space.rotation && typeof space.rotation.y === 'number') ? space.rotation.y : (typeof space.rotY === 'number' ? space.rotY : 0);
+  const rz = (space.rotation && typeof space.rotation.z === 'number') ? space.rotation.z : 0;
+  const cX = Math.cos(rx), sX = Math.sin(rx);
+  const cY = Math.cos(ry), sY = Math.sin(ry);
+  const cZ = Math.cos(rz), sZ = Math.sin(rz);
+  // Build rotation matrix R = Rz * Ry * Rx (Babylon default)
+  function rot(p){
+    // Rx
+    let x=p.x, y=p.y*cX - p.z*sX, z=p.y*sX + p.z*cX;
+    // Ry
+    let x2 = x*cY + z*sY, y2 = y, z2 = -x*sY + z*cY;
+    // Rz
+    let x3 = x2*cZ - y2*sZ, y3 = x2*sZ + y2*cZ, z3 = z2;
+    return { x:x3+cx, y:y3+cy, z:z3+cz };
+  }
+  const corners = [
+    {x:-hx,y:-hy,z:-hz}, {x:+hx,y:-hy,z:-hz}, {x:-hx,y:+hy,z:-hz}, {x:+hx,y:+hy,z:-hz},
+    {x:-hx,y:-hy,z:+hz}, {x:+hx,y:-hy,z:+hz}, {x:-hx,y:+hy,z:+hz}, {x:+hx,y:+hy,z:+hz},
+  ].map(rot);
+  let minX=Infinity,minY=Infinity,minZ=Infinity,maxX=-Infinity,maxY=-Infinity,maxZ=-Infinity;
+  for(const p of corners){ minX=Math.min(minX,p.x); minY=Math.min(minY,p.y); minZ=Math.min(minZ,p.z); maxX=Math.max(maxX,p.x); maxY=Math.max(maxY,p.y); maxZ=Math.max(maxZ,p.z); }
+  return { min:{x:minX,y:minY,z:minZ}, max:{x:maxX,y:maxY,z:maxZ} };
+}

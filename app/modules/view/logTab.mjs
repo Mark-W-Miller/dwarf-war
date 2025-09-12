@@ -12,10 +12,48 @@ export function initLogTab(panelContent) {
   tabBtn.className = 'tab'; tabBtn.dataset.tab = 'tab-log'; tabBtn.textContent = 'Log';
   tabsBar.appendChild(tabBtn);
   const logPane = document.createElement('div'); logPane.id = 'tab-log'; logPane.className = 'tab-pane';
-  const filterRow = document.createElement('div'); filterRow.className = 'row';
+  // Fill available height of the panel content
+  logPane.style.display = 'flex';
+  logPane.style.flexDirection = 'column';
+  logPane.style.minHeight = '0';
+  const filterRow = document.createElement('div'); filterRow.className = 'row'; filterRow.style.justifyContent = 'space-between'; filterRow.style.alignItems = 'center';
   const filtersBox = document.createElement('div'); filtersBox.id = 'logClassFilters'; filtersBox.style.display = 'flex'; filtersBox.style.flexWrap = 'wrap'; filtersBox.style.gap = '8px';
-  filterRow.appendChild(filtersBox); logPane.appendChild(filterRow);
-  const entries = document.createElement('div'); entries.id = 'logEntries'; entries.style.whiteSpace = 'pre-wrap'; entries.style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'; entries.style.fontSize = '12px'; entries.style.maxHeight = '420px'; entries.style.overflow = 'auto'; entries.style.border = '1px solid #1e2a30'; entries.style.borderRadius = '6px'; entries.style.padding = '8px'; entries.style.background = '#0f151a';
+  filterRow.appendChild(filtersBox);
+  const actionsBox = document.createElement('div'); actionsBox.style.display = 'flex'; actionsBox.style.gap = '8px';
+  const copyBtn = document.createElement('button'); copyBtn.className = 'btn'; copyBtn.textContent = 'Copy Log';
+  const clearBtn = document.createElement('button'); clearBtn.className = 'btn warn'; clearBtn.textContent = 'Clear Log';
+  clearBtn.addEventListener('click', () => { try { Log.clear(); } catch {} });
+  copyBtn.addEventListener('click', async () => {
+    try {
+      // Rebuild the same filtered text as renderEntries
+      const list = Log.getEntries();
+      const classes = Array.from(Log.getClasses());
+      const selected = new Set(); // infer selected from current checkboxes
+      try {
+        const cbs = filtersBox.querySelectorAll('input[type="checkbox"]');
+        cbs.forEach(cb => { if (cb.checked) selected.add(cb.nextSibling && cb.nextSibling.textContent ? cb.nextSibling.textContent : null); });
+      } catch {}
+      const filtered = list.filter(e => selected.size === 0 || selected.has(e.cls));
+      const lines = filtered.map(e => {
+        const t = new Date(e.time).toLocaleTimeString();
+        const d = e.data != null ? ` ${JSON.stringify(e.data, (k,v) => (typeof v === 'number' ? parseFloat(Number(v).toPrecision(2)) : v))}` : '';
+        return `[${t}] [${e.cls}] ${e.msg}${d}`;
+      }).join('\n');
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(lines);
+      } else {
+        const ta = document.createElement('textarea'); ta.style.position = 'fixed'; ta.style.opacity = '0'; ta.value = lines; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+      }
+      copyBtn.textContent = 'Copied!'; setTimeout(() => { copyBtn.textContent = 'Copy Log'; }, 1200);
+    } catch (err) {
+      copyBtn.textContent = 'Copy failed'; setTimeout(() => { copyBtn.textContent = 'Copy Log'; }, 1500);
+    }
+  });
+  actionsBox.appendChild(copyBtn);
+  actionsBox.appendChild(clearBtn);
+  filterRow.appendChild(actionsBox);
+  logPane.appendChild(filterRow);
+  const entries = document.createElement('div'); entries.id = 'logEntries'; entries.style.whiteSpace = 'pre-wrap'; entries.style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'; entries.style.fontSize = '12px'; entries.style.flex = '1'; entries.style.minHeight = '0'; entries.style.overflow = 'auto'; entries.style.border = '1px solid #1e2a30'; entries.style.borderRadius = '6px'; entries.style.padding = '8px'; entries.style.background = '#0f151a';
   logPane.appendChild(entries); panelContent.appendChild(logPane);
 
   // Central tab system handles activation; we only log and render when active

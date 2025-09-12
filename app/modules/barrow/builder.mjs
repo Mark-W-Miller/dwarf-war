@@ -1,8 +1,11 @@
 // Build Babylon meshes from Barrow data
+import { Log } from '../util/log.mjs';
 import { VoxelType, decompressVox } from '../voxels/voxelize.mjs';
 
 export function buildSceneFromBarrow(scene, barrow) {
   const built = { caverns: [], links: [], carddons: [], cavernLabels: [], spaces: [], spaceLabels: [], intersections: [], voxParts: [] };
+  function vLog(msg, data) { try { Log.log('VOXEL', msg, data); } catch {} }
+  function errLog(ctx, e) { try { Log.log('ERROR', ctx, { error: String(e && e.message ? e.message : e), stack: e && e.stack ? String(e.stack) : undefined }); } catch {} }
 
   // Materials
   const cavernMat = new BABYLON.PBRMetallicRoughnessMaterial('cavernMat', scene);
@@ -134,7 +137,8 @@ export function buildSceneFromBarrow(scene, barrow) {
 
         // Base meshes for walls and rock
         const wallBase = BABYLON.MeshBuilder.CreateBox(`space:${s.id}:vox:wall`, { size: 1 }, scene);
-        wallBase.isPickable = false; wallBase.parent = mesh;
+        wallBase.isPickable = false; // Do not parent so voxels stay world-aligned
+        try { wallBase.position.set(s.origin?.x||0, s.origin?.y||0, s.origin?.z||0); } catch {}
         const wallMat = new BABYLON.StandardMaterial(`space:${s.id}:vox:wall:mat`, scene);
         wallMat.diffuseColor = new BABYLON.Color3(0.78, 0.78, 0.80);
         wallMat.emissiveColor = new BABYLON.Color3(0.22, 0.22, 0.24);
@@ -147,7 +151,8 @@ export function buildSceneFromBarrow(scene, barrow) {
         built.voxParts.push(wallBase);
 
         const rockBase = BABYLON.MeshBuilder.CreateBox(`space:${s.id}:vox:rock`, { size: 1 }, scene);
-        rockBase.isPickable = false; rockBase.parent = mesh;
+        rockBase.isPickable = false; // Do not parent so voxels stay world-aligned
+        try { rockBase.position.set(s.origin?.x||0, s.origin?.y||0, s.origin?.z||0); } catch {}
         const rockMat = new BABYLON.StandardMaterial(`space:${s.id}:vox:rock:mat`, scene);
         rockMat.diffuseColor = new BABYLON.Color3(0.22, 0.22, 0.24);
         rockMat.emissiveColor = new BABYLON.Color3(0.08, 0.08, 0.10);
@@ -181,8 +186,11 @@ export function buildSceneFromBarrow(scene, barrow) {
             }
           }
         }
-        if (wallMatrices.length > 0) wallBase.thinInstanceSetBuffer('matrix', new Float32Array(wallMatrices), 16, true);
-        if (rockMatrices.length > 0) rockBase.thinInstanceSetBuffer('matrix', new Float32Array(rockMatrices), 16, true);
+        try {
+	  if (wallMatrices.length > 0) wallBase.thinInstanceSetBuffer('matrix', new Float32Array(wallMatrices), 16, true);
+	  if (rockMatrices.length > 0) rockBase.thinInstanceSetBuffer('matrix', new Float32Array(rockMatrices), 16, true);
+	  vLog('builder:vox:instances', { id: s.id, wall: wallMatrices.length/16|0, rock: rockMatrices.length/16|0, res });
+	} catch (e) { errLog('builder:vox:thinInstances', e); }
       } else {
         // Material by type
         const mat = new BABYLON.StandardMaterial(`space:${s.id}:mat`, scene);

@@ -14,6 +14,11 @@ export const Log = (() => {
   return {
     on(fn) { subs.add(fn); return () => subs.delete(fn); },
     off(fn) { subs.delete(fn); },
+    clear() {
+      try { entries.length = 0; } catch { /* ignore */ }
+      try { classes.clear(); } catch { /* ignore */ }
+      notify();
+    },
     log(cls, msg, data) {
       const e = { time: Date.now(), cls: String(cls || 'LOG'), msg: String(msg || ''), data };
       entries.push(e);
@@ -27,4 +32,3 @@ export const Log = (() => {
     getClasses() { return new Set(classes); }
   };
 })();
-

@@ -1,4 +1,5 @@
 import { VoxelType, bakeHollowContainer, fillAllVoxels } from '../voxels/voxelize.mjs';
+import { mergeOverlappingSpaces, mergeOverlappingSpacesAsync } from '../barrow/merge.mjs';
 import { Log } from '../util/log.mjs';
 
 export function initVoxelTab(panelContent, api) {
@@ -71,23 +72,94 @@ export function initVoxelTab(panelContent, api) {
     }
   }
 
-  bakeBtn.addEventListener('click', () => {
+  bakeBtn.addEventListener('click', async () => {
     const spaces = getSelectedSpaces(); if (!spaces.length) return;
     const t = Math.max(1, Math.floor(Number(tInput.value || '1')));
     Log.log('UI', 'Voxel bake', { sel: spaces.map(s => s?.id), wallThickness: t });
+    let lastKeep = null;
     for (const s of spaces) {
       try {
         const vox = bakeHollowContainer(s, { wallThickness: t });
         s.voxelized = 1; // prevent transforms
         s.vox = vox; // attach baked voxels to space
+        // Merge with all overlapping spaces into a single Carddon union (voxed)
+        try {
+          const res = s.res || (api.state.barrow?.meta?.voxelSize || 1);
+          const showDots = !!scanDotsCb?.checked;
+          Log.log('DEBUG', 'mergeAsync:invoke', { seed: s.id });
+          const debugCfg = {
+            chunk: 256,
+            onStart: ({ min, max, res, nx, ny, nz }) => { try { Log.log('DEBUG', 'Union scan start', { min, max, res, nx, ny, nz }); } catch {} },
+            onLayer: (y, c) => { try { Log.log('DEBUG', 'Scan layer', { y, inside: c?.inside||0, outside: c?.outside||0 }); } catch {} },
+            onEnd: () => { try { if (showDots) api.debug?.flushVoxelScanPoints?.(); Log.log('DEBUG', 'Union scan end', {}); } catch {} },
+            showObb: (corners) => { try { api.debug?.showObbDebug?.(corners); } catch {} }
+          };
+          if (showDots) {
+            try { api.debug?.startVoxelScanDebug?.(res); } catch {}
+            debugCfg.onTestInside = (wx, wy, wz) => { try { api.debug?.addVoxelScanPointInside?.(wx, wy, wz); } catch {} };
+            debugCfg.onTestOutside = (wx, wy, wz) => { try { api.debug?.addVoxelScanPointOutside?.(wx, wy, wz); } catch {} };
+            debugCfg.flush = () => { try { api.debug?.flushVoxelScanPoints?.(); } catch {} };
+          }
+          const keepId = await mergeOverlappingSpacesAsync(api.state.barrow, s.id, { debug: debugCfg });
+          Log.log('DEBUG', 'mergeAsync:returned', { keepId });
+          // Keep dots on screen for inspection; provide a Clear button below.
+          if (keepId && keepId !== s.id) {
+            Log.log('UI', 'Merged overlapping spaces', { keepId, from: s.id });
+          }
+          if (keepId) lastKeep = keepId; else lastKeep = s.id;
+        } catch {}
       } catch {}
     }
+    // Update selection to the last kept id
+    try { if (lastKeep) { api.state.selection.clear(); api.state.selection.add(lastKeep); } } catch {}
     try { api.saveBarrow(api.state.barrow); api.snapshot(api.state.barrow); } catch {}
     try { api.renderDbView(api.state.barrow); } catch {}
     try { api.rebuildScene?.(); } catch {}
     try { api.scheduleGridUpdate?.(); } catch {}
     try { window.dispatchEvent(new CustomEvent('dw:transform', { detail: { kind: 'voxel-bake', sel: spaces.map(s => s.id), wallThickness: t } })); } catch {}
   });
+
+  // Add a Clear Dots button for debug
+  const row3 = document.createElement('div'); row3.className = 'row';
+  // Scan dots toggle (unchecked by default)
+  const dotsLabel = document.createElement('label'); dotsLabel.style.display = 'inline-flex'; dotsLabel.style.alignItems = 'center'; dotsLabel.style.gap = '6px';
+  const scanDotsCb = document.createElement('input'); scanDotsCb.type = 'checkbox'; scanDotsCb.id = 'scanDots'; scanDotsCb.checked = false;
+  dotsLabel.appendChild(scanDotsCb); dotsLabel.appendChild(document.createTextNode('Show scan dots'));
+  row3.appendChild(dotsLabel);
+  const clearBtn = document.createElement('button'); clearBtn.className = 'btn warn'; clearBtn.textContent = 'Clear Scan Dots';
+  clearBtn.addEventListener('click', () => { try { api.debug?.endVoxelScanDebug?.(); Log.log('DEBUG', 'Cleared scan dots', {}); } catch {} });
+  row3.appendChild(clearBtn);
+
+  // OBB overlay controls
+  const showObbBtn = document.createElement('button'); showObbBtn.className = 'btn'; showObbBtn.textContent = 'Show OBB Lines';
+  const clearObbBtn = document.createElement('button'); clearObbBtn.className = 'btn warn'; clearObbBtn.textContent = 'Clear OBB Lines';
+  showObbBtn.addEventListener('click', () => {
+    try {
+      const spaces = getSelectedSpaces(); if (!spaces.length) return;
+      const s = spaces[0];
+      const sr = s.res || (api.state.barrow?.meta?.voxelSize || 1);
+      const w = (s.size?.x||0) * sr, h = (s.size?.y||0) * sr, d = (s.size?.z||0) * sr;
+      const hx = w/2, hy = h/2, hz = d/2;
+      const cx = s.origin?.x||0, cy = s.origin?.y||0, cz = s.origin?.z||0;
+      const rx = (s.rotation && typeof s.rotation.x === 'number') ? s.rotation.x : 0;
+      const ry = (s.rotation && typeof s.rotation.y === 'number') ? s.rotation.y : (typeof s.rotY === 'number' ? s.rotY : 0);
+      const rz = (s.rotation && typeof s.rotation.z === 'number') ? s.rotation.z : 0;
+      const q = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz);
+      const m = BABYLON.Matrix.Compose(new BABYLON.Vector3(1,1,1), q, new BABYLON.Vector3(cx,cy,cz));
+      const locals = [
+        new BABYLON.Vector3(-hx,-hy,-hz), new BABYLON.Vector3(+hx,-hy,-hz),
+        new BABYLON.Vector3(-hx,+hy,-hz), new BABYLON.Vector3(+hx,+hy,-hz),
+        new BABYLON.Vector3(-hx,-hy,+hz), new BABYLON.Vector3(+hx,-hy,+hz),
+        new BABYLON.Vector3(-hx,+hy,+hz), new BABYLON.Vector3(+hx,+hy,+hz)
+      ];
+      const world = locals.map(v => BABYLON.Vector3.TransformCoordinates(v, m)).map(v => ({ x: v.x, y: v.y, z: v.z }));
+      api.debug?.showObbDebug?.(world);
+      Log.log('DEBUG', 'Show OBB (button)', { id: s.id });
+    } catch (e) { Log.log('ERROR', 'Show OBB failed', { error: String(e) }); }
+  });
+  clearObbBtn.addEventListener('click', () => { try { api.debug?.clearObbDebug?.(); Log.log('DEBUG', 'Clear OBB (button)', {}); } catch {} });
+  row3.appendChild(showObbBtn); row3.appendChild(clearObbBtn);
+  voxPane.appendChild(row3);
 
   fillBtn.addEventListener('click', () => {
     const spaces = getSelectedSpaces(); if (!spaces.length) return;

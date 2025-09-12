@@ -8,6 +8,7 @@ import { renderDbView } from './modules/view/dbView.mjs';
 import { initLogTab } from './modules/view/logTab.mjs';
 import { initSettingsTab } from './modules/view/settings.mjs';
 import { initVoxelTab } from './modules/view/voxelTab.mjs';
+import { worldAabbFromSpace } from './modules/barrow/schema.mjs';
 import { initEventHandlers } from './modules/view/eventHandler.mjs';
 
 // Babylon setup
@@ -174,12 +175,19 @@ initEventHandlers({
 });
 
 // Initialize optional tabs now that tabs exist
-try {
-  const panelContent = document.querySelector('.panel-content');
-  if (panelContent) {
-    initVoxelTab(panelContent, { state, saveBarrow, snapshot, renderDbView, rebuildScene, scheduleGridUpdate: () => grids.scheduleGridUpdate(state.built) });
-  }
-} catch {}
+function ensureVoxelTab() {
+  try {
+    const panelContent = document.querySelector('.panel-content');
+    if (!panelContent) return;
+    if (!panelContent.querySelector('#tab-vox')) {
+      initVoxelTab(panelContent, { state, saveBarrow, snapshot, renderDbView, rebuildScene, scheduleGridUpdate: () => grids.scheduleGridUpdate(state.built), scene, debug: { startVoxelScanDebug, addVoxelScanPointInside, addVoxelScanPointOutside, flushVoxelScanPoints, endVoxelScanDebug, showObbDebug, clearObbDebug } });
+      try { Log.log('UI', 'Voxel tab initialized', {}); } catch {}
+    }
+  } catch (e) { try { Log.log('ERROR', 'Init voxel tab failed', { error: String(e) }); } catch {} }
+}
+// Try now, and also whenever tabs report readiness
+ensureVoxelTab();
+try { window.addEventListener('dw:tabsReady', ensureVoxelTab); } catch {}
 
 // Fit camera to all spaces
 function fitViewAll() {
@@ -381,6 +389,66 @@ function rebuildScene() {
   applyVoxelOpacity?.();
 }
 
+// ——————————— Voxel scan debug visualization ———————————
+state._scanDebug = { redBase: null, greenBase: null, redArr: [], greenArr: [], count: 0 };
+state._obbDebug = { mesh: null };
+function startVoxelScanDebug(res=1) {
+  try { endVoxelScanDebug(); } catch {}
+  // Reduce dot size to 1/4 of previous
+  const dia = Math.max(0.0625, (res * 0.7) / 4);
+  const red = BABYLON.MeshBuilder.CreateSphere('dbg:scanDot:red', { diameter: dia, segments: 8 }, scene);
+  const rmat = new BABYLON.StandardMaterial('dbg:scanDot:red:mat', scene);
+  rmat.diffuseColor = new BABYLON.Color3(0.95, 0.15, 0.15); rmat.emissiveColor = new BABYLON.Color3(0.85, 0.12, 0.12); rmat.specularColor = new BABYLON.Color3(0,0,0);
+  red.material = rmat; red.isPickable = false; red.renderingGroupId = 3;
+  const green = BABYLON.MeshBuilder.CreateSphere('dbg:scanDot:green', { diameter: dia, segments: 8 }, scene);
+  const gmat = new BABYLON.StandardMaterial('dbg:scanDot:green:mat', scene);
+  gmat.diffuseColor = new BABYLON.Color3(0.1, 0.85, 0.2); gmat.emissiveColor = new BABYLON.Color3(0.1, 0.75, 0.2); gmat.specularColor = new BABYLON.Color3(0,0,0);
+  green.material = gmat; green.isPickable = false; green.renderingGroupId = 3;
+  state._scanDebug.redBase = red; state._scanDebug.greenBase = green; state._scanDebug.redArr = []; state._scanDebug.greenArr = []; state._scanDebug.count = 0;
+  try { Log.log('VOXEL', 'scan:start', { res, dia }); } catch {}
+}
+function _pushDot(arr, wx, wy, wz) {
+  const t = BABYLON.Vector3.Zero(); t.x = wx; t.y = wy; t.z = wz;
+  const sc = new BABYLON.Vector3(1,1,1);
+  const m = BABYLON.Matrix.Compose(sc, BABYLON.Quaternion.Identity(), t);
+  for (let k = 0; k < 16; k++) arr.push(m.m[k]);
+}
+function addVoxelScanPointOutside(wx, wy, wz) { _pushDot(state._scanDebug.redArr, wx, wy, wz); state._scanDebug.count++; if (state._scanDebug.count % 256 === 0) flushVoxelScanPoints(); }
+function addVoxelScanPointInside(wx, wy, wz) { _pushDot(state._scanDebug.greenArr, wx, wy, wz); state._scanDebug.count++; if (state._scanDebug.count % 256 === 0) flushVoxelScanPoints(); }
+function flushVoxelScanPoints() {
+  try { const b = state._scanDebug.redBase; if (b && state._scanDebug.redArr.length) b.thinInstanceSetBuffer('matrix', new Float32Array(state._scanDebug.redArr), 16, true); } catch {}
+  try { const b2 = state._scanDebug.greenBase; if (b2 && state._scanDebug.greenArr.length) b2.thinInstanceSetBuffer('matrix', new Float32Array(state._scanDebug.greenArr), 16, true); } catch {}
+  try { Log.log('VOXEL', 'scan:flush', { red: (state._scanDebug.redArr.length/16)|0, green: (state._scanDebug.greenArr.length/16)|0 }); } catch {}
+}
+function endVoxelScanDebug() {
+  try { state._scanDebug.redBase?.dispose?.(); } catch {}
+  try { state._scanDebug.greenBase?.dispose?.(); } catch {}
+  state._scanDebug.redBase = null; state._scanDebug.greenBase = null; state._scanDebug.redArr = []; state._scanDebug.greenArr = []; state._scanDebug.count = 0;
+  try { Log.log('VOXEL', 'scan:end', {}); } catch {}
+}
+
+function clearObbDebug() {
+  try { state._obbDebug.mesh?.dispose?.(); } catch {}
+  state._obbDebug.mesh = null;
+}
+function showObbDebug(corners) {
+  try {
+    clearObbDebug();
+    if (!Array.isArray(corners) || corners.length !== 8) return;
+    const V = (p) => new BABYLON.Vector3(p.x||0, p.y||0, p.z||0);
+    const cs = corners.map(V);
+    const edges = [
+      [cs[0], cs[1]], [cs[1], cs[5]], [cs[5], cs[4]], [cs[4], cs[0]], // bottom rectangle
+      [cs[2], cs[3]], [cs[3], cs[7]], [cs[7], cs[6]], [cs[6], cs[2]], // top rectangle
+      [cs[0], cs[2]], [cs[1], cs[3]], [cs[4], cs[6]], [cs[5], cs[7]]  // verticals
+    ];
+    const lines = BABYLON.MeshBuilder.CreateLineSystem('dbg:obb', { lines: edges }, scene);
+    lines.color = new BABYLON.Color3(0.1, 0.9, 0.9);
+    lines.isPickable = false; lines.renderingGroupId = 3;
+    state._obbDebug.mesh = lines;
+  } catch {}
+}
+
 function rebuildHalos() {
   // clear old torus meshes if any
   for (const [id, mesh] of state.halos) { try { mesh.dispose(); } catch {} }
@@ -417,6 +485,39 @@ function rebuildHalos() {
       }
     } catch {}
   }
+  // Draw selected space world-AABB in translucent red (single selection only)
+  try {
+    if (state.selection.size === 1) {
+      const id = Array.from(state.selection)[0];
+      const s = (state.barrow.spaces||[]).find(x => x.id === id);
+      if (s) {
+        const sr = s.res || (state.barrow?.meta?.voxelSize || 1);
+        const rx = (s.rotation && typeof s.rotation.x === 'number') ? s.rotation.x : 0;
+        const ry = (s.rotation && typeof s.rotation.y === 'number') ? s.rotation.y : (typeof s.rotY === 'number' ? s.rotY : 0);
+        const rz = (s.rotation && typeof s.rotation.z === 'number') ? s.rotation.z : 0;
+        function worldAabb(space){
+          const w = (space.size?.x||0) * sr, h = (space.size?.y||0) * sr, d = (space.size?.z||0) * sr;
+          const hx=w/2, hy=h/2, hz=d/2; const cx=space.origin?.x||0, cy=space.origin?.y||0, cz=space.origin?.z||0;
+          const cX=Math.cos(rx), sX=Math.sin(rx), cY=Math.cos(ry), sY=Math.sin(ry), cZ=Math.cos(rz), sZ=Math.sin(rz);
+          function rot(p){ let x=p.x, y=p.y*cX - p.z*sX, z=p.y*sX + p.z*cX; let x2=x*cY + z*sY, y2=y, z2=-x*sY + z*cY; let x3=x2*cZ - y2*sZ, y3=x2*sZ + y2*cZ, z3=z2; return {x:x3+cx,y:y3+cy,z:z3+cz}; }
+          const cs=[{x:-hx,y:-hy,z:-hz},{x:+hx,y:-hy,z:-hz},{x:-hx,y:+hy,z:-hz},{x:+hx,y:+hy,z:-hz},{x:-hx,y:-hy,z:+hz},{x:+hx,y:-hy,z:+hz},{x:-hx,y:+hy,z:+hz},{x:+hx,y:+hy,z:+hz}].map(rot);
+          let minX=Infinity,minY=Infinity,minZ=Infinity,maxX=-Infinity,maxY=-Infinity,maxZ=-Infinity; for(const p of cs){minX=Math.min(minX,p.x);minY=Math.min(minY,p.y);minZ=Math.min(minZ,p.z);maxX=Math.max(maxX,p.x);maxY=Math.max(maxY,p.y);maxZ=Math.max(maxZ,p.z);} return {min:{x:minX,y:minY,z:minZ},max:{x:maxX,y:maxY,z:maxZ}};
+        }
+        const bb = worldAabb(s);
+        const w = Math.max(0.001, bb.max.x - bb.min.x), h = Math.max(0.001, bb.max.y - bb.min.y), d = Math.max(0.001, bb.max.z - bb.min.z);
+        const cx = (bb.min.x + bb.max.x)/2, cy = (bb.min.y + bb.max.y)/2, cz = (bb.min.z + bb.max.z)/2;
+        // Dispose previous debug box
+        try { state.debugAabb?.dispose?.(); } catch {}
+        const dbg = BABYLON.MeshBuilder.CreateBox('dbg:aabb', { width: w, height: h, depth: d }, scene);
+        const mat = new BABYLON.StandardMaterial('dbg:aabb:mat', scene); mat.diffuseColor = new BABYLON.Color3(0.9, 0.15, 0.15); mat.emissiveColor = new BABYLON.Color3(0.6, 0.08, 0.08); mat.alpha = 0.18; mat.specularColor = new BABYLON.Color3(0,0,0);
+        dbg.material = mat; dbg.isPickable = false; dbg.position.set(cx, cy, cz); dbg.renderingGroupId = 1;
+        state.debugAabb = dbg;
+        try { Log.log('DEBUG', 'Show world AABB', { id, center: {x:cx,y:cy,z:cz}, size: {x:w/sr, y:h/sr, z:d/sr} }); } catch {}
+      }
+    } else {
+      try { state.debugAabb?.dispose?.(); state.debugAabb = null; } catch {}
+    }
+  } catch {}
   // Always glow intersections in yellow
   try {
     for (const x of state?.built?.intersections || []) if (x?.mesh) state.hl.addMesh(x.mesh, yellow);

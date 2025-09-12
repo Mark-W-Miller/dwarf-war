@@ -8,6 +8,10 @@ import { renderDbView } from './dbView.mjs';
 export function initEventHandlers({ scene, engine, camApi, camera, state, helpers }) {
   const { setMode, setRunning, rebuildScene, rebuildHalos, moveSelection, scheduleGridUpdate, applyViewToggles, updateHud } = helpers;
 
+  function logErr(ctx, e) {
+    try { Log.log('ERROR', ctx, { error: String(e && e.message ? e.message : e), stack: e && e.stack ? String(e.stack) : undefined }); } catch {}
+  }
+
   // ——— Controls and elements ———
   const toggleRunBtn = document.getElementById('toggleRun');
   const resetBtn = document.getElementById('reset');
@@ -69,13 +73,13 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       const maxW = Math.max(260, window.innerWidth - 80);
       w = Math.max(240, Math.min(maxW, w));
       panel.style.width = w + 'px';
-      try { localStorage.setItem('dw:ui:panelWidth', String(w)); } catch {}
+      try { localStorage.setItem('dw:ui:panelWidth', String(w)); } catch (e) { logErr('EH:panel:setWidth', e); }
     }
     function onUp(e){
       if (!dragging) return;
       dragging = false;
-      try { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); } catch {}
-      try { document.removeEventListener('touchmove', onMove); document.removeEventListener('touchend', onUp); } catch {}
+      try { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); } catch (e) { logErr('EH:panel:rmMouse', e); }
+      try { document.removeEventListener('touchmove', onMove); document.removeEventListener('touchend', onUp); } catch (e) { logErr('EH:panel:rmTouch', e); }
     }
     handle.addEventListener('mousedown', (e) => {
       if (panel.classList.contains('collapsed')) return;
@@ -92,7 +96,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     }, { passive:false });
     // Hide resizer when collapsed
     const obs = new MutationObserver(() => { handle.style.display = panel.classList.contains('collapsed') ? 'none' : 'block'; });
-    try { obs.observe(panel, { attributes:true, attributeFilter:['class'] }); } catch {}
+    try { obs.observe(panel, { attributes:true, attributeFilter:['class'] }); } catch (e) { logErr('EH:panel:obs', e); }
     handle.style.display = panel.classList.contains('collapsed') ? 'none' : 'block';
     window.addEventListener('resize', () => {
       // Clamp panel width on viewport resize
@@ -100,7 +104,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
         const maxW = Math.max(260, window.innerWidth - 80);
         const cur = panel.getBoundingClientRect().width;
         if (cur > maxW) { panel.style.width = maxW + 'px'; localStorage.setItem('dw:ui:panelWidth', String(maxW)); }
-      } catch {}
+      } catch (e) { logErr('EH:panel:clampWidth', e); }
     });
   })();
 
@@ -146,7 +150,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     if (gridXYCb) writeBool('dw:ui:gridXY', !!gridXYCb.checked);
     if (gridYZCb) writeBool('dw:ui:gridYZ', !!gridYZCb.checked);
     if (axisArrowsCb) writeBool('dw:ui:axisArrows', !!axisArrowsCb.checked);
-    try { applyViewToggles?.(); } catch {}
+    try { applyViewToggles?.(); } catch (e) { logErr('EH:applyViewToggles', e); }
     try {
       Log.log('UI', 'View toggles', {
         names: !!showNamesCb?.checked,
@@ -166,8 +170,8 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
   applyTogglesFromUI();
 
   // ——————————— Debug helpers ———————————
-  function pickDebugOn() { try { return localStorage.getItem('dw:debug:picking') === '1'; } catch { return false; } }
-  function dPick(event, data) { if (!pickDebugOn()) return; try { Log.log('PICK', event, data); } catch {} }
+  function pickDebugOn() { try { return localStorage.getItem('dw:debug:picking') === '1'; } catch (e) { logErr('EH:pickDebugOn', e); return false; } }
+  function dPick(event, data) { if (!pickDebugOn()) return; try { Log.log('PICK', event, data); } catch (e) { logErr('EH:dPick', e); } }
 
   // Screen-space projection helper for robust angle computation
   function projectToScreen(v) {
@@ -175,7 +179,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       const viewport = camera.viewport.toGlobal(engine.getRenderWidth(), engine.getRenderHeight());
       const proj = BABYLON.Vector3.Project(v, BABYLON.Matrix.Identity(), scene.getTransformMatrix(), viewport);
       return { x: proj.x, y: proj.y };
-    } catch { return { x: 0, y: 0 }; }
+    } catch (e) { logErr('EH:projectToScreen', e); return { x: 0, y: 0 }; }
   }
   function angleToPointerFrom(centerWorld) {
     const scr = projectToScreen(centerWorld);
@@ -195,7 +199,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     el.textContent = 'Gizmo Live';
     document.body.appendChild(el); _gizmoHudEl = el; return el;
   }
-  function setGizmoHudVisible(v) { try { ensureGizmoHud().style.display = v ? 'block' : 'none'; } catch {} }
+  function setGizmoHudVisible(v) { try { ensureGizmoHud().style.display = v ? 'block' : 'none'; } catch (e) { logErr('EH:setGizmoHudVisible', e); } }
   function renderGizmoHud({ selCount=0, center=null, deltaDeg=null, pickMode='-' }={}) {
     try {
       const el = ensureGizmoHud();
@@ -208,12 +212,12 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
         <div>Δ: ${d}°</div>
         <div>Mode: ${pickMode}</div>
       `;
-    } catch {}
+    } catch (e) { logErr('EH:renderGizmoHud', e); }
   }
 
   // Manual grid resize to fit all spaces
   resizeGridBtn?.addEventListener('click', () => {
-    try { helpers.updateGridExtent?.(); } catch {}
+    try { helpers.updateGridExtent?.(); } catch (e) { logErr('EH:updateGridExtent', e); }
     Log.log('UI', 'Resize Grid', {});
   });
 
@@ -226,7 +230,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     saveBarrow(state.barrow); snapshot(state.barrow);
     renderDbView(state.barrow);
     rebuildScene();
-    try { updateHud?.(); } catch {}
+    try { updateHud?.(); } catch (e) { logErr('EH:updateHud:reset', e); }
     Log.log('UI', 'Reset barrow', {});
     // After reset, center camera on origin so first new space defaults to (0,0,0)
     try { camera.target.set(0,0,0); } catch {}
@@ -248,7 +252,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     const text = await file.text();
     try {
       let data = JSON.parse(text);
-      try { data = inflateAfterLoad(data); } catch {}
+      try { data = inflateAfterLoad(data); } catch (e2) { logErr('EH:inflateAfterLoad', e2); }
       disposeBuilt(state.built);
       state.barrow = mergeInstructions(loadBarrow() || makeDefaultBarrow(), data);
       layoutBarrow(state.barrow);
@@ -256,8 +260,8 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       saveBarrow(state.barrow); snapshot(state.barrow);
       renderDbView(state.barrow);
       rebuildScene();
-      try { updateHud?.(); } catch {}
-      try { Log.log('UI', 'Import barrow', { size: text.length }); } catch {}
+      try { updateHud?.(); } catch (e3) { logErr('EH:updateHud:import', e3); }
+      try { Log.log('UI', 'Import barrow', { size: text.length }); } catch (e4) { logErr('EH:logImport', e4); }
     } catch (err) { console.error('Import failed', err); }
     if (importFile) importFile.value = '';
   });
@@ -332,6 +336,8 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     renderDbView(state.barrow);
     // Focus camera
     camera.target.copyFrom(new BABYLON.Vector3(s.origin.x, s.origin.y, s.origin.z));
+    // Select the newly created space
+    try { state.selection.clear(); state.selection.add(s.id); rebuildHalos(); ensureRotWidget(); ensureMoveWidget(); window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: Array.from(state.selection) } })); } catch {}
     scheduleGridUpdate();
     // Suggest next name
     ensureNameInput();
@@ -343,10 +349,11 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
   // ——————————— Type defaults & size fields ———————————
   function defaultSizeForType(t) {
     switch (t) {
-      case 'Cavern': return { x: 200, y: 150, z: 200 };
-      case 'Carddon': return { x: 60, y: 30, z: 60 };
+      case 'Cavern': return { x: 100, y: 75, z: 100 };
+      case 'Carddon': return { x: 200, y: 15, z: 200 };
       case 'Tunnel': return { x: 100, y: 40, z: 20 };
-      case 'Room': return { x: 120, y: 60, z: 120 };
+      case 'Room': return { x: 10, y: 10, z: 10 };
+      case 'Space': return { x: 5, y: 5, z: 5 };
       default: return { x: 200, y: 100, z: 200 };
     }
   }
@@ -1519,6 +1526,8 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       if (!btn || !btn.dataset || !btn.dataset.tab) return;
       activate(btn.dataset.tab);
     });
+    // Notify others that tabs are ready
+    try { window.dispatchEvent(new CustomEvent('dw:tabsReady', { detail: {} })); } catch {}
   })();
 
   // ——————————— DB edit events ———————————
@@ -1538,18 +1547,18 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
             while (used.has(candidate)) candidate = `${desired}-${++n}`;
             arr[idx].id = candidate;
             // Update selection if needed
-            if (prev && state.selection.has(prev)) { state.selection.delete(prev); state.selection.add(candidate); try { rebuildHalos(); } catch {} }
+            if (prev && state.selection.has(prev)) { state.selection.delete(prev); state.selection.add(candidate); try { rebuildHalos(); } catch (e2) { logErr('EH:rebuildHalos:rename', e2); } }
           }
         }
       }
-    } catch {}
-    try { saveBarrow(state.barrow); snapshot(state.barrow); } catch {}
-    try { rebuildScene(); } catch {}
-    try { renderDbView(state.barrow); } catch {}
-    try { scheduleGridUpdate(); } catch {}
-    try { applyViewToggles?.(); } catch {}
-    try { updateHud?.(); } catch {}
-    try { ensureRotWidget(); ensureMoveWidget(); } catch {}
+    } catch (e) { logErr('EH:dbEdit:rename', e); }
+    try { saveBarrow(state.barrow); snapshot(state.barrow); } catch (e) { logErr('EH:dbEdit:saveSnapshot', e); }
+    try { rebuildScene(); } catch (e) { logErr('EH:dbEdit:rebuildScene', e); }
+    try { renderDbView(state.barrow); } catch (e) { logErr('EH:dbEdit:renderDbView', e); }
+    try { scheduleGridUpdate(); } catch (e) { logErr('EH:dbEdit:scheduleGridUpdate', e); }
+    try { applyViewToggles?.(); } catch (e) { logErr('EH:dbEdit:applyViewToggles', e); }
+    try { updateHud?.(); } catch (e) { logErr('EH:dbEdit:updateHud', e); }
+    try { ensureRotWidget(); ensureMoveWidget(); } catch (e) { logErr('EH:dbEdit:ensureWidgets', e); }
   });
 
   // ——————————— External transforms (buttons/commands) ———————————
