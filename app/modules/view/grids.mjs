@@ -34,6 +34,7 @@ export function initGrids(scene) {
   // Axis arrows along +X, +Y, +Z for orientation
   const arrows = (() => {
     const group = new BABYLON.TransformNode('axisArrows', scene);
+    let radiusScale = 1.0;
     function quatFromTo(vFrom, vTo) {
       const a = vFrom.clone(); a.normalize();
       const b = vTo.clone(); b.normalize();
@@ -73,7 +74,8 @@ export function initGrids(scene) {
         const headLen = Math.min(Math.max(totalLen * 0.1, 8), Math.max(30, totalLen * 0.3));
         const shaftLen = Math.max(0, totalLen - headLen);
         // Thickness scales with length but clamped
-        const t = Math.min(Math.max(totalLen * 0.02, 0.6), 20);
+        const baseT = Math.min(Math.max(totalLen * 0.02, 0.6), 20);
+        const t = Math.max(0.1, baseT * radiusScale);
         // Scale
         shaft.scaling.set(t, shaftLen, t);
         tip.scaling.set(t, headLen, t);
@@ -96,7 +98,9 @@ export function initGrids(scene) {
       try { axZ.setLength(Math.max(1, Lz)); } catch {}
     }
 
-    return { group, x: axX, y: axY, z: axZ, set };
+    function setRadiusScale(k) { radiusScale = Math.max(0.05, k || 1); }
+
+    return { group, x: axX, y: axY, z: axZ, set, setRadiusScale };
   })();
 
   function updateUnitGrids(voxelSize = 1) {

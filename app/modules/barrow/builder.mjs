@@ -1,4 +1,5 @@
 // Build Babylon meshes from Barrow data
+import { VoxelType, decompressVox } from '../voxels/voxelize.mjs';
 
 export function buildSceneFromBarrow(scene, barrow) {
   const built = { caverns: [], links: [], carddons: [], cavernLabels: [], spaces: [], spaceLabels: [], intersections: [], voxParts: [] };
@@ -106,9 +107,7 @@ export function buildSceneFromBarrow(scene, barrow) {
 
       let mesh;
       if (s.vox && s.vox.size) {
-        // Voxelized display: build a hollow shell using 6 face boxes with thickness = wallThickness * res
-        const tVox = Math.max(1, Number(s.vox.wallThickness || 1));
-        const tWU = Math.max(0.001, tVox * res);
+        // Voxelized display: render solid per-voxel cubes (thin instances) for walls and rock.
         // Invisible pick/bounds box
         mesh = BABYLON.MeshBuilder.CreateBox(`space:${s.id}`, { width: w, height: h, depth: d }, scene);
         const pm = new BABYLON.StandardMaterial(`space:${s.id}:pickMat`, scene);
@@ -125,56 +124,65 @@ export function buildSceneFromBarrow(scene, barrow) {
         mesh.isPickable = true; mesh.alwaysSelectAsActiveMesh = true;
         built.spaces.push({ id: s.id, mesh, mat: pm });
 
-        // Visible wall faces as boxes parented to the pick/bounds box
-        // Use GridMaterial to render faint voxel outlines at each voxel boundary (gridRatio = res),
-        // but keep a solid, readable fill by increasing opacity.
-        const wallMat = new BABYLON.GridMaterial(`space:${s.id}:wallMat`, scene);
-        // Light grey walls with subtle lines
-        wallMat.mainColor = new BABYLON.Color3(0.75, 0.75, 0.78);
-        wallMat.lineColor = new BABYLON.Color3(0.88, 0.88, 0.92);
-        wallMat.gridRatio = res; // one grid cell per voxel
-        wallMat.opacity = 0.85;
-        wallMat.backFaceCulling = false;
-        function makeFace(name, size, pos) {
-          const f = BABYLON.MeshBuilder.CreateBox(name, size, scene);
-          f.material = wallMat; f.isPickable = false; f.parent = mesh; f.position.copyFrom(pos);
-          built.voxParts.push(f);
-          return f;
-        }
-        // X faces
-        makeFace(`space:${s.id}:wall:+X`, { width: tWU, height: h, depth: d }, new BABYLON.Vector3(+w/2 - tWU/2, 0, 0));
-        makeFace(`space:${s.id}:wall:-X`, { width: tWU, height: h, depth: d }, new BABYLON.Vector3(-w/2 + tWU/2, 0, 0));
-        // Y faces
-        makeFace(`space:${s.id}:wall:+Y`, { width: w, height: tWU, depth: d }, new BABYLON.Vector3(0, +h/2 - tWU/2, 0));
-        makeFace(`space:${s.id}:wall:-Y`, { width: w, height: tWU, depth: d }, new BABYLON.Vector3(0, -h/2 + tWU/2, 0));
-        // Z faces
-        makeFace(`space:${s.id}:wall:+Z`, { width: w, height: h, depth: tWU }, new BABYLON.Vector3(0, 0, +d/2 - tWU/2));
-        makeFace(`space:${s.id}:wall:-Z`, { width: w, height: h, depth: tWU }, new BABYLON.Vector3(0, 0, -d/2 + tWU/2));
+        const vox = decompressVox(s.vox);
+        const nx = Math.max(1, vox.size?.x || 1);
+        const ny = Math.max(1, vox.size?.y || 1);
+        const nz = Math.max(1, vox.size?.z || 1);
+        const data = Array.isArray(vox.data) ? vox.data : [];
+        const shrink = 0.96; // slight gap between voxels
+        const sx = res * shrink, sy = res * shrink, sz = res * shrink;
 
-        // Optional ROCK fill: if voxels indicate rock inside, render an inner box with dark grey grid
+        // Base meshes for walls and rock
+        const wallBase = BABYLON.MeshBuilder.CreateBox(`space:${s.id}:vox:wall`, { size: 1 }, scene);
+        wallBase.isPickable = false; wallBase.parent = mesh;
+        const wallMat = new BABYLON.StandardMaterial(`space:${s.id}:vox:wall:mat`, scene);
+        wallMat.diffuseColor = new BABYLON.Color3(0.78, 0.78, 0.80);
+        wallMat.emissiveColor = new BABYLON.Color3(0.22, 0.22, 0.24);
+        wallMat.specularColor = new BABYLON.Color3(0,0,0);
         try {
-          let hasRock = !!s.vox.hasRock;
-          if (!hasRock) {
-            const data = s.vox.data;
-            if (Array.isArray(data)) { hasRock = data.some(v => v === 0); }
-            else if (data && Array.isArray(data.rle)) { for (let i = 0; i < data.rle.length; i += 2) { if (data.rle[i] === 0 && data.rle[i+1] > 0) { hasRock = true; break; } } }
-          }
-          if (hasRock) {
-            const iw = Math.max(0.001, w - 2 * tWU);
-            const ih = Math.max(0.001, h - 2 * tWU);
-            const idp = Math.max(0.001, d - 2 * tWU);
-            if (iw > 0 && ih > 0 && idp > 0) {
-              const rock = BABYLON.MeshBuilder.CreateBox(`space:${s.id}:rock`, { width: iw, height: ih, depth: idp }, scene);
-              const rockMat = new BABYLON.GridMaterial(`space:${s.id}:rockMat`, scene);
-              rockMat.mainColor = new BABYLON.Color3(0.22, 0.22, 0.24); // dark grey
-              rockMat.lineColor = new BABYLON.Color3(0.32, 0.35, 0.38);
-              rockMat.gridRatio = res;
-              rockMat.opacity = 0.85;
-              rock.material = rockMat; rock.isPickable = false; rock.parent = mesh; rock.position.set(0,0,0);
-              built.voxParts.push(rock);
+          const pct = Math.max(0, Math.min(100, Number(localStorage.getItem('dw:ui:wallOpacity') || '60') || 60));
+          wallMat.alpha = Math.max(0.0, Math.min(1.0, pct / 100));
+        } catch { wallMat.alpha = 0.6; }
+        wallBase.material = wallMat;
+        built.voxParts.push(wallBase);
+
+        const rockBase = BABYLON.MeshBuilder.CreateBox(`space:${s.id}:vox:rock`, { size: 1 }, scene);
+        rockBase.isPickable = false; rockBase.parent = mesh;
+        const rockMat = new BABYLON.StandardMaterial(`space:${s.id}:vox:rock:mat`, scene);
+        rockMat.diffuseColor = new BABYLON.Color3(0.22, 0.22, 0.24);
+        rockMat.emissiveColor = new BABYLON.Color3(0.08, 0.08, 0.10);
+        rockMat.specularColor = new BABYLON.Color3(0,0,0);
+        try {
+          const pctR = Math.max(0, Math.min(100, Number(localStorage.getItem('dw:ui:rockOpacity') || '85') || 85));
+          rockMat.alpha = Math.max(0.0, Math.min(1.0, pctR / 100));
+        } catch { rockMat.alpha = 0.85; }
+        rockBase.material = rockMat;
+        built.voxParts.push(rockBase);
+
+        const wallMatrices = [];
+        const rockMatrices = [];
+        const centerX = (nx * res) / 2;
+        const centerY = (ny * res) / 2;
+        const centerZ = (nz * res) / 2;
+        for (let z = 0; z < nz; z++) {
+          for (let y = 0; y < ny; y++) {
+            for (let x = 0; x < nx; x++) {
+              const idx = x + nx * (y + ny * z);
+              const v = data[idx];
+              if (v !== VoxelType.Wall && v !== VoxelType.Rock) continue;
+              const px = (x + 0.5) * res - centerX;
+              const py = (y + 0.5) * res - centerY;
+              const pz = (z + 0.5) * res - centerZ;
+              const t = BABYLON.Vector3.Zero(); t.x = px; t.y = py; t.z = pz;
+              const sc = new BABYLON.Vector3(sx, sy, sz);
+              const m = BABYLON.Matrix.Compose(sc, BABYLON.Quaternion.Identity(), t);
+              const target = (v === VoxelType.Wall) ? wallMatrices : rockMatrices;
+              for (let k = 0; k < 16; k++) target.push(m.m[k]);
             }
           }
-        } catch {}
+        }
+        if (wallMatrices.length > 0) wallBase.thinInstanceSetBuffer('matrix', new Float32Array(wallMatrices), 16, true);
+        if (rockMatrices.length > 0) rockBase.thinInstanceSetBuffer('matrix', new Float32Array(rockMatrices), 16, true);
       } else {
         // Material by type
         const mat = new BABYLON.StandardMaterial(`space:${s.id}:mat`, scene);

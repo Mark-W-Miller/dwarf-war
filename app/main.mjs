@@ -98,6 +98,9 @@ const state = {
 // Load or create barrow
 state.barrow = loadBarrow() || makeDefaultBarrow();
 layoutBarrow(state.barrow); // ensure positions from directions
+// Create highlight layer before first halo rebuild so it applies immediately
+state.hl = new BABYLON.HighlightLayer('hl', scene, { blurHorizontalSize: 0.45, blurVerticalSize: 0.45 });
+state.hl.innerGlow = true; state.hl.outerGlow = false;
 state.built = buildSceneFromBarrow(scene, state.barrow);
 renderDbView(state.barrow);
 grids.updateUnitGrids(state.barrow?.meta?.voxelSize || 1);
@@ -110,10 +113,8 @@ rebuildHalos();
 grids.scheduleGridUpdate(state.built);
 applyViewToggles();
 applyTextScale?.();
+applyVoxelOpacity?.();
 updateHud();
-// Highlight layer for selection glow
-state.hl = new BABYLON.HighlightLayer('hl', scene, { blurHorizontalSize: 0.45, blurVerticalSize: 0.45 });
-state.hl.innerGlow = true; state.hl.outerGlow = false;
 
 function applyGlowStrength() {
   let strength = 70;
@@ -279,10 +280,20 @@ function applyGridArrowVisuals() {
   const as = Number(localStorage.getItem('dw:ui:arrowStrength') || '40') || 40;
   try { grids.applyVisualStrengths(gs, as); } catch {}
 }
+// Apply axis thickness based on settings
+function applyAxisRadius() {
+  try {
+    const pct = Number(localStorage.getItem('dw:ui:axisRadius') || '100') || 100;
+    const k = Math.max(0.05, pct / 100);
+    grids?.arrows?.setRadiusScale?.(k);
+    grids.updateGridExtent(state.built);
+  } catch {}
+}
 // Initialize Settings UI and bind sliders
-initSettingsTab(camApi, { applyTextScale, applyGridArrowVisuals, rebuildScene, applyGlowStrength, rebuildHalos });
+initSettingsTab(camApi, { applyTextScale, applyGridArrowVisuals, rebuildScene, applyGlowStrength, rebuildHalos, applyVoxelOpacity, applyAxisRadius });
 // Apply grid/arrow visuals on startup
 applyGridArrowVisuals();
+applyAxisRadius();
 
 // Zoom/pan helpers now live in camApi (camera module)
 
@@ -304,9 +315,11 @@ function applyViewToggles() {
     const gOn = localStorage.getItem('dw:ui:gridGround') !== '0';
     const xyOn = localStorage.getItem('dw:ui:gridXY') !== '0';
     const yzOn = localStorage.getItem('dw:ui:gridYZ') !== '0';
+    const axOn = localStorage.getItem('dw:ui:axisArrows') !== '0';
     if (ground) ground.setEnabled(!!gOn);
     if (vGrid) vGrid.setEnabled(!!xyOn);
     if (wGrid) wGrid.setEnabled(!!yzOn);
+    try { grids?.arrows?.group?.setEnabled?.(!!axOn); } catch {}
   } catch {}
   // Labels visibility (spaces + caverns)
   try {
@@ -335,6 +348,25 @@ function applyTextScale() {
   try { for (const x of state?.built?.carddons || []) if (x?.mesh?.name?.includes(':label')) apply(x.mesh); } catch {}
 }
 
+// Apply voxel wall opacity to current scene based on settings
+function applyVoxelOpacity() {
+  let alphaWall = 0.6;
+  let alphaRock = 0.85;
+  try { alphaWall = Math.max(0.0, Math.min(1.0, (Number(localStorage.getItem('dw:ui:wallOpacity') || '60') || 60) / 100)); } catch {}
+  try { alphaRock = Math.max(0.0, Math.min(1.0, (Number(localStorage.getItem('dw:ui:rockOpacity') || '85') || 85) / 100)); } catch {}
+  try {
+    for (const part of state?.built?.voxParts || []) {
+      try {
+        const nm = String(part?.name || '');
+        if (part.material) {
+          if (nm.includes(':vox:wall')) part.material.alpha = alphaWall;
+          else if (nm.includes(':vox:rock')) part.material.alpha = alphaRock;
+        }
+      } catch {}
+    }
+  } catch {}
+}
+
 function rebuildScene() {
   disposeBuilt(state.built);
   layoutBarrow(state.barrow);
@@ -345,6 +377,7 @@ function rebuildScene() {
   scheduleGridUpdate();
   applyViewToggles();
   applyTextScale?.();
+  applyVoxelOpacity?.();
 }
 
 function rebuildHalos() {

@@ -100,6 +100,10 @@ export function initVoxelTab(panelContent, api) {
     }
     try { api.saveBarrow(api.state.barrow); api.snapshot(api.state.barrow); } catch {}
     try { api.renderDbView(api.state.barrow); } catch {}
+    // Rebuild scene so new rock voxels render immediately
+    try { api.rebuildScene?.(); } catch {}
+    try { api.scheduleGridUpdate?.(); } catch {}
+    try { window.dispatchEvent(new CustomEvent('dw:transform', { detail: { kind: 'voxel-fill', sel: spaces.map(s => s.id), value: 'Rock' } })); } catch {}
   });
 
   // Warn/log when buttons are clicked with no selection

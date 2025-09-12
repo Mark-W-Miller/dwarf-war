@@ -81,6 +81,22 @@ export function initSettingsTab(camApi, ui = {}) {
     try { Log.log('UI', 'Change setting', { key: 'arrowStrength', value: Number(slider5.value) }); } catch {}
   });
 
+  // Axis thickness (radius) slider
+  const rowAx = document.createElement('div'); rowAx.className = 'row';
+  const labelAx = document.createElement('label'); labelAx.textContent = 'Axis Thickness'; labelAx.style.display = 'flex'; labelAx.style.alignItems = 'center'; labelAx.style.gap = '8px';
+  const sliderAx = document.createElement('input'); sliderAx.type = 'range'; sliderAx.min = '5'; sliderAx.max = '200'; sliderAx.step = '1'; sliderAx.id = 'axisRadius';
+  const valueAx = document.createElement('span'); valueAx.id = 'axisRadiusVal';
+  labelAx.appendChild(sliderAx); labelAx.appendChild(valueAx); rowAx.appendChild(labelAx); pane.appendChild(rowAx);
+  const AXKEY = 'dw:ui:axisRadius';
+  const axStored = Number(localStorage.getItem(AXKEY) || '100') || 100;
+  sliderAx.value = String(axStored); valueAx.textContent = String(axStored + '%');
+  sliderAx.addEventListener('input', () => {
+    valueAx.textContent = sliderAx.value + '%';
+    try { localStorage.setItem(AXKEY, sliderAx.value); } catch {}
+    try { ui.applyAxisRadius?.(); } catch {}
+    try { Log.log('UI', 'Change setting', { key: 'axisRadius', valuePct: Number(sliderAx.value) }); } catch {}
+  });
+
   // Rotation sensitivity slider
   const rowRot = document.createElement('div'); rowRot.className = 'row';
   const labelRot = document.createElement('label'); labelRot.textContent = 'Rotation Speed'; labelRot.style.display = 'flex'; labelRot.style.alignItems = 'center'; labelRot.style.gap = '8px';
@@ -127,6 +143,38 @@ export function initSettingsTab(camApi, ui = {}) {
     try { localStorage.setItem(GZKEY, slider9.value); } catch {}
     try { Log.log('UI', 'Change setting', { key: 'gizmoScale', valuePct: Number(slider9.value) }); } catch {}
     try { window.dispatchEvent(new CustomEvent('dw:transform', { detail: { kind: 'settings:gizmoScale', scalePct: Number(slider9.value) } })); } catch {}
+  });
+
+  // Voxel Wall Opacity (translucent walls)
+  const row10 = document.createElement('div'); row10.className = 'row';
+  const label10 = document.createElement('label'); label10.textContent = 'Voxel Wall Opacity'; label10.style.display = 'flex'; label10.style.alignItems = 'center'; label10.style.gap = '8px';
+  const slider10 = document.createElement('input'); slider10.type = 'range'; slider10.min = '0'; slider10.max = '100'; slider10.step = '1'; slider10.id = 'wallOpacity';
+  const valueSpan10 = document.createElement('span'); valueSpan10.id = 'wallOpacityVal';
+  label10.appendChild(slider10); label10.appendChild(valueSpan10); row10.appendChild(label10); pane.appendChild(row10);
+  const WKEY = 'dw:ui:wallOpacity';
+  const wStored = Number(localStorage.getItem(WKEY) || '60') || 60;
+  slider10.value = String(wStored); valueSpan10.textContent = String(wStored + '%');
+  slider10.addEventListener('input', () => {
+    valueSpan10.textContent = slider10.value + '%';
+    try { localStorage.setItem(WKEY, slider10.value); } catch {}
+    try { ui.applyVoxelOpacity?.(); } catch {}
+    try { Log.log('UI', 'Change setting', { key: 'wallOpacity', valuePct: Number(slider10.value) }); } catch {}
+  });
+
+  // Voxel Rock Opacity
+  const row11 = document.createElement('div'); row11.className = 'row';
+  const label11 = document.createElement('label'); label11.textContent = 'Voxel Rock Opacity'; label11.style.display = 'flex'; label11.style.alignItems = 'center'; label11.style.gap = '8px';
+  const slider11 = document.createElement('input'); slider11.type = 'range'; slider11.min = '0'; slider11.max = '100'; slider11.step = '1'; slider11.id = 'rockOpacity';
+  const valueSpan11 = document.createElement('span'); valueSpan11.id = 'rockOpacityVal';
+  label11.appendChild(slider11); label11.appendChild(valueSpan11); row11.appendChild(label11); pane.appendChild(row11);
+  const RCKEY = 'dw:ui:rockOpacity';
+  const rcStored = Number(localStorage.getItem(RCKEY) || '85') || 85;
+  slider11.value = String(rcStored); valueSpan11.textContent = String(rcStored + '%');
+  slider11.addEventListener('input', () => {
+    valueSpan11.textContent = slider11.value + '%';
+    try { localStorage.setItem(RCKEY, slider11.value); } catch {}
+    try { ui.applyVoxelOpacity?.(); } catch {}
+    try { Log.log('UI', 'Change setting', { key: 'rockOpacity', valuePct: Number(slider11.value) }); } catch {}
   });
 
   // Exact Intersection (CSG) toggle — performance note

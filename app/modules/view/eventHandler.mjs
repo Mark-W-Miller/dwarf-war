@@ -33,6 +33,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
   const gridGroundCb = document.getElementById('gridGround');
   const gridXYCb = document.getElementById('gridXY');
   const gridYZCb = document.getElementById('gridYZ');
+  const axisArrowsCb = document.getElementById('axisArrows');
   const resizeGridBtn = document.getElementById('resizeGrid');
 
   const panel = document.getElementById('rightPanel');
@@ -137,19 +138,22 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
   if (gridGroundCb) { gridGroundCb.checked = readBool('dw:ui:gridGround', true); }
   if (gridXYCb) { gridXYCb.checked = readBool('dw:ui:gridXY', true); }
   if (gridYZCb) { gridYZCb.checked = readBool('dw:ui:gridYZ', true); }
+  if (axisArrowsCb) { axisArrowsCb.checked = readBool('dw:ui:axisArrows', true); }
 
   function applyTogglesFromUI() {
     if (showNamesCb) writeBool('dw:ui:showNames', !!showNamesCb.checked);
     if (gridGroundCb) writeBool('dw:ui:gridGround', !!gridGroundCb.checked);
     if (gridXYCb) writeBool('dw:ui:gridXY', !!gridXYCb.checked);
     if (gridYZCb) writeBool('dw:ui:gridYZ', !!gridYZCb.checked);
+    if (axisArrowsCb) writeBool('dw:ui:axisArrows', !!axisArrowsCb.checked);
     try { applyViewToggles?.(); } catch {}
     try {
       Log.log('UI', 'View toggles', {
         names: !!showNamesCb?.checked,
         ground: !!gridGroundCb?.checked,
         xy: !!gridXYCb?.checked,
-        yz: !!gridYZCb?.checked
+        yz: !!gridYZCb?.checked,
+        arrows: !!axisArrowsCb?.checked
       });
     } catch {}
   }
@@ -157,6 +161,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
   gridGroundCb?.addEventListener('change', applyTogglesFromUI);
   gridXYCb?.addEventListener('change', applyTogglesFromUI);
   gridYZCb?.addEventListener('change', applyTogglesFromUI);
+  axisArrowsCb?.addEventListener('change', applyTogglesFromUI);
   // Apply once on init
   applyTogglesFromUI();
 
@@ -223,6 +228,8 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     rebuildScene();
     try { updateHud?.(); } catch {}
     Log.log('UI', 'Reset barrow', {});
+    // After reset, center camera on origin so first new space defaults to (0,0,0)
+    try { camera.target.set(0,0,0); } catch {}
   });
 
   exportBtn?.addEventListener('click', () => {
@@ -297,7 +304,10 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     const used = new Set((state.barrow.spaces||[]).map(s => s.id));
     let n = 1; let id = baseName;
     while (used.has(id)) { id = `${baseName}-${++n}`; }
-    const origin = camera.target.clone();
+    // For the very first space (fresh DB), default origin to (0,0,0). Otherwise use camera target.
+    const origin = ((state.barrow?.spaces||[]).length === 0)
+      ? new BABYLON.Vector3(0,0,0)
+      : camera.target.clone();
     const s = { id, type, res, size, origin: { x: origin.x, y: origin.y, z: origin.z }, chunks: {}, attrs: {} };
 
     // Simple non-overlap along +X
@@ -1411,6 +1421,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     }
     Log.log('UI', 'Select space(s)', { selection: Array.from(state.selection) });
     rebuildHalos();
+    try { scene.render(); requestAnimationFrame(() => { try { scene.render(); } catch {} }); } catch {}
     ensureRotWidget(); ensureMoveWidget(); disposeLiveIntersections();
     try { window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: Array.from(state.selection) } })); } catch {}
 
