@@ -1,7 +1,7 @@
 // Build Babylon meshes from Barrow data
 
 export function buildSceneFromBarrow(scene, barrow) {
-  const built = { caverns: [], links: [], carddons: [], cavernLabels: [], spaces: [], spaceLabels: [], intersections: [] };
+  const built = { caverns: [], links: [], carddons: [], cavernLabels: [], spaces: [], spaceLabels: [], intersections: [], voxParts: [] };
 
   // Materials
   const cavernMat = new BABYLON.PBRMetallicRoughnessMaterial('cavernMat', scene);
@@ -104,36 +104,106 @@ export function buildSceneFromBarrow(scene, barrow) {
       const h = Math.max(0.001, (s.size?.y || 0) * res);
       const d = Math.max(0.001, (s.size?.z || 0) * res);
 
-      // Material by type
-      const mat = new BABYLON.StandardMaterial(`space:${s.id}:mat`, scene);
-      const color = s.type === 'Carddon' ? new BABYLON.Color3(0.85, 0.35, 0.25)
-        : s.type === 'Cavern' ? new BABYLON.Color3(0.95, 0.85, 0.2)
-        : s.type === 'Tunnel' ? new BABYLON.Color3(0.4, 0.8, 0.9)
-        : s.type === 'Room' ? new BABYLON.Color3(0.7, 0.6, 0.9)
-        : new BABYLON.Color3(0.6, 0.8, 0.6);
-      mat.diffuseColor = color.scale(0.25); mat.emissiveColor = color.scale(0.35); mat.alpha = 0.35; mat.specularColor = new BABYLON.Color3(0,0,0);
-      mat.backFaceCulling = false; // ensure click/pick works from both sides
-
       let mesh;
-      if (s.type === 'Cavern') {
-        const dia = Math.min(w, h, d);
-        mesh = BABYLON.MeshBuilder.CreateSphere(`space:${s.id}`, { diameter: dia, segments: 24 }, scene);
-      } else if (s.type === 'Carddon') {
+      if (s.vox && s.vox.size) {
+        // Voxelized display: build a hollow shell using 6 face boxes with thickness = wallThickness * res
+        const tVox = Math.max(1, Number(s.vox.wallThickness || 1));
+        const tWU = Math.max(0.001, tVox * res);
+        // Invisible pick/bounds box
         mesh = BABYLON.MeshBuilder.CreateBox(`space:${s.id}`, { width: w, height: h, depth: d }, scene);
+        const pm = new BABYLON.StandardMaterial(`space:${s.id}:pickMat`, scene);
+        pm.diffuseColor = new BABYLON.Color3(0,0,0); pm.emissiveColor = new BABYLON.Color3(0,0,0); pm.alpha = 0.0; pm.specularColor = new BABYLON.Color3(0,0,0);
+        pm.backFaceCulling = false; mesh.material = pm;
+        mesh.position.set(s.origin?.x||0, s.origin?.y||0, s.origin?.z||0);
+        try {
+          const rx = Number(s.rotation?.x ?? 0) || 0;
+          const ry = (s.rotation && typeof s.rotation.y === 'number') ? Number(s.rotation.y) : Number(s.rotY || 0) || 0;
+          const rz = Number(s.rotation?.z ?? 0) || 0;
+          mesh.rotationQuaternion = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz);
+          mesh.rotation.set(0,0,0);
+        } catch {}
+        mesh.isPickable = true; mesh.alwaysSelectAsActiveMesh = true;
+        built.spaces.push({ id: s.id, mesh, mat: pm });
+
+        // Visible wall faces as boxes parented to the pick/bounds box
+        // Use GridMaterial to render faint voxel outlines at each voxel boundary (gridRatio = res),
+        // but keep a solid, readable fill by increasing opacity.
+        const wallMat = new BABYLON.GridMaterial(`space:${s.id}:wallMat`, scene);
+        // Light grey walls with subtle lines
+        wallMat.mainColor = new BABYLON.Color3(0.75, 0.75, 0.78);
+        wallMat.lineColor = new BABYLON.Color3(0.88, 0.88, 0.92);
+        wallMat.gridRatio = res; // one grid cell per voxel
+        wallMat.opacity = 0.85;
+        wallMat.backFaceCulling = false;
+        function makeFace(name, size, pos) {
+          const f = BABYLON.MeshBuilder.CreateBox(name, size, scene);
+          f.material = wallMat; f.isPickable = false; f.parent = mesh; f.position.copyFrom(pos);
+          built.voxParts.push(f);
+          return f;
+        }
+        // X faces
+        makeFace(`space:${s.id}:wall:+X`, { width: tWU, height: h, depth: d }, new BABYLON.Vector3(+w/2 - tWU/2, 0, 0));
+        makeFace(`space:${s.id}:wall:-X`, { width: tWU, height: h, depth: d }, new BABYLON.Vector3(-w/2 + tWU/2, 0, 0));
+        // Y faces
+        makeFace(`space:${s.id}:wall:+Y`, { width: w, height: tWU, depth: d }, new BABYLON.Vector3(0, +h/2 - tWU/2, 0));
+        makeFace(`space:${s.id}:wall:-Y`, { width: w, height: tWU, depth: d }, new BABYLON.Vector3(0, -h/2 + tWU/2, 0));
+        // Z faces
+        makeFace(`space:${s.id}:wall:+Z`, { width: w, height: h, depth: tWU }, new BABYLON.Vector3(0, 0, +d/2 - tWU/2));
+        makeFace(`space:${s.id}:wall:-Z`, { width: w, height: h, depth: tWU }, new BABYLON.Vector3(0, 0, -d/2 + tWU/2));
+
+        // Optional ROCK fill: if voxels indicate rock inside, render an inner box with dark grey grid
+        try {
+          let hasRock = !!s.vox.hasRock;
+          if (!hasRock) {
+            const data = s.vox.data;
+            if (Array.isArray(data)) { hasRock = data.some(v => v === 0); }
+            else if (data && Array.isArray(data.rle)) { for (let i = 0; i < data.rle.length; i += 2) { if (data.rle[i] === 0 && data.rle[i+1] > 0) { hasRock = true; break; } } }
+          }
+          if (hasRock) {
+            const iw = Math.max(0.001, w - 2 * tWU);
+            const ih = Math.max(0.001, h - 2 * tWU);
+            const idp = Math.max(0.001, d - 2 * tWU);
+            if (iw > 0 && ih > 0 && idp > 0) {
+              const rock = BABYLON.MeshBuilder.CreateBox(`space:${s.id}:rock`, { width: iw, height: ih, depth: idp }, scene);
+              const rockMat = new BABYLON.GridMaterial(`space:${s.id}:rockMat`, scene);
+              rockMat.mainColor = new BABYLON.Color3(0.22, 0.22, 0.24); // dark grey
+              rockMat.lineColor = new BABYLON.Color3(0.32, 0.35, 0.38);
+              rockMat.gridRatio = res;
+              rockMat.opacity = 0.85;
+              rock.material = rockMat; rock.isPickable = false; rock.parent = mesh; rock.position.set(0,0,0);
+              built.voxParts.push(rock);
+            }
+          }
+        } catch {}
       } else {
-        mesh = BABYLON.MeshBuilder.CreateBox(`space:${s.id}`, { width: w, height: h, depth: d }, scene);
+        // Material by type
+        const mat = new BABYLON.StandardMaterial(`space:${s.id}:mat`, scene);
+        const color = s.type === 'Carddon' ? new BABYLON.Color3(0.85, 0.35, 0.25)
+          : s.type === 'Cavern' ? new BABYLON.Color3(0.95, 0.85, 0.2)
+          : s.type === 'Tunnel' ? new BABYLON.Color3(0.4, 0.8, 0.9)
+          : s.type === 'Room' ? new BABYLON.Color3(0.7, 0.6, 0.9)
+          : new BABYLON.Color3(0.6, 0.8, 0.6);
+        mat.diffuseColor = color.scale(0.25); mat.emissiveColor = color.scale(0.35); mat.alpha = 0.35; mat.specularColor = new BABYLON.Color3(0,0,0);
+        mat.backFaceCulling = false; // ensure click/pick works from both sides
+
+        if (s.type === 'Cavern') {
+          const dia = Math.min(w, h, d);
+          mesh = BABYLON.MeshBuilder.CreateSphere(`space:${s.id}`, { diameter: dia, segments: 24 }, scene);
+        } else {
+          mesh = BABYLON.MeshBuilder.CreateBox(`space:${s.id}`, { width: w, height: h, depth: d }, scene);
+        }
+        mesh.position.set(s.origin?.x||0, s.origin?.y||0, s.origin?.z||0);
+        try {
+          const rx = Number(s.rotation?.x ?? 0) || 0;
+          const ry = (s.rotation && typeof s.rotation.y === 'number') ? Number(s.rotation.y) : Number(s.rotY || 0) || 0;
+          const rz = Number(s.rotation?.z ?? 0) || 0;
+          // Prefer quaternion for consistent local-space rotations
+          try { mesh.rotationQuaternion = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz); mesh.rotation.set(0,0,0); }
+          catch { mesh.rotation.set(rx, ry, rz); }
+        } catch {}
+        mesh.material = mat; mesh.isPickable = true; mesh.alwaysSelectAsActiveMesh = true;
+        built.spaces.push({ id: s.id, mesh, mat });
       }
-      mesh.position.set(s.origin?.x||0, s.origin?.y||0, s.origin?.z||0);
-      try {
-        const rx = Number(s.rotation?.x ?? 0) || 0;
-        const ry = (s.rotation && typeof s.rotation.y === 'number') ? Number(s.rotation.y) : Number(s.rotY || 0) || 0;
-        const rz = Number(s.rotation?.z ?? 0) || 0;
-        // Prefer quaternion for consistent local-space rotations
-        try { mesh.rotationQuaternion = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz); mesh.rotation.set(0,0,0); }
-        catch { mesh.rotation.set(rx, ry, rz); }
-      } catch {}
-      mesh.material = mat; mesh.isPickable = true; mesh.alwaysSelectAsActiveMesh = true;
-      built.spaces.push({ id: s.id, mesh, mat });
 
       const label = BABYLON.MeshBuilder.CreatePlane(`space:${s.id}:label`, { width: 3.0, height: 1.1 }, scene);
       label.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
@@ -158,14 +228,17 @@ export function buildSceneFromBarrow(scene, barrow) {
 
   // Intersections between world AABBs of built meshes (aligns with visible shapes)
   try {
+    const voxIds = new Set(((barrow && Array.isArray(barrow.spaces)) ? barrow.spaces : []).filter(s => s && s.vox).map(s => s.id));
     const arr = Array.isArray(built.spaces) ? built.spaces : [];
     for (let i = 0; i < arr.length; i++) {
       const A = arr[i]; if (!A?.mesh) continue;
+      if (voxIds.has(A.id)) continue; // skip intersections for voxelized spaces
       try { A.mesh.computeWorldMatrix(true); A.mesh.refreshBoundingInfo(); } catch {}
       const bba = A.mesh.getBoundingInfo()?.boundingBox; if (!bba) continue;
       const amin = bba.minimumWorld, amax = bba.maximumWorld;
       for (let j = i + 1; j < arr.length; j++) {
         const B = arr[j]; if (!B?.mesh) continue;
+        if (voxIds.has(B.id)) continue; // skip intersections for voxelized spaces
         try { B.mesh.computeWorldMatrix(true); B.mesh.refreshBoundingInfo(); } catch {}
         const bbb = B.mesh.getBoundingInfo()?.boundingBox; if (!bbb) continue;
         const bmin = bbb.minimumWorld, bmax = bbb.maximumWorld;
@@ -217,5 +290,6 @@ export function disposeBuilt(built) {
   for (const x of built.spaces || []) x.mesh?.dispose();
   for (const x of built.spaceLabels || []) { x.mesh?.dispose(); x.dt?.dispose(); }
   for (const x of built.intersections || []) { x.mesh?.dispose(); }
+  for (const x of built.voxParts || []) { try { x.dispose(); } catch {} }
   built.label?.dispose();
 }

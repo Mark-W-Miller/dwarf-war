@@ -86,9 +86,9 @@ export function initGrids(scene) {
 
       return { shaft, tip, setLength };
     }
-    const axX = makeArrow('axisX', new BABYLON.Vector3(1,0,0), new BABYLON.Color3(0.95, 0.2, 0.2));
-    const axY = makeArrow('axisY', new BABYLON.Vector3(0,1,0), new BABYLON.Color3(0.2, 0.95, 0.2));
-    const axZ = makeArrow('axisZ', new BABYLON.Vector3(0,0,1), new BABYLON.Color3(0.2, 0.4, 0.95));
+    const axX = makeArrow('axisX', new BABYLON.Vector3(1,0,0), new BABYLON.Color3(1.0, 0.0, 0.0));
+    const axY = makeArrow('axisY', new BABYLON.Vector3(0,1,0), new BABYLON.Color3(0.0, 1.0, 0.0));
+    const axZ = makeArrow('axisZ', new BABYLON.Vector3(0,0,1), new BABYLON.Color3(0.0, 0.0, 1.0));
 
     function set(Lx, Ly, Lz) {
       try { axX.setLength(Math.max(1, Lx)); } catch {}

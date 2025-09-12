@@ -7,6 +7,7 @@ import { initGrids } from './modules/view/grids.mjs';
 import { renderDbView } from './modules/view/dbView.mjs';
 import { initLogTab } from './modules/view/logTab.mjs';
 import { initSettingsTab } from './modules/view/settings.mjs';
+import { initVoxelTab } from './modules/view/voxelTab.mjs';
 import { initEventHandlers } from './modules/view/eventHandler.mjs';
 
 // Babylon setup
@@ -116,10 +117,10 @@ state.hl.innerGlow = true; state.hl.outerGlow = false;
 
 function applyGlowStrength() {
   let strength = 70;
-  try { strength = Math.max(0, Math.min(100, Number(localStorage.getItem('dw:ui:glowStrength') || '70') || 70)); } catch {}
-  const k = strength / 100; // 0..1
-  // Blur size: from subtle (0.2) to strong (~2.2)
-  const blur = 0.2 + 2.0 * k;
+  try { strength = Math.max(0, Math.min(300, Number(localStorage.getItem('dw:ui:glowStrength') || '70') || 70)); } catch {}
+  const k = strength / 100; // 0..3
+  // Blur size: triple the previous range (max ~6.2)
+  const blur = 0.2 + 2.0 * k * 3.0;
   try { state.hl.blurHorizontalSize = blur; state.hl.blurVerticalSize = blur; } catch {}
 }
 applyGlowStrength();
@@ -169,6 +170,14 @@ initEventHandlers({
   state,
   helpers: { setMode, setRunning, rebuildScene, rebuildHalos, moveSelection, scheduleGridUpdate, applyViewToggles, updateHud, updateGridExtent }
 });
+
+// Initialize optional tabs now that tabs exist
+try {
+  const panelContent = document.querySelector('.panel-content');
+  if (panelContent) {
+    initVoxelTab(panelContent, { state, saveBarrow, snapshot, renderDbView, rebuildScene, scheduleGridUpdate: () => grids.scheduleGridUpdate(state.built) });
+  }
+} catch {}
 
 // Fit camera to all spaces
 function fitViewAll() {
@@ -347,14 +356,22 @@ function rebuildHalos() {
   const bySpace = new Map((state.built.spaces||[]).map(x => [x.id, x.mesh]));
   // Glow color intensity from setting
   let glowK = 0.7;
-  try { const s = Number(localStorage.getItem('dw:ui:glowStrength') || '70') || 70; glowK = Math.max(0.2, Math.min(1.25, s / 70)); } catch {}
+  try { const s = Number(localStorage.getItem('dw:ui:glowStrength') || '70') || 70; glowK = Math.max(0.2, Math.min(3.0, s / 100)); } catch {}
   const byCav = new Map((state.built.caverns||[]).map(x => [x.id, x.mesh]));
   const blue = new BABYLON.Color3(0.12 * glowK, 0.35 * glowK, 0.7 * glowK);
   const yellow = new BABYLON.Color3(0.7 * glowK, 0.65 * glowK, 0.15 * glowK);
+  const subtleBlue = new BABYLON.Color3(0.10 * glowK, 0.28 * glowK, 0.55 * glowK);
   for (const id of state.selection) {
     const m = bySpace.get(id) || byCav.get(id);
     if (!m) continue;
     state.hl.addMesh(m, blue);
+    // Also glow voxel parts for selected spaces (subtle)
+    try {
+      for (const part of (state?.built?.voxParts || [])) {
+        const nm = String(part?.name || '');
+        if (nm.startsWith(`space:${id}:`)) state.hl.addMesh(part, subtleBlue);
+      }
+    } catch {}
   }
   // Always glow intersections in yellow
   try {

@@ -18,13 +18,8 @@ export function initLogTab(panelContent) {
   const entries = document.createElement('div'); entries.id = 'logEntries'; entries.style.whiteSpace = 'pre-wrap'; entries.style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'; entries.style.fontSize = '12px'; entries.style.maxHeight = '420px'; entries.style.overflow = 'auto'; entries.style.border = '1px solid #1e2a30'; entries.style.borderRadius = '6px'; entries.style.padding = '8px'; entries.style.background = '#0f151a';
   logPane.appendChild(entries); panelContent.appendChild(logPane);
 
-  function activateLog() {
-    editPane.classList.remove('active'); dbPane.classList.remove('active'); settingsPane.classList.remove('active'); logPane.classList.add('active');
-    const allTabs = tabsBar.querySelectorAll('.tab');
-    allTabs.forEach(b => b.classList.toggle('active', b.dataset.tab === 'tab-log'));
-    renderFilters(); renderEntries();
-  }
-  tabBtn.addEventListener('click', activateLog);
+  // Central tab system handles activation; we only log and render when active
+  tabBtn.addEventListener('click', () => { try { Log.log('UI', 'Activate tab', { tab: 'Log' }); } catch {} });
 
   const selected = new Set();
   function renderFilters() {
@@ -52,4 +47,5 @@ export function initLogTab(panelContent) {
     entries.textContent = lines.join('\n'); entries.scrollTop = entries.scrollHeight;
   }
   Log.on(() => { renderFilters(); renderEntries(); });
+  window.addEventListener('dw:tabChange', (e) => { if (e.detail && e.detail.id === 'tab-log') { renderFilters(); renderEntries(); } });
 }

@@ -1,4 +1,5 @@
 // Settings tab UI: zoom and pan speed controls
+import { Log } from '../util/log.mjs';
 export function initSettingsTab(camApi, ui = {}) {
   const pane = document.getElementById('tab-settings'); if (!pane) return;
   // Zoom speed slider
@@ -18,12 +19,18 @@ export function initSettingsTab(camApi, ui = {}) {
   const KEY = 'dw:ui:zoomBase';
   const stored = Number(localStorage.getItem(KEY) || '30') || 30;
   slider.value = String(stored); valueSpan.textContent = String(stored);
-  slider.addEventListener('input', () => { valueSpan.textContent = slider.value; localStorage.setItem(KEY, slider.value); camApi.applyZoomBase(); });
+  slider.addEventListener('input', () => {
+    valueSpan.textContent = slider.value; localStorage.setItem(KEY, slider.value); camApi.applyZoomBase();
+    try { Log.log('UI', 'Change setting', { key: 'zoomBase', value: Number(slider.value) }); } catch {}
+  });
 
   const PKEY = 'dw:ui:panBase';
   const pstored = Number(localStorage.getItem(PKEY) || '200') || 200;
   slider2.value = String(pstored); valueSpan2.textContent = String(pstored);
-  slider2.addEventListener('input', () => { valueSpan2.textContent = slider2.value; localStorage.setItem(PKEY, slider2.value); camApi.applyPanBase(); });
+  slider2.addEventListener('input', () => {
+    valueSpan2.textContent = slider2.value; localStorage.setItem(PKEY, slider2.value); camApi.applyPanBase();
+    try { Log.log('UI', 'Change setting', { key: 'panBase', value: Number(slider2.value) }); } catch {}
+  });
 
   // Label text size slider
   const row3 = document.createElement('div'); row3.className = 'row';
@@ -39,6 +46,7 @@ export function initSettingsTab(camApi, ui = {}) {
     valueSpan3.textContent = slider3.value + '%';
     try { localStorage.setItem(TSKEY, slider3.value); } catch {}
     try { ui.applyTextScale?.(); } catch {}
+    try { Log.log('UI', 'Change setting', { key: 'textScale', value: Number(slider3.value) }); } catch {}
   });
 
   // Grid intensity slider
@@ -54,6 +62,7 @@ export function initSettingsTab(camApi, ui = {}) {
     valueSpan4.textContent = slider4.value;
     try { localStorage.setItem(GKEY, slider4.value); } catch {}
     try { ui.applyGridArrowVisuals?.(); } catch {}
+    try { Log.log('UI', 'Change setting', { key: 'gridStrength', value: Number(slider4.value) }); } catch {}
   });
 
   // Axis arrow brightness slider
@@ -69,6 +78,7 @@ export function initSettingsTab(camApi, ui = {}) {
     valueSpan5.textContent = slider5.value;
     try { localStorage.setItem(AKEY, slider5.value); } catch {}
     try { ui.applyGridArrowVisuals?.(); } catch {}
+    try { Log.log('UI', 'Change setting', { key: 'arrowStrength', value: Number(slider5.value) }); } catch {}
   });
 
   // Rotation sensitivity slider
@@ -83,12 +93,13 @@ export function initSettingsTab(camApi, ui = {}) {
   sliderRot.addEventListener('input', () => {
     valueRot.textContent = sliderRot.value + '%';
     try { localStorage.setItem(RKEY, sliderRot.value); } catch {}
+    try { Log.log('UI', 'Change setting', { key: 'rotSens', value: Number(sliderRot.value) }); } catch {}
   });
 
-  // Selection glow strength slider
+  // Selection glow strength slider (3x range and sensitivity)
   const row7 = document.createElement('div'); row7.className = 'row';
   const label7 = document.createElement('label'); label7.textContent = 'Selection Glow'; label7.style.display = 'flex'; label7.style.alignItems = 'center'; label7.style.gap = '8px';
-  const slider7 = document.createElement('input'); slider7.type = 'range'; slider7.min = '0'; slider7.max = '100'; slider7.step = '1'; slider7.id = 'glowStrength';
+  const slider7 = document.createElement('input'); slider7.type = 'range'; slider7.min = '0'; slider7.max = '300'; slider7.step = '1'; slider7.id = 'glowStrength';
   const valueSpan7 = document.createElement('span'); valueSpan7.id = 'glowStrengthVal';
   label7.appendChild(slider7); label7.appendChild(valueSpan7); row7.appendChild(label7); pane.appendChild(row7);
   const HKEY = 'dw:ui:glowStrength';
@@ -99,6 +110,23 @@ export function initSettingsTab(camApi, ui = {}) {
     try { localStorage.setItem(HKEY, slider7.value); } catch {}
     try { ui.applyGlowStrength?.(); } catch {}
     try { ui.rebuildHalos?.(); } catch {}
+    try { Log.log('UI', 'Change setting', { key: 'glowStrength', value: Number(slider7.value) }); } catch {}
+  });
+
+  // Gizmo size (rotation ring diameter and move disc radius)
+  const row9 = document.createElement('div'); row9.className = 'row';
+  const label9 = document.createElement('label'); label9.textContent = 'Gizmo Size'; label9.style.display = 'flex'; label9.style.alignItems = 'center'; label9.style.gap = '8px';
+  const slider9 = document.createElement('input'); slider9.type = 'range'; slider9.min = '50'; slider9.max = '300'; slider9.step = '5'; slider9.id = 'gizmoSize';
+  const valueSpan9 = document.createElement('span'); valueSpan9.id = 'gizmoSizeVal';
+  label9.appendChild(slider9); label9.appendChild(valueSpan9); row9.appendChild(label9); pane.appendChild(row9);
+  const GZKEY = 'dw:ui:gizmoScale';
+  const gzStored = Number(localStorage.getItem(GZKEY) || '100') || 100;
+  slider9.value = String(gzStored); valueSpan9.textContent = String(gzStored + '%');
+  slider9.addEventListener('input', () => {
+    valueSpan9.textContent = slider9.value + '%';
+    try { localStorage.setItem(GZKEY, slider9.value); } catch {}
+    try { Log.log('UI', 'Change setting', { key: 'gizmoScale', valuePct: Number(slider9.value) }); } catch {}
+    try { window.dispatchEvent(new CustomEvent('dw:transform', { detail: { kind: 'settings:gizmoScale', scalePct: Number(slider9.value) } })); } catch {}
   });
 
   // Exact Intersection (CSG) toggle — performance note
@@ -115,6 +143,7 @@ export function initSettingsTab(camApi, ui = {}) {
     try { localStorage.setItem(CKEY, cb6.checked ? '1' : '0'); } catch {}
     // Rebuild to apply intersection mode
     try { ui.rebuildScene?.(); } catch {}
+    try { Log.log('UI', 'Change setting', { key: 'exactCSG', value: !!cb6.checked }); } catch {}
   });
 
   // Pick Debug Logs toggle
@@ -127,5 +156,6 @@ export function initSettingsTab(camApi, ui = {}) {
   try { cb8.checked = (localStorage.getItem(DKEY) === '1'); } catch { cb8.checked = false; }
   cb8.addEventListener('change', () => {
     try { localStorage.setItem(DKEY, cb8.checked ? '1' : '0'); } catch {}
+    try { Log.log('UI', 'Change setting', { key: 'pickDebug', value: !!cb8.checked }); } catch {}
   });
 }

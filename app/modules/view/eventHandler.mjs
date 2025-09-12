@@ -1,5 +1,5 @@
 import { makeDefaultBarrow, mergeInstructions, layoutBarrow } from '../barrow/schema.mjs';
-import { loadBarrow, saveBarrow, snapshot } from '../barrow/store.mjs';
+import { loadBarrow, saveBarrow, snapshot, cloneForSave, inflateAfterLoad } from '../barrow/store.mjs';
 import { buildSceneFromBarrow, disposeBuilt } from '../barrow/builder.mjs';
 import { Log } from '../util/log.mjs';
 import { renderDbView } from './dbView.mjs';
@@ -144,6 +144,14 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     if (gridXYCb) writeBool('dw:ui:gridXY', !!gridXYCb.checked);
     if (gridYZCb) writeBool('dw:ui:gridYZ', !!gridYZCb.checked);
     try { applyViewToggles?.(); } catch {}
+    try {
+      Log.log('UI', 'View toggles', {
+        names: !!showNamesCb?.checked,
+        ground: !!gridGroundCb?.checked,
+        xy: !!gridXYCb?.checked,
+        yz: !!gridYZCb?.checked
+      });
+    } catch {}
   }
   showNamesCb?.addEventListener('change', applyTogglesFromUI);
   gridGroundCb?.addEventListener('change', applyTogglesFromUI);
@@ -214,10 +222,13 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     renderDbView(state.barrow);
     rebuildScene();
     try { updateHud?.(); } catch {}
+    Log.log('UI', 'Reset barrow', {});
   });
 
   exportBtn?.addEventListener('click', () => {
-    const blob = new Blob([JSON.stringify(state.barrow, null, 2)], { type: 'application/json' });
+    // Export a compressed clone for storage parity
+    const toExport = cloneForSave(state.barrow);
+    const blob = new Blob([JSON.stringify(toExport, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a'); a.href = url; a.download = `${state.barrow.id || 'barrow'}.json`; a.click();
     setTimeout(() => URL.revokeObjectURL(url), 500);
@@ -229,7 +240,8 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     const file = e.target.files?.[0]; if (!file) return;
     const text = await file.text();
     try {
-      const data = JSON.parse(text);
+      let data = JSON.parse(text);
+      try { data = inflateAfterLoad(data); } catch {}
       disposeBuilt(state.built);
       state.barrow = mergeInstructions(loadBarrow() || makeDefaultBarrow(), data);
       layoutBarrow(state.barrow);
@@ -238,6 +250,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       renderDbView(state.barrow);
       rebuildScene();
       try { updateHud?.(); } catch {}
+      try { Log.log('UI', 'Import barrow', { size: text.length }); } catch {}
     } catch (err) { console.error('Import failed', err); }
     if (importFile) importFile.value = '';
   });
@@ -425,6 +438,12 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       // Support single or multi selection
       const sel = Array.from(state.selection || []).filter(id => (state?.built?.spaces || []).some(x => x.id === id));
       if (sel.length < 1) { Log.log('GIZMO', 'No widget: empty selection', { count: 0 }); disposeRotWidget(); return; }
+      // Suppress rotation gizmo for voxelized spaces
+      try {
+        const byId = new Map((state.barrow.spaces||[]).map(s => [s.id, s]));
+        const anyVox = sel.some(id => !!byId.get(id)?.vox);
+        if (anyVox) { disposeRotWidget(); Log.log('GIZMO', 'Skip rot widget for voxelized selection', { sel }); return; }
+      } catch {}
       const isGroup = sel.length > 1;
       const groupKey = isGroup ? sel.slice().sort().join(',') : sel[0];
       const builtSpaces = (state?.built?.spaces || []);
@@ -452,9 +471,12 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       const halfX = Math.max(0.1, (maxX - minX) / 2);
       const halfY = Math.max(0.1, (maxY - minY) / 2);
       const halfZ = Math.max(0.1, (maxZ - minZ) / 2);
-      const radY = Math.max(halfX, halfZ) * 1.05; // ring in XZ plane => rotate around Y
-      const radX = Math.max(halfY, halfZ) * 1.05; // ring in YZ plane => rotate around X
-      const radZ = Math.max(halfX, halfY) * 1.05; // ring in XY plane => rotate around Z
+      // Apply user scale to gizmo diameters
+      const scalePct = Number(localStorage.getItem('dw:ui:gizmoScale') || '100') || 100;
+      const gScale = Math.max(0.1, scalePct / 100);
+      const radY = Math.max(halfX, halfZ) * 1.05 * gScale; // ring in XZ plane => rotate around Y
+      const radX = Math.max(halfY, halfZ) * 1.05 * gScale; // ring in YZ plane => rotate around X
+      const radZ = Math.max(halfX, halfY) * 1.05 * gScale; // ring in XY plane => rotate around Z
       const thicknessY = Math.max(0.08, radY * 0.085);
       const thicknessX = Math.max(0.08, radX * 0.085);
       const thicknessZ = Math.max(0.08, radZ * 0.085);
@@ -466,7 +488,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
         const diamY = radY * 2;
         const ringY = BABYLON.MeshBuilder.CreateTorus(`rotGizmo:Y:${isGroup ? 'group' : id}`, { diameter: diamY, thickness: thicknessY, tessellation: 96 }, scene);
         const matY = new BABYLON.StandardMaterial(`rotGizmo:Y:${id}:mat`, scene);
-        const baseY = new BABYLON.Color3(0.9, 0.9, 0.2);
+        const baseY = new BABYLON.Color3(0.2, 0.9, 0.2); // green
         matY.diffuseColor = new BABYLON.Color3(0.2, 0.2, 0.05);
         matY.emissiveColor = baseY.clone();
         try { matY.metadata = { baseColor: baseY.clone() }; } catch {}
@@ -477,7 +499,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
         const diamX = radX * 2;
         const ringX = BABYLON.MeshBuilder.CreateTorus(`rotGizmo:X:${isGroup ? 'group' : id}`, { diameter: diamX, thickness: thicknessX, tessellation: 96 }, scene);
         const matX = new BABYLON.StandardMaterial(`rotGizmo:X:${id}:mat`, scene);
-        const baseX = new BABYLON.Color3(0.9, 0.2, 0.2);
+        const baseX = new BABYLON.Color3(0.95, 0.1, 0.1); // red
         matX.diffuseColor = new BABYLON.Color3(0.2, 0.05, 0.05);
         matX.emissiveColor = baseX.clone();
         try { matX.metadata = { baseColor: baseX.clone() }; } catch {}
@@ -489,7 +511,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
         const diamZ = radZ * 2;
         const ringZ = BABYLON.MeshBuilder.CreateTorus(`rotGizmo:Z:${isGroup ? 'group' : id}`, { diameter: diamZ, thickness: thicknessZ, tessellation: 96 }, scene);
         const matZ = new BABYLON.StandardMaterial(`rotGizmo:Z:${id}:mat`, scene);
-        const baseZ = new BABYLON.Color3(0.2, 0.2, 0.9);
+        const baseZ = new BABYLON.Color3(0.1, 0.1, 0.95); // blue
         matZ.diffuseColor = new BABYLON.Color3(0.05, 0.05, 0.2);
         matZ.emissiveColor = baseZ.clone();
         try { matZ.metadata = { baseColor: baseZ.clone() }; } catch {}
@@ -722,6 +744,12 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       const builtSpaces = (state?.built?.spaces || []);
       const entries = builtSpaces.filter(x => sel.includes(x.id));
       if (entries.length < 1) { disposeMoveWidget(); return; }
+      // Suppress move gizmo for voxelized spaces
+      try {
+        const byId = new Map((state.barrow.spaces||[]).map(s => [s.id, s]));
+        const anyVox = sel.some(id => !!byId.get(id)?.vox);
+        if (anyVox) { disposeMoveWidget(); Log.log('GIZMO', 'Skip move widget for voxelized selection', { sel }); return; }
+      } catch {}
       const isGroup = sel.length > 1;
       const groupKey = isGroup ? sel.slice().sort().join(',') : sel[0];
       let id = entries[0].id;
@@ -757,7 +785,10 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       }
       if (!moveWidget.mesh || moveWidget.group !== isGroup || moveWidget.groupKey !== groupKey || (moveWidget.mesh.isDisposed && moveWidget.mesh.isDisposed())) {
         disposeMoveWidget();
-        const disc = BABYLON.MeshBuilder.CreateDisc(`moveGizmo:${id}`, { radius: rad, tessellation: 64 }, scene);
+        // Apply user scale to move disc radius
+        const scalePct = Number(localStorage.getItem('dw:ui:gizmoScale') || '100') || 100;
+        const gScale = Math.max(0.1, scalePct / 100);
+        const disc = BABYLON.MeshBuilder.CreateDisc(`moveGizmo:${id}`, { radius: rad * gScale, tessellation: 64 }, scene);
         disc.rotation.x = Math.PI / 2; // lie on XZ plane
         const mat = new BABYLON.StandardMaterial(`moveGizmo:${id}:mat`, scene);
         mat.diffuseColor = new BABYLON.Color3(0.05, 0.2, 0.2);
@@ -1329,7 +1360,11 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       (m) => {
         if (!m || typeof m.name !== 'string') return false;
         const n = m.name;
-        if (n.startsWith('space:')) return !n.includes(':label'); // ignore labels
+        if (n.startsWith('space:')) {
+          // Only pick the base space mesh (no suffix like :label or :wall)
+          const rest = n.slice('space:'.length);
+          return !rest.includes(':');
+        }
         return n.startsWith('cavern:');
       }
     );
@@ -1359,8 +1394,9 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     let id = '';
     let name = pickedName;
     if (pickedName.startsWith('space:')) {
-      id = pickedName.slice('space:'.length);
-      if (id.endsWith(':label')) id = id.slice(0, -(':label'.length));
+      const rest = pickedName.slice('space:'.length);
+      // Extract bare id before any suffix like :label or :wall:...
+      id = rest.split(':')[0];
       name = 'space:' + id; // normalize for double-click detection
     } else if (pickedName.startsWith('cavern:')) {
       id = pickedName.slice('cavern:'.length);
@@ -1376,6 +1412,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     Log.log('UI', 'Select space(s)', { selection: Array.from(state.selection) });
     rebuildHalos();
     ensureRotWidget(); ensureMoveWidget(); disposeLiveIntersections();
+    try { window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: Array.from(state.selection) } })); } catch {}
 
     // Handle double-click/tap with adjustable threshold
     const now = performance.now();
@@ -1454,16 +1491,23 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     try { renderDbView(state.barrow); } catch {}
 
     function activate(tabId) {
-      editPane.classList.toggle('active', tabId === 'tab-edit');
-      dbPane.classList.toggle('active', tabId === 'tab-db');
-      settingsPane.classList.toggle('active', tabId === 'tab-settings');
-      tabEditBtn.classList.toggle('active', tabId === 'tab-edit');
-      tabDbBtn.classList.toggle('active', tabId === 'tab-db');
-      tabSettingsBtn.classList.toggle('active', tabId === 'tab-settings');
+      try {
+        // Toggle all panes generically
+        const panes = panelContent.querySelectorAll('.tab-pane');
+        panes.forEach(p => p.classList.toggle('active', p.id === tabId));
+        // Toggle all tabs generically
+        const tabs = tabsBar.querySelectorAll('.tab');
+        tabs.forEach(b => b.classList.toggle('active', b.dataset.tab === tabId));
+        // Notify listeners about tab change
+        try { window.dispatchEvent(new CustomEvent('dw:tabChange', { detail: { id: tabId } })); } catch {}
+      } catch {}
     }
-    tabEditBtn.addEventListener('click', () => activate('tab-edit'));
-    tabDbBtn.addEventListener('click', () => activate('tab-db'));
-    tabSettingsBtn.addEventListener('click', () => activate('tab-settings'));
+    // Generic delegation: any button with class 'tab' switches panes
+    tabsBar.addEventListener('click', (e) => {
+      const btn = e.target && e.target.closest ? e.target.closest('.tab') : null;
+      if (!btn || !btn.dataset || !btn.dataset.tab) return;
+      activate(btn.dataset.tab);
+    });
   })();
 
   // ——————————— DB edit events ———————————
@@ -1511,7 +1555,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       const mesh = (state?.built?.spaces || []).find(x => x.id === id)?.mesh || scene.getMeshByName(`space:${id}`);
       if (mesh) camApi.centerOnMesh(mesh);
       // Update selection to the clicked space and refresh halos
-      try { state.selection.clear(); state.selection.add(id); rebuildHalos(); ensureRotWidget(); ensureMoveWidget(); } catch {}
+      try { state.selection.clear(); state.selection.add(id); rebuildHalos(); ensureRotWidget(); ensureMoveWidget(); window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: Array.from(state.selection) } })); } catch {}
       Log.log('UI', 'DB row center', { id });
     } catch (err) { Log.log('ERROR', 'Center from DB failed', { id, error: String(err) }); }
   });
