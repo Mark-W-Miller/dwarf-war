@@ -137,8 +137,9 @@ export function buildSceneFromBarrow(scene, barrow) {
 
         // Base meshes for walls and rock
         const wallBase = BABYLON.MeshBuilder.CreateBox(`space:${s.id}:vox:wall`, { size: 1 }, scene);
-        wallBase.isPickable = false; // Do not parent so voxels stay world-aligned
-        try { wallBase.position.set(s.origin?.x||0, s.origin?.y||0, s.origin?.z||0); } catch {}
+        wallBase.isPickable = false; // DDA handles picking; keep base offscreen (identity rotation)
+        const HIDE_OFF = 100000; // move base far away; compensate in instance transforms
+        try { wallBase.position.set(HIDE_OFF, HIDE_OFF, HIDE_OFF); wallBase.rotationQuaternion = BABYLON.Quaternion.Identity(); } catch {}
         const wallMat = new BABYLON.StandardMaterial(`space:${s.id}:vox:wall:mat`, scene);
         wallMat.diffuseColor = new BABYLON.Color3(0.78, 0.78, 0.80);
         wallMat.emissiveColor = new BABYLON.Color3(0.22, 0.22, 0.24);
@@ -151,8 +152,8 @@ export function buildSceneFromBarrow(scene, barrow) {
         built.voxParts.push(wallBase);
 
         const rockBase = BABYLON.MeshBuilder.CreateBox(`space:${s.id}:vox:rock`, { size: 1 }, scene);
-        rockBase.isPickable = false; // Do not parent so voxels stay world-aligned
-        try { rockBase.position.set(s.origin?.x||0, s.origin?.y||0, s.origin?.z||0); } catch {}
+        rockBase.isPickable = false; // DDA handles picking; keep base offscreen (identity rotation)
+        try { rockBase.position.set(HIDE_OFF, HIDE_OFF, HIDE_OFF); rockBase.rotationQuaternion = BABYLON.Quaternion.Identity(); } catch {}
         const rockMat = new BABYLON.StandardMaterial(`space:${s.id}:vox:rock:mat`, scene);
         rockMat.diffuseColor = new BABYLON.Color3(0.22, 0.22, 0.24);
         rockMat.emissiveColor = new BABYLON.Color3(0.08, 0.08, 0.10);
@@ -169,18 +170,40 @@ export function buildSceneFromBarrow(scene, barrow) {
         const centerX = (nx * res) / 2;
         const centerY = (ny * res) / 2;
         const centerZ = (nz * res) / 2;
+        // Optional slicing: hide top N voxel layers (expose interior from top down)
+        let hideTop = 0;
+        try { hideTop = Math.max(0, Math.min(ny, Math.floor(Number(s.voxExposeTop || 0) || 0))); } catch { hideTop = 0; }
+        const yCut = ny - hideTop; // show y in [0, yCut-1]
+        // Rotation for this space (apply per-instance)
+        let q = BABYLON.Quaternion.Identity();
+        try {
+          const rx = Number(s.rotation?.x ?? 0) || 0;
+          const ry = (s.rotation && typeof s.rotation.y === 'number') ? Number(s.rotation.y) : Number(s.rotY || 0) || 0;
+          const rz = Number(s.rotation?.z ?? 0) || 0;
+          q = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz);
+        } catch {}
+        const rotM = (() => { try { return BABYLON.Matrix.Compose(new BABYLON.Vector3(1,1,1), q, BABYLON.Vector3.Zero()); } catch { return BABYLON.Matrix.Identity(); } })();
+        const originVec = new BABYLON.Vector3(s.origin?.x||0, s.origin?.y||0, s.origin?.z||0);
+        const hideOffVec = new BABYLON.Vector3(HIDE_OFF, HIDE_OFF, HIDE_OFF);
         for (let z = 0; z < nz; z++) {
           for (let y = 0; y < ny; y++) {
+            if (y >= yCut) continue;
             for (let x = 0; x < nx; x++) {
               const idx = x + nx * (y + ny * z);
               const v = data[idx];
               if (v !== VoxelType.Wall && v !== VoxelType.Rock) continue;
-              const px = (x + 0.5) * res - centerX;
-              const py = (y + 0.5) * res - centerY;
-              const pz = (z + 0.5) * res - centerZ;
-              const t = BABYLON.Vector3.Zero(); t.x = px; t.y = py; t.z = pz;
+              // Local offset in voxel space (centered)
+              const lx = (x + 0.5) * res - centerX;
+              const ly = (y + 0.5) * res - centerY;
+              const lz = (z + 0.5) * res - centerZ;
+              const local = new BABYLON.Vector3(lx, ly, lz);
+              // Rotate local offset to world, then translate by origin
+              const worldOff = BABYLON.Vector3.TransformCoordinates(local, rotM);
+              const worldCenter = originVec.add(worldOff);
+              // Compensate base offset so instances land at worldCenter
+              const t = worldCenter.subtract(hideOffVec);
               const sc = new BABYLON.Vector3(sx, sy, sz);
-              const m = BABYLON.Matrix.Compose(sc, BABYLON.Quaternion.Identity(), t);
+              const m = BABYLON.Matrix.Compose(sc, q, t);
               const target = (v === VoxelType.Wall) ? wallMatrices : rockMatrices;
               for (let k = 0; k < 16; k++) target.push(m.m[k]);
             }
@@ -191,6 +214,9 @@ export function buildSceneFromBarrow(scene, barrow) {
 	  if (rockMatrices.length > 0) rockBase.thinInstanceSetBuffer('matrix', new Float32Array(rockMatrices), 16, true);
 	  vLog('builder:vox:instances', { id: s.id, wall: wallMatrices.length/16|0, rock: rockMatrices.length/16|0, res });
 	} catch (e) { errLog('builder:vox:thinInstances', e); }
+        // Refresh bounding info to ensure instances are not culled
+        try { wallBase.thinInstanceRefreshBoundingInfo?.(); } catch {}
+        try { rockBase.thinInstanceRefreshBoundingInfo?.(); } catch {}
       } else {
         // Material by type
         const mat = new BABYLON.StandardMaterial(`space:${s.id}:mat`, scene);

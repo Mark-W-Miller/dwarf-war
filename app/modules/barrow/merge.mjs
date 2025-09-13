@@ -48,7 +48,7 @@ function Vox_insideBoxDetailed(s, wx, wy, wz) {
       const ry = (s.rotation && typeof s.rotation.y === 'number') ? s.rotation.y : (typeof s.rotY === 'number' ? s.rotY : 0);
       const rz = (s.rotation && typeof s.rotation.z === 'number') ? s.rotation.z : 0;
       const q = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz);
-      const rot = BABYLON.Matrix.FromQuaternion(q);
+      const rot = (() => { try { return BABYLON.Matrix.Compose(new BABYLON.Vector3(1,1,1), q, BABYLON.Vector3.Zero()); } catch { return BABYLON.Matrix.Identity(); } })();
       const ux = BABYLON.Vector3.TransformNormal(new BABYLON.Vector3(1,0,0), rot).normalize();
       const uy = BABYLON.Vector3.TransformNormal(new BABYLON.Vector3(0,1,0), rot).normalize();
       const uz = BABYLON.Vector3.TransformNormal(new BABYLON.Vector3(0,0,1), rot).normalize();
@@ -182,7 +182,7 @@ export function mergeOverlappingSpaces(barrow, seedId) {
         const ry = (s.rotation && typeof s.rotation.y === 'number') ? s.rotation.y : (typeof s.rotY === 'number' ? s.rotY : 0);
         const rz = (s.rotation && typeof s.rotation.z === 'number') ? s.rotation.z : 0;
         const q = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz);
-        const rot = BABYLON.Matrix.FromQuaternion(q);
+        const rot = (() => { try { return BABYLON.Matrix.Compose(new BABYLON.Vector3(1,1,1), q, BABYLON.Vector3.Zero()); } catch { return BABYLON.Matrix.Identity(); } })();
         const ux = BABYLON.Vector3.TransformNormal(new BABYLON.Vector3(1,0,0), rot).normalize();
         const uy = BABYLON.Vector3.TransformNormal(new BABYLON.Vector3(0,1,0), rot).normalize();
         const uz = BABYLON.Vector3.TransformNormal(new BABYLON.Vector3(0,0,1), rot).normalize();
@@ -246,7 +246,7 @@ export function mergeOverlappingSpaces(barrow, seedId) {
               const iz = Math.floor((lz + halfZ) / sres);
               if (ix >= 0 && iy >= 0 && iz >= 0 && ix < sx && iy < sy && iz < sz) {
                 const v = vox.data[ix + sx*(iy + sy*iz)];
-                if (v === VoxelType.Wall || v === VoxelType.Rock) { inside = true; break; }
+                if (v !== VoxelType.Uninstantiated) { inside = true; break; }
               }
             } else {
               // Test with box/sphere membership using the same transform choice
@@ -277,27 +277,19 @@ export function mergeOverlappingSpaces(barrow, seedId) {
   }
   // Build voxel data with walls on the surface (6-neighborhood)
   const data = new Array(nTot);
-  for (let i = 0; i < nTot; i++) data[i] = VoxelType.Empty;
-  for (let z = 0; z < nz; z++) {
-    for (let y = 0; y < ny; y++) {
-      for (let x = 0; x < nx; x++) {
-        if (!occ[idx(x,y,z)]) continue;
-        data[idx(x,y,z)] = VoxelType.Rock;
-      }
-    }
-  }
+  for (let i = 0; i < nTot; i++) data[i] = VoxelType.Uninstantiated;
   const dirs = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];
   for (let z = 0; z < nz; z++) {
     for (let y = 0; y < ny; y++) {
       for (let x = 0; x < nx; x++) {
-        if (data[idx(x,y,z)] !== VoxelType.Rock) continue;
+        if (!occ[idx(x,y,z)]) continue;
         let surface = false;
         for (const [dx,dy,dz] of dirs) {
           const nx1 = x + dx, ny1 = y + dy, nz1 = z + dz;
           if (nx1 < 0 || ny1 < 0 || nz1 < 0 || nx1 >= nx || ny1 >= ny || nz1 >= nz) { surface = true; break; }
           if (!occ[idx(nx1,ny1,nz1)]) { surface = true; break; }
         }
-        if (surface) data[idx(x,y,z)] = VoxelType.Wall;
+        data[idx(x,y,z)] = surface ? VoxelType.Wall : VoxelType.Empty;
       }
     }
   }
@@ -479,7 +471,7 @@ export async function mergeOverlappingSpacesAsync(barrow, seedId, opts = {}) {
             const iz = Math.floor((lz + halfZ) / sres);
             if (ix >= 0 && iy >= 0 && iz >= 0 && ix < sx && iy < sy && iz < sz) {
               const v = vox.data[ix + sx*(iy + sy*iz)];
-              if (v === VoxelType.Wall || v === VoxelType.Rock) { inside = true; break; }
+              if (v !== VoxelType.Uninstantiated) { inside = true; break; }
             }
           } else {
             if (Vox_spaceContains(s, wx, wy, wz)) { inside = true; break; }
@@ -499,20 +491,19 @@ export async function mergeOverlappingSpacesAsync(barrow, seedId, opts = {}) {
   // Proceed to build voxel map even for single-seed case
 
   // Build data maps
-  const data = new Array(nTot); for (let i = 0; i < nTot; i++) data[i] = VoxelType.Empty;
-  for (let z = 0; z < nz; z++) for (let y = 0; y < ny; y++) for (let x = 0; x < nx; x++) if (occ[idx(x,y,z)]) data[idx(x,y,z)] = VoxelType.Rock;
+  const data = new Array(nTot); for (let i = 0; i < nTot; i++) data[i] = VoxelType.Uninstantiated;
   const dirs = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];
   for (let z = 0; z < nz; z++) {
     for (let y = 0; y < ny; y++) {
       for (let x = 0; x < nx; x++) {
-        if (data[idx(x,y,z)] !== VoxelType.Rock) continue;
+        if (!occ[idx(x,y,z)]) continue;
         let surface = false;
         for (const [dx,dy,dz] of dirs) {
           const nx1 = x + dx, ny1 = y + dy, nz1 = z + dz;
           if (nx1 < 0 || ny1 < 0 || nz1 < 0 || nx1 >= nx || ny1 >= ny || nz1 >= nz) { surface = true; break; }
           if (!occ[idx(nx1,ny1,nz1)]) { surface = true; break; }
         }
-        if (surface) data[idx(x,y,z)] = VoxelType.Wall;
+        data[idx(x,y,z)] = surface ? VoxelType.Wall : VoxelType.Empty;
       }
     }
   }

@@ -24,6 +24,7 @@ export function initVoxelTab(panelContent, api) {
   voxPane.appendChild(row1);
 
   const row2 = document.createElement('div'); row2.className = 'row';
+  const mergeBtn = document.createElement('button'); mergeBtn.className = 'btn'; mergeBtn.textContent = 'Merge Overlapping Spaces'; row2.appendChild(mergeBtn);
   const fillBtn = document.createElement('button'); fillBtn.className = 'btn'; fillBtn.textContent = 'Fill Space Voxels = Rock'; row2.appendChild(fillBtn);
   voxPane.appendChild(row2);
 
@@ -67,6 +68,39 @@ export function initVoxelTab(panelContent, api) {
       makeRow('dimensions', `${vx} × ${vy} × ${vz}`);
       makeRow('resolution', String(s.vox.res || s.res || api.state.barrow?.meta?.voxelSize || 1));
       try { const len = Array.isArray(s.vox.data) ? s.vox.data.length : (s.vox.data?.rle?.length || 0); makeRow('data (len)', String(len)); } catch {}
+
+      // Expose control: hide top N layers (slice from top down)
+      const exposeRow = document.createElement('div'); exposeRow.className = 'row'; exposeRow.style.alignItems = 'center'; exposeRow.style.gap = '8px';
+      const label = document.createElement('b'); label.textContent = 'Expose (top layers):'; label.style.minWidth = '120px';
+      const range = document.createElement('input'); range.type = 'range'; range.min = '0'; range.max = String(Math.max(0, vy)); range.step = '1'; range.value = String(Math.max(0, Math.min(vy, Number(s.voxExposeTop || 0)))); range.style.flex = '1';
+      const num = document.createElement('input'); num.type = 'number'; num.min = '0'; num.max = String(Math.max(0, vy)); num.step = '1'; num.value = String(Math.max(0, Math.min(vy, Number(s.voxExposeTop || 0)))); num.style.width = '72px';
+      const reset = document.createElement('button'); reset.className = 'btn'; reset.textContent = 'Reset';
+      exposeRow.appendChild(label); exposeRow.appendChild(range); exposeRow.appendChild(num); exposeRow.appendChild(reset);
+      selContent.appendChild(exposeRow);
+
+      let timer = null; const schedule = () => { if (timer) clearTimeout(timer); timer = setTimeout(() => { try { api.rebuildScene?.(); } catch {}; timer = null; }, 60); };
+      const clamp = (v) => Math.max(0, Math.min(vy, Math.floor(Number(v)||0)));
+      const update = (v, doRebuild = false) => { const nv = clamp(v); range.value = String(nv); num.value = String(nv); try { s.voxExposeTop = nv; } catch {}; if (doRebuild) schedule(); };
+      range.addEventListener('input', () => update(range.value, true));
+      num.addEventListener('input', () => update(num.value, true));
+      reset.addEventListener('click', () => update(0, true));
+
+      // Last picked voxel info (click in viewport)
+      const pickInfoRow = document.createElement('div'); pickInfoRow.className = 'row';
+      const pickLabel = document.createElement('b'); pickLabel.textContent = 'Voxel Pick:'; pickLabel.style.minWidth = '120px';
+      const pickSpan = document.createElement('span');
+      const vName = (val) => { try { return Object.keys(VoxelType).find(k => VoxelType[k] === val) || String(val); } catch { return String(val); } };
+      const renderPick = () => {
+        const p = s.voxPick; // { x,y,z,v }
+        if (p && typeof p.x === 'number' && typeof p.y === 'number' && typeof p.z === 'number') {
+          pickSpan.textContent = `(${p.x}, ${p.y}, ${p.z}) = ${vName(p.v)}`;
+        } else {
+          pickSpan.textContent = 'Click a voxel in the viewport';
+        }
+      };
+      renderPick();
+      pickInfoRow.appendChild(pickLabel); pickInfoRow.appendChild(pickSpan);
+      selContent.appendChild(pickInfoRow);
     } else {
       selContent.appendChild(document.createTextNode('No voxel data for this space.'));
     }
@@ -76,47 +110,57 @@ export function initVoxelTab(panelContent, api) {
     const spaces = getSelectedSpaces(); if (!spaces.length) return;
     const t = Math.max(1, Math.floor(Number(tInput.value || '1')));
     Log.log('UI', 'Voxel bake', { sel: spaces.map(s => s?.id), wallThickness: t });
-    let lastKeep = null;
     for (const s of spaces) {
       try {
         const vox = bakeHollowContainer(s, { wallThickness: t });
         s.voxelized = 1; // prevent transforms
         s.vox = vox; // attach baked voxels to space
-        // Merge with all overlapping spaces into a single Carddon union (voxed)
-        try {
-          const res = s.res || (api.state.barrow?.meta?.voxelSize || 1);
-          const showDots = !!scanDotsCb?.checked;
-          Log.log('DEBUG', 'mergeAsync:invoke', { seed: s.id });
-          const debugCfg = {
-            chunk: 256,
-            onStart: ({ min, max, res, nx, ny, nz }) => { try { Log.log('DEBUG', 'Union scan start', { min, max, res, nx, ny, nz }); } catch {} },
-            onLayer: (y, c) => { try { Log.log('DEBUG', 'Scan layer', { y, inside: c?.inside||0, outside: c?.outside||0 }); } catch {} },
-            onEnd: () => { try { if (showDots) api.debug?.flushVoxelScanPoints?.(); Log.log('DEBUG', 'Union scan end', {}); } catch {} },
-            showObb: (corners) => { try { api.debug?.showObbDebug?.(corners); } catch {} }
-          };
-          if (showDots) {
-            try { api.debug?.startVoxelScanDebug?.(res); } catch {}
-            debugCfg.onTestInside = (wx, wy, wz) => { try { api.debug?.addVoxelScanPointInside?.(wx, wy, wz); } catch {} };
-            debugCfg.onTestOutside = (wx, wy, wz) => { try { api.debug?.addVoxelScanPointOutside?.(wx, wy, wz); } catch {} };
-            debugCfg.flush = () => { try { api.debug?.flushVoxelScanPoints?.(); } catch {} };
-          }
-          const keepId = await mergeOverlappingSpacesAsync(api.state.barrow, s.id, { debug: debugCfg });
-          Log.log('DEBUG', 'mergeAsync:returned', { keepId });
-          // Keep dots on screen for inspection; provide a Clear button below.
-          if (keepId && keepId !== s.id) {
-            Log.log('UI', 'Merged overlapping spaces', { keepId, from: s.id });
-          }
-          if (keepId) lastKeep = keepId; else lastKeep = s.id;
-        } catch {}
       } catch {}
     }
-    // Update selection to the last kept id
-    try { if (lastKeep) { api.state.selection.clear(); api.state.selection.add(lastKeep); } } catch {}
     try { api.saveBarrow(api.state.barrow); api.snapshot(api.state.barrow); } catch {}
     try { api.renderDbView(api.state.barrow); } catch {}
     try { api.rebuildScene?.(); } catch {}
     try { api.scheduleGridUpdate?.(); } catch {}
     try { window.dispatchEvent(new CustomEvent('dw:transform', { detail: { kind: 'voxel-bake', sel: spaces.map(s => s.id), wallThickness: t } })); } catch {}
+  });
+
+  // New: explicit Merge button handler (union merge of overlapping spaces)
+  mergeBtn.addEventListener('click', async () => {
+    const spaces = getSelectedSpaces(); if (!spaces.length) return;
+    // Use the first selected space as the seed for overlap union
+    const seed = spaces[0];
+    Log.log('UI', 'Voxel merge', { sel: spaces.map(s => s?.id), seed: seed?.id });
+    let keepId = null;
+    try {
+      const res = seed.res || (api.state.barrow?.meta?.voxelSize || 1);
+      const showDots = !!scanDotsCb?.checked;
+      Log.log('DEBUG', 'mergeAsync:invoke', { seed: seed.id });
+      const debugCfg = {
+        chunk: 256,
+        onStart: ({ min, max, res, nx, ny, nz }) => { try { Log.log('DEBUG', 'Union scan start', { min, max, res, nx, ny, nz }); } catch {} },
+        onLayer: (y, c) => { try { Log.log('DEBUG', 'Scan layer', { y, inside: c?.inside||0, outside: c?.outside||0 }); } catch {} },
+        onEnd: () => { try { if (showDots) api.debug?.flushVoxelScanPoints?.(); Log.log('DEBUG', 'Union scan end', {}); } catch {} },
+        showObb: (corners) => { try { api.debug?.showObbDebug?.(corners); } catch {} }
+      };
+      if (showDots) {
+        try { api.debug?.startVoxelScanDebug?.(res); } catch {}
+        debugCfg.onTestInside = (wx, wy, wz) => { try { api.debug?.addVoxelScanPointInside?.(wx, wy, wz); } catch {} };
+        debugCfg.onTestOutside = (wx, wy, wz) => { try { api.debug?.addVoxelScanPointOutside?.(wx, wy, wz); } catch {} };
+        debugCfg.flush = () => { try { api.debug?.flushVoxelScanPoints?.(); } catch {} };
+      }
+      keepId = await mergeOverlappingSpacesAsync(api.state.barrow, seed.id, { debug: debugCfg });
+      Log.log('DEBUG', 'mergeAsync:returned', { keepId });
+      if (keepId && keepId !== seed.id) {
+        Log.log('UI', 'Merged overlapping spaces', { keepId, from: seed.id });
+      }
+    } catch {}
+    // Update selection to the kept id (or seed)
+    try { const id = keepId || seed.id; api.state.selection.clear(); api.state.selection.add(id); } catch {}
+    try { api.saveBarrow(api.state.barrow); api.snapshot(api.state.barrow); } catch {}
+    try { api.renderDbView(api.state.barrow); } catch {}
+    try { api.rebuildScene?.(); } catch {}
+    try { api.scheduleGridUpdate?.(); } catch {}
+    try { window.dispatchEvent(new CustomEvent('dw:transform', { detail: { kind: 'voxel-merge', sel: [seed.id], keepId: keepId||seed.id } })); } catch {}
   });
 
   // Add a Clear Dots button for debug
@@ -179,7 +223,7 @@ export function initVoxelTab(panelContent, api) {
   });
 
   // Warn/log when buttons are clicked with no selection
-  [bakeBtn, fillBtn].forEach(btn => {
+  [bakeBtn, fillBtn, mergeBtn].forEach(btn => {
     btn.addEventListener('click', () => {
       try {
         const hasSel = Array.isArray(api?.state?.selection) ? (api.state.selection.size > 0) : (Array.from(api?.state?.selection || []).length > 0);
@@ -193,5 +237,6 @@ export function initVoxelTab(panelContent, api) {
   window.addEventListener('dw:dbEdit', renderSelection);
   window.addEventListener('dw:transform', renderSelection);
   window.addEventListener('dw:selectionChange', renderSelection);
+  window.addEventListener('dw:voxelPick', renderSelection);
   window.addEventListener('dw:tabChange', (e) => { if (e.detail && e.detail.id === 'tab-vox') renderSelection(); });
 }

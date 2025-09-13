@@ -1,6 +1,7 @@
 import { makeDefaultBarrow, mergeInstructions, layoutBarrow } from '../barrow/schema.mjs';
 import { loadBarrow, saveBarrow, snapshot, cloneForSave, inflateAfterLoad } from '../barrow/store.mjs';
 import { buildSceneFromBarrow, disposeBuilt } from '../barrow/builder.mjs';
+import { VoxelType, decompressVox } from '../voxels/voxelize.mjs';
 import { Log } from '../util/log.mjs';
 import { renderDbView } from './dbView.mjs';
 
@@ -437,6 +438,49 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     addRepeat(tzPlus,  () => moveSelection(0,0, step()));
   }
   bindTransformButtons();
+
+  // ——————————— Size fields ↔ selection binding ———————————
+  function getSelectedSpaces() {
+    try { const ids = Array.from(state.selection || []); const byId = new Map((state.barrow.spaces||[]).map(s => [s.id, s])); return ids.map(id => byId.get(id)).filter(Boolean); } catch { return []; }
+  }
+  function populateSizeFieldsFromSelection() {
+    const sel = getSelectedSpaces(); if (!sel.length) return;
+    // Pick the first non-voxelized space
+    const s = sel.find(x => !x.vox) || sel[0]; if (!s) return;
+    if (sizeXEl) sizeXEl.value = String(Math.max(1, Math.round(Number(s.size?.x || 1))));
+    if (sizeYEl) sizeYEl.value = String(Math.max(1, Math.round(Number(s.size?.y || 1))));
+    if (sizeZEl) sizeZEl.value = String(Math.max(1, Math.round(Number(s.size?.z || 1))));
+  }
+  // Update fields on selection & DB edits
+  window.addEventListener('dw:selectionChange', populateSizeFieldsFromSelection);
+  window.addEventListener('dw:dbEdit', populateSizeFieldsFromSelection);
+  window.addEventListener('dw:transform', populateSizeFieldsFromSelection);
+
+  function applySizeField(axis, value) {
+    const v = Math.max(1, Math.round(Number(value || '')));
+    const sel = getSelectedSpaces(); if (!sel.length) return;
+    let changed = false;
+    for (const s of sel) {
+      if (s.vox) continue; // do not mutate voxelized spaces via simple size fields
+      const cur = Number(s.size?.[axis] || 0);
+      if (!s.size) s.size = { x: 1, y: 1, z: 1 };
+      if (cur !== v) { s.size[axis] = v; changed = true; }
+    }
+    if (changed) {
+      try { saveBarrow(state.barrow); snapshot(state.barrow); } catch {}
+      try { rebuildScene(); } catch {}
+      try { renderDbView(state.barrow); } catch {}
+      try { scheduleGridUpdate(); } catch {}
+      try { window.dispatchEvent(new CustomEvent('dw:transform', { detail: { kind: 'resize', axis, value: v, selection: Array.from(state.selection) } })); } catch {}
+    }
+  }
+  sizeXEl?.addEventListener('change', () => applySizeField('x', sizeXEl.value));
+  sizeYEl?.addEventListener('change', () => applySizeField('y', sizeYEl.value));
+  sizeZEl?.addEventListener('change', () => applySizeField('z', sizeZEl.value));
+  // Also respond on input for quicker feedback
+  sizeXEl?.addEventListener('input', () => applySizeField('x', sizeXEl.value));
+  sizeYEl?.addEventListener('input', () => applySizeField('y', sizeYEl.value));
+  sizeZEl?.addEventListener('input', () => applySizeField('z', sizeZEl.value));
 
   // ——————————— Rotation widget (Y-axis) ———————————
   let rotWidget = { meshes: { x: null, y: null, z: null }, mats: { x: null, y: null, z: null }, axis: 'y', activeAxis: null, spaceId: null, dragging: false, preDrag: false, downX: 0, downY: 0, startAngle: 0, startRot: 0, lastRot: 0, baseDiam: { x: 0, y: 0, z: 0 }, startQuat: null, axisLocal: null, refLocal: null, group: false, groupIDs: [], groupCenter: null, groupNode: null, startById: null, axisWorld: null, refWorld: null, groupKey: '', mStartX: 0, mStartY: 0 };
@@ -1444,6 +1488,90 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     }
     lastPickName = name;
     lastPickTime = now;
+
+    // If a voxelized space is selected and clicked, compute the voxel indices at the picked point and emit an event
+    try {
+      if (name.startsWith('space:')) {
+        const s = (state?.barrow?.spaces || []).find(x => x && x.id === id);
+        if (s && s.vox && s.vox.size) {
+          const vox = decompressVox(s.vox);
+          const nx = Math.max(1, vox.size?.x || 1);
+          const ny = Math.max(1, vox.size?.y || 1);
+          const nz = Math.max(1, vox.size?.z || 1);
+          const res = vox.res || s.res || (state?.barrow?.meta?.voxelSize || 1);
+          // Ray-grid DDA: walk cells along camera ray, skipping hidden (exposed) layers and empty/uninstantiated
+          // Transform ray into space-local coordinates (voxel axes)
+          const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), camera);
+          const roW = ray.origin.clone(), rdW = ray.direction.clone();
+          const cx = s.origin?.x||0, cy = s.origin?.y||0, cz = s.origin?.z||0;
+          let q = BABYLON.Quaternion.Identity();
+          try {
+            const rx = Number(s.rotation?.x ?? 0) || 0;
+            const ry = (s.rotation && typeof s.rotation.y === 'number') ? Number(s.rotation.y) : Number(s.rotY || 0) || 0;
+            const rz = Number(s.rotation?.z ?? 0) || 0;
+            q = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz);
+          } catch {}
+          const qInv = BABYLON.Quaternion.Inverse(q);
+          const rotInv = (() => { try { return BABYLON.Matrix.Compose(new BABYLON.Vector3(1,1,1), qInv, BABYLON.Vector3.Zero()); } catch { return BABYLON.Matrix.Identity(); } })();
+          const roL = BABYLON.Vector3.TransformCoordinates(roW.subtract(new BABYLON.Vector3(cx, cy, cz)), rotInv);
+          const rdL = BABYLON.Vector3.TransformNormal(rdW, rotInv);
+          // Local AABB in voxel space
+          const minX = -(nx * res) / 2, maxX = +(nx * res) / 2;
+          const minY = -(ny * res) / 2, maxY = +(ny * res) / 2;
+          const minZ = -(nz * res) / 2, maxZ = +(nz * res) / 2;
+          const inv = (v) => (Math.abs(v) < 1e-12 ? Infinity : 1 / v);
+          const tx1 = (minX - roL.x) * inv(rdL.x), tx2 = (maxX - roL.x) * inv(rdL.x);
+          const ty1 = (minY - roL.y) * inv(rdL.y), ty2 = (maxY - roL.y) * inv(rdL.y);
+          const tz1 = (minZ - roL.z) * inv(rdL.z), tz2 = (maxZ - roL.z) * inv(rdL.z);
+          const tmin = Math.max(Math.min(tx1, tx2), Math.min(ty1, ty2), Math.min(tz1, tz2));
+          const tmax = Math.min(Math.max(tx1, tx2), Math.max(ty1, ty2), Math.max(tz1, tz2));
+          if (!(tmax >= Math.max(0, tmin))) { dPick('voxelPick:rayMissAABB', {}); return; }
+          const EPS = 1e-6;
+          let t = Math.max(tmin, 0) + EPS;
+          const pos = new BABYLON.Vector3(roL.x + rdL.x * t, roL.y + rdL.y * t, roL.z + rdL.z * t);
+          const toIdx = (x, y, z) => ({
+            ix: Math.min(nx-1, Math.max(0, Math.floor((x - minX) / res))),
+            iy: Math.min(ny-1, Math.max(0, Math.floor((y - minY) / res))),
+            iz: Math.min(nz-1, Math.max(0, Math.floor((z - minZ) / res))),
+          });
+          let { ix, iy, iz } = toIdx(pos.x, pos.y, pos.z);
+          const stepX = (rdL.x > 0) ? 1 : (rdL.x < 0 ? -1 : 0);
+          const stepY = (rdL.y > 0) ? 1 : (rdL.y < 0 ? -1 : 0);
+          const stepZ = (rdL.z > 0) ? 1 : (rdL.z < 0 ? -1 : 0);
+          const nextBound = (i, step, min) => min + (i + (step > 0 ? 1 : 0)) * res;
+          let tMaxX = (stepX !== 0) ? (nextBound(ix, stepX, minX) - roL.x) / rdL.x : Infinity;
+          let tMaxY = (stepY !== 0) ? (nextBound(iy, stepY, minY) - roL.y) / rdL.y : Infinity;
+          let tMaxZ = (stepZ !== 0) ? (nextBound(iz, stepZ, minZ) - roL.z) / rdL.z : Infinity;
+          const tDeltaX = (stepX !== 0) ? Math.abs(res / rdL.x) : Infinity;
+          const tDeltaY = (stepY !== 0) ? Math.abs(res / rdL.y) : Infinity;
+          const tDeltaZ = (stepZ !== 0) ? Math.abs(res / rdL.z) : Infinity;
+          // Respect expose-top slicing: ignore cells with y >= yCut
+          let hideTop = 0; try { hideTop = Math.max(0, Math.min(ny, Math.floor(Number(s.voxExposeTop || 0) || 0))); } catch {}
+          const yCut = ny - hideTop;
+          const data = Array.isArray(vox.data) ? vox.data : [];
+          let found = false;
+          let guard = 0, guardMax = (nx + ny + nz) * 3 + 10;
+          while (t <= tmax + EPS && ix >= 0 && iy >= 0 && iz >= 0 && ix < nx && iy < ny && iz < nz && guard++ < guardMax) {
+            if (iy < yCut) {
+              const flat = ix + nx * (iy + ny * iz);
+              const v = data[flat] ?? VoxelType.Uninstantiated;
+              if (v !== VoxelType.Uninstantiated && v !== VoxelType.Empty) {
+                try { s.voxPick = { x: ix, y: iy, z: iz, v }; } catch {}
+                try { window.dispatchEvent(new CustomEvent('dw:voxelPick', { detail: { id: s.id, i: ix, j: iy, k: iz, v } })); } catch {}
+                dPick('voxelPick:DDA', { id: s.id, ix, iy, iz, v });
+                found = true;
+                break;
+              }
+            }
+            // advance to next cell boundary
+            if (tMaxX <= tMaxY && tMaxX <= tMaxZ) { ix += stepX; t = tMaxX + EPS; tMaxX += tDeltaX; }
+            else if (tMaxY <= tMaxX && tMaxY <= tMaxZ) { iy += stepY; t = tMaxY + EPS; tMaxY += tDeltaY; }
+            else { iz += stepZ; t = tMaxZ + EPS; tMaxZ += tDeltaZ; }
+          }
+          if (!found) dPick('voxelPick:notFound', { id: s.id });
+        }
+      }
+    } catch (e) { logErr('EH:voxelPick', e); }
   });
 
   // ——————————— Window resize ———————————
@@ -1569,13 +1697,21 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
   // ——————————— DB navigation and centering ———————————
   // Center camera when a DB row (space summary) is clicked
   window.addEventListener('dw:dbRowClick', (e) => {
-    const { type, id } = e.detail || {};
+    const { type, id, shiftKey } = e.detail || {};
     if (type !== 'space' || !id) return;
     try {
       const mesh = (state?.built?.spaces || []).find(x => x.id === id)?.mesh || scene.getMeshByName(`space:${id}`);
       if (mesh) camApi.centerOnMesh(mesh);
-      // Update selection to the clicked space and refresh halos
-      try { state.selection.clear(); state.selection.add(id); rebuildHalos(); ensureRotWidget(); ensureMoveWidget(); window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: Array.from(state.selection) } })); } catch {}
+      // Update selection to the clicked space and refresh halos (support shift to toggle)
+      try {
+        if (shiftKey) {
+          if (state.selection.has(id)) state.selection.delete(id); else state.selection.add(id);
+        } else {
+          state.selection.clear(); state.selection.add(id);
+        }
+        rebuildHalos(); ensureRotWidget(); ensureMoveWidget();
+        window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: Array.from(state.selection) } }));
+      } catch {}
       Log.log('UI', 'DB row center', { id });
     } catch (err) { Log.log('ERROR', 'Center from DB failed', { id, error: String(err) }); }
   });

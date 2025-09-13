@@ -1,7 +1,8 @@
 // Simple voxelization helpers for spaces
 
-// Type ids (initial): 0=Rock (default), 1=Empty, 2=Wall
-export const VoxelType = { Rock: 0, Empty: 1, Wall: 2 };
+// Type ids:
+// 0=Uninstantiated (U), 1=Empty (E), 2=Rock (R), 3=Wall (W)
+export const VoxelType = { Uninstantiated: 0, Empty: 1, Rock: 2, Wall: 3 };
 
 // Bake a hollow container: shell = Wall (thickness t voxels), interior = Empty
 // Space size fields are in voxels already; res is voxel size in world units.
@@ -88,4 +89,50 @@ export function decompressVox(vox) {
     return clone;
   }
   return vox;
+}
+
+// ——————————— Merge helpers ———————————
+// Merge two voxel values according to rules:
+// U+U=U; U+Any=Any; E+Any=E (both ways); R+R=R; W+W=W; R+W=W (either order)
+export function mergeVoxelValues(a, b) {
+  const U = VoxelType.Uninstantiated, E = VoxelType.Empty, R = VoxelType.Rock, W = VoxelType.Wall;
+  if (a === U && b === U) return U;
+  if (a === U) return b;
+  if (b === U) return a;
+  if (a === E || b === E) return E;
+  if (a === W && b === W) return W;
+  if (a === R && b === R) return R;
+  if ((a === R && b === W) || (a === W && b === R)) return W;
+  // Fallback: prefer first (primary)
+  return a;
+}
+
+// Merge two voxel maps with same shape (size/res) into a new map, cell-by-cell
+export function mergeVoxSameShape(primary, secondary) {
+  if (!primary || !secondary) return primary || secondary || null;
+  const A = decompressVox(primary);
+  const B = decompressVox(secondary);
+  const ax = A?.size?.x|0, ay = A?.size?.y|0, az = A?.size?.z|0;
+  const bx = B?.size?.x|0, by = B?.size?.y|0, bz = B?.size?.z|0;
+  const ar = A?.res||1, br = B?.res||1;
+  if (ax !== bx || ay !== by || az !== bz || ar !== br) {
+    throw new Error('mergeVoxSameShape requires matching size and res');
+  }
+  const n = (Array.isArray(A.data) ? A.data.length : 0);
+  const outData = new Array(n);
+  let hasRock = false;
+  for (let i = 0; i < n; i++) {
+    const v = mergeVoxelValues(A.data[i] ?? VoxelType.Uninstantiated, B.data[i] ?? VoxelType.Uninstantiated);
+    outData[i] = v;
+    if (v === VoxelType.Rock) hasRock = true;
+  }
+  return {
+    res: ar,
+    size: { x: ax, y: ay, z: az },
+    data: outData,
+    palette: VoxelType,
+    bakedAt: Date.now(),
+    source: A?.source ?? null,
+    hasRock,
+  };
 }

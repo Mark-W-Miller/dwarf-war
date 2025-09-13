@@ -94,6 +94,8 @@ const state = {
   selection: new Set(), // selected cavern ids
   halos: new Map(), // id -> halo mesh
   hl: null, // highlight layer
+  selObb: new Map(), // id -> OBB line mesh for selection box
+  voxHl: new Map(), // id -> selected voxel highlight mesh
 };
 
 // Load or create barrow
@@ -449,10 +451,29 @@ function showObbDebug(corners) {
   } catch {}
 }
 
+// Global debug clear handler (used on DB reset)
+try {
+  window.addEventListener('dw:debug:clearAll', () => {
+    try { endVoxelScanDebug(); } catch {}
+    try { clearObbDebug(); } catch {}
+    try { state.debugAabb?.dispose?.(); state.debugAabb = null; } catch {}
+    try { Log.log('VOXEL', 'debug:cleared', {}); } catch {}
+  });
+} catch {}
+
+// Rebuild halos (selection visuals + voxel highlight) when a voxel is picked
+try { window.addEventListener('dw:voxelPick', () => { try { rebuildHalos(); } catch {} }); } catch {}
+
 function rebuildHalos() {
   // clear old torus meshes if any
   for (const [id, mesh] of state.halos) { try { mesh.dispose(); } catch {} }
   state.halos.clear();
+  // clear previous OBB selection boxes
+  try { for (const [id, m] of (state.selObb || new Map())) { try { m.dispose?.(); } catch {} } } catch {}
+  try { state.selObb.clear(); } catch {}
+  // clear previous voxel highlight meshes
+  try { for (const [id, m] of (state.voxHl || new Map())) { try { m.dispose?.(); } catch {} } } catch {}
+  try { state.voxHl.clear(); } catch {}
   // update highlight layer
   try { state.hl.removeAllMeshes(); } catch {}
   const bySpace = new Map((state.built.spaces||[]).map(x => [x.id, x.mesh]));
@@ -484,13 +505,83 @@ function rebuildHalos() {
         }
       }
     } catch {}
+
+    // Draw OBB selection box (lines) around selected spaces
+    try {
+      const s = (state.barrow.spaces||[]).find(x => x.id === id);
+      if (s) {
+        const sr = s.res || (state.barrow?.meta?.voxelSize || 1);
+        const w = (s.size?.x||0) * sr, h = (s.size?.y||0) * sr, d = (s.size?.z||0) * sr;
+        const hx = w/2, hy = h/2, hz = d/2;
+        const cx = s.origin?.x||0, cy = s.origin?.y||0, cz = s.origin?.z||0;
+        const rx = (s.rotation && typeof s.rotation.x === 'number') ? s.rotation.x : 0;
+        const ry = (s.rotation && typeof s.rotation.y === 'number') ? s.rotation.y : (typeof s.rotY === 'number' ? s.rotY : 0);
+        const rz = (s.rotation && typeof s.rotation.z === 'number') ? s.rotation.z : 0;
+        const q = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz);
+        const mtx = BABYLON.Matrix.Compose(new BABYLON.Vector3(1,1,1), q, new BABYLON.Vector3(cx,cy,cz));
+        const locals = [
+          new BABYLON.Vector3(-hx,-hy,-hz), new BABYLON.Vector3(+hx,-hy,-hz),
+          new BABYLON.Vector3(-hx,+hy,-hz), new BABYLON.Vector3(+hx,+hy,-hz),
+          new BABYLON.Vector3(-hx,-hy,+hz), new BABYLON.Vector3(+hx,-hy,+hz),
+          new BABYLON.Vector3(-hx,+hy,+hz), new BABYLON.Vector3(+hx,+hy,+hz)
+        ];
+        const cs = locals.map(v => BABYLON.Vector3.TransformCoordinates(v, mtx));
+        const edges = [
+          [cs[0], cs[1]], [cs[1], cs[3]], [cs[3], cs[2]], [cs[2], cs[0]], // bottom rectangle
+          [cs[4], cs[5]], [cs[5], cs[7]], [cs[7], cs[6]], [cs[6], cs[4]], // top rectangle
+          [cs[0], cs[4]], [cs[1], cs[5]], [cs[2], cs[6]], [cs[3], cs[7]]  // verticals
+        ];
+        const lines = BABYLON.MeshBuilder.CreateLineSystem(`sel:obb:${id}`, { lines: edges }, scene);
+        lines.color = new BABYLON.Color3(0.1, 0.9, 0.9);
+        lines.isPickable = false; lines.renderingGroupId = 3;
+        state.selObb.set(id, lines);
+      }
+    } catch {}
+
+    // Selected voxel highlight (if any)
+    try {
+      const s2 = (state.barrow.spaces||[]).find(x => x.id === id);
+      if (s2 && s2.vox && s2.vox.size && s2.voxPick) {
+        const nx = Math.max(1, s2.vox.size?.x || 1);
+        const ny = Math.max(1, s2.vox.size?.y || 1);
+        const nz = Math.max(1, s2.vox.size?.z || 1);
+        const res = s2.vox.res || s2.res || (state.barrow?.meta?.voxelSize || 1);
+        const { x: ix, y: iy, z: iz } = s2.voxPick;
+        if (ix >= 0 && iy >= 0 && iz >= 0 && ix < nx && iy < ny && iz < nz) {
+          // Respect expose-top slicing: hide highlight if layer is cut off
+          let hideTop = 0; try { hideTop = Math.max(0, Math.min(ny, Math.floor(Number(s2.voxExposeTop || 0) || 0))); } catch {}
+          const yCut = ny - hideTop;
+          if (iy < yCut) {
+            const centerX = (nx * res) / 2, centerY = (ny * res) / 2, centerZ = (nz * res) / 2;
+            const px = (ix + 0.5) * res - centerX;
+            const py = (iy + 0.5) * res - centerY;
+            const pz = (iz + 0.5) * res - centerZ;
+            const cx = (s2.origin?.x||0) + px;
+            const cy = (s2.origin?.y||0) + py;
+            const cz = (s2.origin?.z||0) + pz;
+            const box = BABYLON.MeshBuilder.CreateBox(`sel:voxel:${id}`, { size: res * 1.05 }, scene);
+            const mat = new BABYLON.StandardMaterial(`sel:voxel:${id}:mat`, scene);
+            mat.diffuseColor = new BABYLON.Color3(1.0, 0.9, 0.2);
+            mat.emissiveColor = new BABYLON.Color3(0.95, 0.8, 0.1);
+            mat.alpha = 0.55; mat.specularColor = new BABYLON.Color3(0,0,0);
+            mat.backFaceCulling = false;
+            box.material = mat; box.isPickable = false; box.renderingGroupId = 2;
+            box.position.set(cx, cy, cz);
+            state.voxHl.set(id, box);
+          }
+        }
+      }
+    } catch {}
   }
   // Draw selected space world-AABB in translucent red (single selection only)
   try {
+    // Always dispose any previous debug AABB first
+    try { state.debugAabb?.dispose?.(); state.debugAabb = null; } catch {}
     if (state.selection.size === 1) {
       const id = Array.from(state.selection)[0];
       const s = (state.barrow.spaces||[]).find(x => x.id === id);
-      if (s) {
+      // Skip drawing AABB for voxelized spaces to reduce clutter after voxel ops
+      if (s && !s.vox) {
         const sr = s.res || (state.barrow?.meta?.voxelSize || 1);
         const rx = (s.rotation && typeof s.rotation.x === 'number') ? s.rotation.x : 0;
         const ry = (s.rotation && typeof s.rotation.y === 'number') ? s.rotation.y : (typeof s.rotY === 'number' ? s.rotY : 0);
@@ -514,8 +605,6 @@ function rebuildHalos() {
         state.debugAabb = dbg;
         try { Log.log('DEBUG', 'Show world AABB', { id, center: {x:cx,y:cy,z:cz}, size: {x:w/sr, y:h/sr, z:d/sr} }); } catch {}
       }
-    } else {
-      try { state.debugAabb?.dispose?.(); state.debugAabb = null; } catch {}
     }
   } catch {}
   // Always glow intersections in yellow

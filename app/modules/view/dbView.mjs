@@ -170,7 +170,8 @@ export function renderDbView(barrow) {
     if (spaceDetails && root.contains(spaceDetails)) {
       const id = spaceDetails.dataset.spaceId;
       if (id) {
-        try { window.dispatchEvent(new CustomEvent('dw:dbRowClick', { detail: { type: 'space', id } })); } catch {}
+        const shiftKey = !!(e.shiftKey);
+        try { window.dispatchEvent(new CustomEvent('dw:dbRowClick', { detail: { type: 'space', id, shiftKey } })); } catch {}
       }
     }
   });
