@@ -137,8 +137,10 @@ export function initVoxelTab(panelContent, api) {
       Log.log('DEBUG', 'mergeAsync:invoke', { seed: seed.id });
       const debugCfg = {
         chunk: 256,
-        onStart: ({ min, max, res, nx, ny, nz }) => { try { Log.log('DEBUG', 'Union scan start', { min, max, res, nx, ny, nz }); } catch {} },
-        onLayer: (y, c) => { try { Log.log('DEBUG', 'Scan layer', { y, inside: c?.inside||0, outside: c?.outside||0 }); } catch {} },
+        // Keep start minimal
+        onStart: ({ nx, ny, nz }) => { try { Log.log('DEBUG', 'Union scan start', { ny }); } catch {} },
+        // Only log plane number (Y)
+        onLayer: (y) => { try { Log.log('DEBUG', 'Layer', { y }); } catch {} },
         onEnd: () => { try { if (showDots) api.debug?.flushVoxelScanPoints?.(); Log.log('DEBUG', 'Union scan end', {}); } catch {} },
         showObb: (corners) => { try { api.debug?.showObbDebug?.(corners); } catch {} }
       };
@@ -167,7 +169,17 @@ export function initVoxelTab(panelContent, api) {
   const row3 = document.createElement('div'); row3.className = 'row';
   // Scan dots toggle (unchecked by default)
   const dotsLabel = document.createElement('label'); dotsLabel.style.display = 'inline-flex'; dotsLabel.style.alignItems = 'center'; dotsLabel.style.gap = '6px';
-  const scanDotsCb = document.createElement('input'); scanDotsCb.type = 'checkbox'; scanDotsCb.id = 'scanDots'; scanDotsCb.checked = false;
+  const scanDotsCb = document.createElement('input'); scanDotsCb.type = 'checkbox'; scanDotsCb.id = 'scanDots';
+  // Remember preference in localStorage; default = on
+  try {
+    const key = 'dw:ui:scanDots';
+    const stored = localStorage.getItem(key);
+    const def = true; // on by default
+    scanDotsCb.checked = (stored == null) ? def : (stored === '1');
+    scanDotsCb.addEventListener('change', () => {
+      try { localStorage.setItem(key, scanDotsCb.checked ? '1' : '0'); } catch {}
+    });
+  } catch { scanDotsCb.checked = true; }
   dotsLabel.appendChild(scanDotsCb); dotsLabel.appendChild(document.createTextNode('Show scan dots'));
   row3.appendChild(dotsLabel);
   const clearBtn = document.createElement('button'); clearBtn.className = 'btn warn'; clearBtn.textContent = 'Clear Scan Dots';
@@ -212,6 +224,8 @@ export function initVoxelTab(panelContent, api) {
       try {
         if (!s.vox) continue;
         fillAllVoxels(s.vox, VoxelType.Rock);
+        // Ensure exposed top layers are visible (avoid hiding everything)
+        try { s.voxExposeTop = 0; } catch {}
       } catch {}
     }
     try { api.saveBarrow(api.state.barrow); api.snapshot(api.state.barrow); } catch {}

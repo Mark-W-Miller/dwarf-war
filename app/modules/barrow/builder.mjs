@@ -118,11 +118,17 @@ export function buildSceneFromBarrow(scene, barrow) {
         pm.backFaceCulling = false; mesh.material = pm;
         mesh.position.set(s.origin?.x||0, s.origin?.y||0, s.origin?.z||0);
         try {
-          const rx = Number(s.rotation?.x ?? 0) || 0;
-          const ry = (s.rotation && typeof s.rotation.y === 'number') ? Number(s.rotation.y) : Number(s.rotY || 0) || 0;
-          const rz = Number(s.rotation?.z ?? 0) || 0;
-          mesh.rotationQuaternion = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz);
-          mesh.rotation.set(0,0,0);
+          const worldAligned = !!(s.vox && s.vox.worldAligned);
+          if (worldAligned) {
+            mesh.rotationQuaternion = BABYLON.Quaternion.Identity();
+            mesh.rotation.set(0,0,0);
+          } else {
+            const rx = Number(s.rotation?.x ?? 0) || 0;
+            const ry = (s.rotation && typeof s.rotation.y === 'number') ? Number(s.rotation.y) : Number(s.rotY || 0) || 0;
+            const rz = Number(s.rotation?.z ?? 0) || 0;
+            mesh.rotationQuaternion = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz);
+            mesh.rotation.set(0,0,0);
+          }
         } catch {}
         mesh.isPickable = true; mesh.alwaysSelectAsActiveMesh = true;
         built.spaces.push({ id: s.id, mesh, mat: pm });
@@ -138,8 +144,8 @@ export function buildSceneFromBarrow(scene, barrow) {
         // Base meshes for walls and rock
         const wallBase = BABYLON.MeshBuilder.CreateBox(`space:${s.id}:vox:wall`, { size: 1 }, scene);
         wallBase.isPickable = false; // DDA handles picking; keep base offscreen (identity rotation)
-        const HIDE_OFF = 100000; // move base far away; compensate in instance transforms
-        try { wallBase.position.set(HIDE_OFF, HIDE_OFF, HIDE_OFF); wallBase.rotationQuaternion = BABYLON.Quaternion.Identity(); } catch {}
+        const HIDE_OFF = 100000; // base is offset in local space; instances compensate
+        try { wallBase.parent = mesh; wallBase.position.set(HIDE_OFF, HIDE_OFF, HIDE_OFF); wallBase.rotationQuaternion = BABYLON.Quaternion.Identity(); } catch {}
         const wallMat = new BABYLON.StandardMaterial(`space:${s.id}:vox:wall:mat`, scene);
         wallMat.diffuseColor = new BABYLON.Color3(0.78, 0.78, 0.80);
         wallMat.emissiveColor = new BABYLON.Color3(0.22, 0.22, 0.24);
@@ -153,7 +159,7 @@ export function buildSceneFromBarrow(scene, barrow) {
 
         const rockBase = BABYLON.MeshBuilder.CreateBox(`space:${s.id}:vox:rock`, { size: 1 }, scene);
         rockBase.isPickable = false; // DDA handles picking; keep base offscreen (identity rotation)
-        try { rockBase.position.set(HIDE_OFF, HIDE_OFF, HIDE_OFF); rockBase.rotationQuaternion = BABYLON.Quaternion.Identity(); } catch {}
+        try { rockBase.parent = mesh; rockBase.position.set(HIDE_OFF, HIDE_OFF, HIDE_OFF); rockBase.rotationQuaternion = BABYLON.Quaternion.Identity(); } catch {}
         const rockMat = new BABYLON.StandardMaterial(`space:${s.id}:vox:rock:mat`, scene);
         rockMat.diffuseColor = new BABYLON.Color3(0.22, 0.22, 0.24);
         rockMat.emissiveColor = new BABYLON.Color3(0.08, 0.08, 0.10);
@@ -174,16 +180,20 @@ export function buildSceneFromBarrow(scene, barrow) {
         let hideTop = 0;
         try { hideTop = Math.max(0, Math.min(ny, Math.floor(Number(s.voxExposeTop || 0) || 0))); } catch { hideTop = 0; }
         const yCut = ny - hideTop; // show y in [0, yCut-1]
-        // Rotation for this space (apply per-instance)
-        let q = BABYLON.Quaternion.Identity();
+        // Rotation: inherited from parent mesh; per-instance rotation stays identity
+        const worldAligned = !!(s.vox && s.vox.worldAligned);
+        let qMesh = BABYLON.Quaternion.Identity();
         try {
-          const rx = Number(s.rotation?.x ?? 0) || 0;
-          const ry = (s.rotation && typeof s.rotation.y === 'number') ? Number(s.rotation.y) : Number(s.rotY || 0) || 0;
-          const rz = Number(s.rotation?.z ?? 0) || 0;
-          q = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz);
+          if (!worldAligned) {
+            const rx = Number(s.rotation?.x ?? 0) || 0;
+            const ry = (s.rotation && typeof s.rotation.y === 'number') ? Number(s.rotation.y) : Number(s.rotY || 0) || 0;
+            const rz = Number(s.rotation?.z ?? 0) || 0;
+            qMesh = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz);
+          } else {
+            qMesh = BABYLON.Quaternion.Identity();
+          }
         } catch {}
-        const rotM = (() => { try { return BABYLON.Matrix.Compose(new BABYLON.Vector3(1,1,1), q, BABYLON.Vector3.Zero()); } catch { return BABYLON.Matrix.Identity(); } })();
-        const originVec = new BABYLON.Vector3(s.origin?.x||0, s.origin?.y||0, s.origin?.z||0);
+        const rotM = (() => { try { return BABYLON.Matrix.Compose(new BABYLON.Vector3(1,1,1), qMesh, BABYLON.Vector3.Zero()); } catch { return BABYLON.Matrix.Identity(); } })();
         const hideOffVec = new BABYLON.Vector3(HIDE_OFF, HIDE_OFF, HIDE_OFF);
         for (let z = 0; z < nz; z++) {
           for (let y = 0; y < ny; y++) {
@@ -197,13 +207,12 @@ export function buildSceneFromBarrow(scene, barrow) {
               const ly = (y + 0.5) * res - centerY;
               const lz = (z + 0.5) * res - centerZ;
               const local = new BABYLON.Vector3(lx, ly, lz);
-              // Rotate local offset to world, then translate by origin
-              const worldOff = BABYLON.Vector3.TransformCoordinates(local, rotM);
-              const worldCenter = originVec.add(worldOff);
-              // Compensate base offset so instances land at worldCenter
-              const t = worldCenter.subtract(hideOffVec);
+              // Rotate local offset into mesh-local orientation; parent provides rotation/translation
+              const localAfterRot = BABYLON.Vector3.TransformCoordinates(local, rotM);
+              // Per-instance translation in parent space compensating for base offset
+              const t = localAfterRot.subtract(hideOffVec);
               const sc = new BABYLON.Vector3(sx, sy, sz);
-              const m = BABYLON.Matrix.Compose(sc, q, t);
+              const m = BABYLON.Matrix.Compose(sc, BABYLON.Quaternion.Identity(), t);
               const target = (v === VoxelType.Wall) ? wallMatrices : rockMatrices;
               for (let k = 0; k < 16; k++) target.push(m.m[k]);
             }

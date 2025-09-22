@@ -318,6 +318,7 @@ export function mergeOverlappingSpaces(barrow, seedId) {
 export async function mergeOverlappingSpacesAsync(barrow, seedId, opts = {}) {
   const debug = opts.debug || null;
   const chunk = (debug && debug.chunk) ? Math.max(1, Number(debug.chunk)||1) : 256;
+  const tStart = Date.now();
   vLog('mergeAsync:begin', { seedId });
   try {
     const s = barrow.spaces.find(x => x.id === seedId);
@@ -351,10 +352,23 @@ export async function mergeOverlappingSpacesAsync(barrow, seedId, opts = {}) {
   let res = keep.res || (barrow.meta?.voxelSize || 1);
   for (const id of picked) { const s = byId.get(id); if (!s) continue; const sres = (s.vox && s.vox.res) ? s.vox.res : (s.res || (barrow.meta?.voxelSize || 1)); if (sres > 0 && sres < res) res = sres; }
   const min = union.min, max = union.max;
-  const nx = Math.max(1, Math.ceil((max.x - min.x) / res));
-  const ny = Math.max(1, Math.ceil((max.y - min.y) / res));
-  const nz = Math.max(1, Math.ceil((max.z - min.z) / res));
-  const nTot = nx * ny * nz;
+  let nx = Math.max(1, Math.ceil((max.x - min.x) / res));
+  let ny = Math.max(1, Math.ceil((max.y - min.y) / res));
+  let nz = Math.max(1, Math.ceil((max.z - min.z) / res));
+  let nTot = nx * ny * nz;
+  // Clamp scan workload by coarsening resolution if needed to keep things responsive
+  const MAX_CELLS = 6_000_000; // ~6 million cells upper bound
+  if (nTot > MAX_CELLS) {
+    const scale = Math.cbrt(nTot / MAX_CELLS);
+    const k = Math.max(2, Math.ceil(scale));
+    const old = { res, nx, ny, nz, nTot };
+    res = res * k;
+    nx = Math.max(1, Math.ceil((max.x - min.x) / res));
+    ny = Math.max(1, Math.ceil((max.y - min.y) / res));
+    nz = Math.max(1, Math.ceil((max.z - min.z) / res));
+    nTot = nx * ny * nz;
+    vLog('mergeAsync:coarsen', { old, k, res, nx, ny, nz, nTot });
+  }
   vLog('mergeAsync:AABB', { min, max, res, nx, ny, nz, nTot });
   const occ = new Uint8Array(nTot);
   const idx = (x,y,z) => (x + nx * (y + ny * z));
@@ -408,7 +422,7 @@ export async function mergeOverlappingSpacesAsync(barrow, seedId, opts = {}) {
   // Prefill: classify every center vs the seed's rotated shape; green=inside, red=outside
   let count = 0;
   if (debug && (debug.onTestInside || debug.onTestOutside)) {
-    vLog('mergeAsync:prefill:start', {});
+    vLog('mergeAsync:prefill:start', { levels: ny });
     const yMid = Math.floor(ny / 2), zMid = Math.floor(nz / 2);
     for (let y = 0; y < ny; y++) {
       let insideCnt = 0, outsideCnt = 0;
@@ -426,30 +440,17 @@ export async function mergeOverlappingSpacesAsync(barrow, seedId, opts = {}) {
         }
       }
       try {
+        // External UI logger handles layer number; keep internal logs quiet
         if (debug.onLayer) debug.onLayer(y, { inside: insideCnt, outside: outsideCnt });
-        vLog('mergeAsync:prefill:layer', { y, inside: insideCnt, outside: outsideCnt });
-        if (y === yMid) {
-          // Emit a few sample membership debug points along X at mid Y/Z
-          const samples = [];
-          for (let xi = 0; xi < nx; xi += Math.max(1, Math.floor(nx/4))) {
-            const wxs = min.x + (xi + 0.5) * res;
-            const wys = min.y + (yMid + 0.5) * res;
-            const wzs = min.z + (zMid + 0.5) * res;
-          const detail = Vox_insideBoxDetailed(seed, wxs, wys, wzs);
-          const inB = Vox_spaceContains(seed, wxs, wys, wzs);
-          samples.push({ wx: wxs, wy: wys, wz: wzs, px: detail.px, py: detail.py, pz: detail.pz, hx: detail.hx, hy: detail.hy, hz: detail.hz, inside: inB });
-          }
-          vLog('mergeAsync:prefill:samples', { y: yMid, z: zMid, samples });
-        }
       } catch (e) { errLog('mergeAsync:prefill:layer', e); }
     }
     try { if (debug.flush) debug.flush(); } catch (e) { errLog('mergeAsync:prefill:flush', e); }
-    vLog('mergeAsync:prefill:end', {});
+    vLog('mergeAsync:prefill:end', { elapsedMs: (Date.now() - tStart) });
   }
 
   // Occupancy: test membership for each center (no extra onTest here — dots already placed)
   count = 0;
-  vLog('mergeAsync:occupancy:start', {});
+  vLog('mergeAsync:occupancy:start', { levels: ny });
   for (let y = 0; y < ny; y++) {
     let occY = 0;
     for (let z = 0; z < nz; z++) {
@@ -482,11 +483,11 @@ export async function mergeOverlappingSpacesAsync(barrow, seedId, opts = {}) {
         if (debug && count % chunk === 0) { if (debug.flush) try { debug.flush(); } catch {}; await nextFrame(); }
       }
     }
-    vLog('mergeAsync:occupancy:layer', { y, inside: occY });
+    // UI logs the layer index; suppress per-layer internal logs to reduce noise
   }
   try { if (debug && debug.flush) debug.flush(); } catch (e) { errLog('mergeAsync:occupancy:flush', e); }
   try { if (debug && debug.onEnd) debug.onEnd(); } catch (e) { errLog('mergeAsync:occupancy:onEnd', e); }
-  vLog('mergeAsync:occupancy:end', {});
+  vLog('mergeAsync:occupancy:end', { elapsedMs: (Date.now() - tStart) });
 
   // Proceed to build voxel map even for single-seed case
 

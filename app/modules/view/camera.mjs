@@ -52,6 +52,9 @@ export function initCamera(scene, canvas, Log) {
       camera.target.set(cx, cy, cz);
       camera.radius = radius;
       if (camera.upperRadiusLimit < radius * 1.2) camera.upperRadiusLimit = radius * 1.2;
+      // Ensure far clip exceeds scene span
+      const desiredMaxZ = Math.max(1000, radius * 3);
+      if (camera.maxZ < desiredMaxZ) camera.maxZ = desiredMaxZ;
       if (Log) Log.log('UI', 'Center on item', { name: mesh.name, center: { x: cx, y: cy, z: cz }, span: { x: spanX, y: spanY, z: spanZ }, radius });
     } else {
       camera.target.copyFrom(mesh.position);
@@ -77,8 +80,53 @@ export function initCamera(scene, canvas, Log) {
     camera.target.set(cx, cy, cz);
     camera.radius = radius;
     if (camera.upperRadiusLimit < radius * 1.2) camera.upperRadiusLimit = radius * 1.2;
+    // Ensure far clip exceeds scene span
+    const desiredMaxZ = Math.max(1000, radius * 3);
+    if (camera.maxZ < desiredMaxZ) camera.maxZ = desiredMaxZ;
     if (Log) Log.log('UI', 'Fit view', { center: { x: cx, y: cy, z: cz }, span, radius });
   }
 
-  return { camera, applyZoomBase, applyPanBase, getZoomBase, getPanBase, updatePanDynamics, centerOnMesh, fitViewAll };
+  // Fit view prioritizing caverns' center of mass for target while sizing radius from spaces extents
+  function fitViewSmart(barrow) {
+    try {
+      const spaces = Array.isArray(barrow?.spaces) ? barrow.spaces : [];
+      // Compute extents as before over spaces
+      let minX = Infinity, minY = Infinity, minZ = Infinity;
+      let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+      const voxelSize = barrow?.meta?.voxelSize || 1;
+      for (const s of spaces) {
+        const res = s.res || voxelSize;
+        const w = (s.size?.x||0) * res, h = (s.size?.y||0) * res, d = (s.size?.z||0) * res;
+        const cx = s.origin?.x||0, cy = s.origin?.y||0, cz = s.origin?.z||0;
+        minX = Math.min(minX, cx - w/2); maxX = Math.max(maxX, cx + w/2);
+        minY = Math.min(minY, cy - h/2); maxY = Math.max(maxY, cy + h/2);
+        minZ = Math.min(minZ, cz - d/2); maxZ = Math.max(maxZ, cz + d/2);
+      }
+      if (!isFinite(minX) || !isFinite(maxX)) { if (spaces.length) return fitViewAll(spaces, voxelSize); }
+      const span = Math.max(maxX - minX, maxY - minY, maxZ - minZ);
+      const radius = Math.max(10, span * 1.3 + 15);
+      // Center on caverns COM when available; fallback to spaces mid-point
+      let tx, ty, tz;
+      const cavs = Array.isArray(barrow?.caverns) ? barrow.caverns : [];
+      const haveCav = cavs.length > 0;
+      if (haveCav) {
+        let cx = 0, cy = 0, cz = 0, n = 0;
+        for (const c of cavs) {
+          const p = c?.pos; if (!p) continue; cx += (p.x||0); cy += (p.y||0); cz += (p.z||0); n++;
+        }
+        if (n > 0) { tx = cx / n; ty = cy / n; tz = cz / n; }
+      }
+      if (!(isFinite(tx) && isFinite(ty) && isFinite(tz))) {
+        tx = (minX + maxX) / 2; ty = (minY + maxY) / 2; tz = (minZ + maxZ) / 2;
+      }
+      camera.target.set(tx, ty, tz);
+      camera.radius = radius;
+      if (camera.upperRadiusLimit < radius * 1.2) camera.upperRadiusLimit = radius * 1.2;
+      const desiredMaxZ = Math.max(1000, radius * 3);
+      if (camera.maxZ < desiredMaxZ) camera.maxZ = desiredMaxZ;
+      if (Log) Log.log('UI', 'Fit view (smart)', { target: { x: tx, y: ty, z: tz }, span, radius, used: haveCav ? 'cavernsCOM' : 'spacesMid' });
+    } catch (e) { try { if (Log) Log.log('ERROR', 'fitViewSmart', { error: String(e) }); } catch {} }
+  }
+
+  return { camera, applyZoomBase, applyPanBase, getZoomBase, getPanBase, updatePanDynamics, centerOnMesh, fitViewAll, fitViewSmart };
 }

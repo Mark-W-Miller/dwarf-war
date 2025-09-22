@@ -111,8 +111,8 @@ grids.updateUnitGrids(state.barrow?.meta?.voxelSize || 1);
 try { grids.updateGridExtent(state.built); } catch {}
 camApi.applyZoomBase();
 camApi.applyPanBase();
-// Fit view initially to frame all spaces
-try { camApi.fitViewAll(state.barrow?.spaces || [], state.barrow?.meta?.voxelSize || 1); } catch {}
+// Fit view initially — target caverns center-of-mass, size to spaces extents
+try { camApi.fitViewSmart(state.barrow); } catch {}
 rebuildHalos();
 grids.scheduleGridUpdate(state.built);
 applyViewToggles();
@@ -420,7 +420,7 @@ function addVoxelScanPointInside(wx, wy, wz) { _pushDot(state._scanDebug.greenAr
 function flushVoxelScanPoints() {
   try { const b = state._scanDebug.redBase; if (b && state._scanDebug.redArr.length) b.thinInstanceSetBuffer('matrix', new Float32Array(state._scanDebug.redArr), 16, true); } catch {}
   try { const b2 = state._scanDebug.greenBase; if (b2 && state._scanDebug.greenArr.length) b2.thinInstanceSetBuffer('matrix', new Float32Array(state._scanDebug.greenArr), 16, true); } catch {}
-  try { Log.log('VOXEL', 'scan:flush', { red: (state._scanDebug.redArr.length/16)|0, green: (state._scanDebug.greenArr.length/16)|0 }); } catch {}
+  // Quiet: avoid logging each flush to reduce spam
 }
 function endVoxelScanDebug() {
   try { state._scanDebug.redBase?.dispose?.(); } catch {}
