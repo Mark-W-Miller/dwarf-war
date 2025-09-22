@@ -24,7 +24,19 @@ const camera = camApi.camera;
 
 // Lighting
 const dir = new BABYLON.DirectionalLight('dir', new BABYLON.Vector3(-1, -2, -1), scene);
-dir.position = new BABYLON.Vector3(10, 20, 10); dir.intensity = 1.1;
+dir.position = new BABYLON.Vector3(10, 20, 10); dir.intensity = 1.4;
+// Shadows: generator and helpers
+let shadowGen = null;
+try {
+  shadowGen = new BABYLON.ShadowGenerator(2048, dir);
+  // Make shadows clearer and crisper
+  shadowGen.usePercentageCloserFiltering = true;
+  try { shadowGen.filteringQuality = BABYLON.ShadowGenerator.QUALITY_HIGH; } catch {}
+  shadowGen.bias = 0.0005;
+  try { shadowGen.normalBias = 0.01; } catch {}
+  shadowGen.darkness = 0.75;
+  try { shadowGen.autoCalcShadowZBounds = true; } catch {}
+} catch {}
 const hemi = new BABYLON.HemisphericLight('hemi', new BABYLON.Vector3(0, 1, 0), scene);
 hemi.intensity = 0.2;
 
@@ -116,6 +128,7 @@ state.built = buildSceneFromBarrow(scene, state.barrow);
 renderDbView(state.barrow);
 grids.updateUnitGrids(state.barrow?.meta?.voxelSize || 1);
 try { grids.updateGridExtent(state.built); } catch {}
+try { if (ground) ground.receiveShadows = true; } catch {}
 camApi.applyZoomBase();
 camApi.applyPanBase();
 // Fit view initially — target caverns center-of-mass, size to spaces extents
@@ -391,7 +404,9 @@ function rebuildScene() {
   state.built = buildSceneFromBarrow(scene, state.barrow);
   updateUnitGrids();
   try { grids.updateGridExtent(state.built); } catch {}
+  try { if (ground) ground.receiveShadows = true; } catch {}
   rebuildHalos();
+  try { updateShadowCastersFromSelection(); } catch {}
   scheduleGridUpdate();
   applyViewToggles();
   applyTextScale?.();
@@ -656,6 +671,30 @@ function updateGridExtent(){
   // Delegate to grids module for a single source of truth
   try { grids.updateGridExtent(state.built); } catch {}
 }
+
+// ——————————— Shadow casters on selection ———————————
+function updateShadowCastersFromSelection() {
+  try {
+    if (!shadowGen) return;
+    const sm = shadowGen.getShadowMap(); if (!sm) return;
+    const list = [];
+    const ids = Array.from(state.selection || []);
+    const byId = new Map((state?.built?.spaces || []).map(x => [x.id, x.mesh]).filter(([k,v]) => !!v));
+    for (const id of ids) { const m = byId.get(id); if (m) list.push(m); }
+    // Also include voxel parts belonging to selected spaces
+    try {
+      for (const part of (state?.built?.voxParts || [])) {
+        const nm = String(part?.name || '');
+        if (ids.some(id => nm.startsWith(`space:${id}:`))) list.push(part);
+      }
+    } catch {}
+    sm.renderList = list;
+    // Ensure receivers are set
+    try { if (grids?.ground) grids.ground.receiveShadows = true; } catch {}
+  } catch {}
+}
+
+try { window.addEventListener('dw:selectionChange', updateShadowCastersFromSelection); } catch {}
 
 // Debounced grid update: schedule an update 2s after the last edit
 function scheduleGridUpdate(){

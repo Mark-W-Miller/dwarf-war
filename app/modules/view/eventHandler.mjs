@@ -502,6 +502,11 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
   window.addEventListener('dw:selectionChange', populateSizeFieldsFromSelection);
   window.addEventListener('dw:dbEdit', populateSizeFieldsFromSelection);
   window.addEventListener('dw:transform', populateSizeFieldsFromSelection);
+  // Keep contact shadow in sync with selection
+  try {
+    window.addEventListener('dw:selectionChange', updateContactShadowPlacement);
+    window.addEventListener('dw:transform', updateContactShadowPlacement);
+  } catch {}
 
   function applySizeField(axis, value) {
     const v = Math.max(1, Math.round(Number(value || '')));
@@ -750,6 +755,71 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       return m;
     } catch { return null; }
   })();
+
+  // ——————————— Contact shadow (visual aid) ———————————
+  state._contactShadow = state._contactShadow || { mesh: null, ids: [] };
+  function disposeContactShadow() {
+    try { state._contactShadow.mesh?.dispose?.(); } catch {}
+    state._contactShadow.mesh = null; state._contactShadow.ids = [];
+  }
+  function ensureContactShadow() {
+    try {
+      if (state._contactShadow.mesh && !state._contactShadow.mesh.isDisposed()) return state._contactShadow.mesh;
+      const disc = BABYLON.MeshBuilder.CreateDisc('contactShadow', { radius: 1, tessellation: 64 }, scene);
+      disc.rotation.x = Math.PI / 2; // XZ plane
+      const mat = new BABYLON.StandardMaterial('contactShadow:mat', scene);
+      // Artificial, light-independent, yellow "shadow" — toned down
+      mat.diffuseColor = new BABYLON.Color3(0.85, 0.80, 0.20);
+      mat.emissiveColor = new BABYLON.Color3(0.35, 0.33, 0.10);
+      mat.alpha = 0.28; // subtler
+      try { mat.backFaceCulling = false; } catch {}
+      try { mat.zOffset = 2; } catch {}
+      try { mat.disableLighting = false; } catch {}
+      mat.specularColor = new BABYLON.Color3(0,0,0);
+      disc.material = mat; disc.isPickable = false; disc.renderingGroupId = 1;
+      state._contactShadow.mesh = disc; return disc;
+    } catch { return null; }
+  }
+  function updateContactShadowPlacement() {
+    try {
+      const ids = Array.from(state.selection || []);
+      if (!ids.length) { disposeContactShadow(); return; }
+      const mesh = ensureContactShadow(); if (!mesh) return;
+      const builtSpaces = (state?.built?.spaces || []);
+      const entries = builtSpaces.filter(x => ids.includes(x.id)); if (!entries.length) { disposeContactShadow(); return; }
+      // Aggregate AABB over selection
+      let minX = Infinity, minY = Infinity, minZ = Infinity, maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+      for (const e of entries) {
+        try { e.mesh.computeWorldMatrix(true); e.mesh.refreshBoundingInfo(); } catch {}
+        const bb = e.mesh.getBoundingInfo()?.boundingBox; if (!bb) continue;
+        const bmin = bb.minimumWorld, bmax = bb.maximumWorld;
+        minX = Math.min(minX, bmin.x); maxX = Math.max(maxX, bmax.x);
+        minY = Math.min(minY, bmin.y); maxY = Math.max(maxY, bmax.y);
+        minZ = Math.min(minZ, bmin.z); maxZ = Math.max(maxZ, bmax.z);
+      }
+      if (!isFinite(minX)) { disposeContactShadow(); return; }
+      const cx = (minX + maxX) / 2, cz = (minZ + maxZ) / 2;
+      // Always sit on the ground plane (y≈0), independent of light
+      const y = 0.0;
+      const rx = Math.max(0.2, (maxX - minX) / 2);
+      const rz = Math.max(0.2, (maxZ - minZ) / 2);
+      // Footprint sizing: prefer a broad elliptical pad, clamp aspect to avoid toothpick
+      const base = Math.max(rx, rz) * 1.5; // major radius
+      const minorBase = Math.min(rx, rz) * 1.5;
+      const minor = Math.max(base * 0.6, minorBase); // ensure at least 60% of major
+      let sx = base, sz = minor;
+      if (rz > rx) { sx = minor; sz = base; }
+      // Enforce a minimum size
+      sx = Math.max(3.0, sx);
+      sz = Math.max(3.0, sz);
+      mesh.position.set(cx, y + 0.01, cz);
+      // Disc is built in XY; scale x/y for X/Z footprint; keep z=1
+      mesh.scaling.x = sx;
+      mesh.scaling.y = sz;
+      mesh.scaling.z = 1;
+      state._contactShadow.ids = ids;
+    } catch {}
+  }
   function disposeLiveIntersections(){
     try { for (const m of liveIx.values()) { try { state.hl?.removeMesh(m); } catch {}; try { m.dispose(); } catch {} } } catch {}
     liveIx.clear();
@@ -844,17 +914,80 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     } catch {}
   }
 
+  // Update selection OBB lines live (dispose and rebuild for selected ids)
+  function updateSelectionObbLive() {
+    try {
+      const ids = Array.from(state.selection || []);
+      if (!ids.length) return;
+      const byId = new Map((state.barrow.spaces||[]).map(s => [s.id, s]));
+      for (const id of ids) {
+        const s = byId.get(id); if (!s) continue;
+        // dispose old
+        try { const prev = state.selObb?.get?.(id); if (prev) { prev.dispose?.(); state.selObb.delete?.(id); } } catch {}
+        const sr = s.res || (state.barrow?.meta?.voxelSize || 1);
+        const w = (s.size?.x||0) * sr, h = (s.size?.y||0) * sr, d = (s.size?.z||0) * sr;
+        const hx = w/2, hy = h/2, hz = d/2;
+        const cx = s.origin?.x||0, cy = s.origin?.y||0, cz = s.origin?.z||0;
+        const rx = (s.rotation && typeof s.rotation.x === 'number') ? s.rotation.x : 0;
+        const ry = (s.rotation && typeof s.rotation.y === 'number') ? s.rotation.y : (typeof s.rotY === 'number' ? s.rotY : 0);
+        const rz = (s.rotation && typeof s.rotation.z === 'number') ? s.rotation.z : 0;
+        const q = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz);
+        const mtx = BABYLON.Matrix.Compose(new BABYLON.Vector3(1,1,1), q, new BABYLON.Vector3(cx,cy,cz));
+        const locals = [
+          new BABYLON.Vector3(-hx,-hy,-hz), new BABYLON.Vector3(+hx,-hy,-hz),
+          new BABYLON.Vector3(-hx,+hy,-hz), new BABYLON.Vector3(+hx,+hy,-hz),
+          new BABYLON.Vector3(-hx,-hy,+hz), new BABYLON.Vector3(+hx,-hy,+hz),
+          new BABYLON.Vector3(-hx,+hy,+hz), new BABYLON.Vector3(+hx,+hy,+hz)
+        ];
+        const cs = locals.map(v => BABYLON.Vector3.TransformCoordinates(v, mtx));
+        const edges = [
+          [cs[0], cs[1]], [cs[1], cs[3]], [cs[3], cs[2]], [cs[2], cs[0]],
+          [cs[4], cs[5]], [cs[5], cs[7]], [cs[7], cs[6]], [cs[6], cs[4]],
+          [cs[0], cs[4]], [cs[1], cs[5]], [cs[2], cs[6]], [cs[3], cs[7]]
+        ];
+        const lines = BABYLON.MeshBuilder.CreateLineSystem(`sel:obb:${id}`, { lines: edges }, scene);
+        lines.color = new BABYLON.Color3(0.1, 0.9, 0.9);
+        lines.isPickable = false; lines.renderingGroupId = 3;
+        try { state.selObb?.set?.(id, lines); } catch {}
+      }
+    } catch {}
+  }
+
+  // Update move disc position to follow current selection bottom and center
+  function updateMoveDiscPlacement() {
+    try {
+      if (!moveWidget?.disc) return;
+      const ids = Array.from(state.selection || []);
+      if (!ids.length) return;
+      const byId = new Map((state.barrow.spaces||[]).map(s => [s.id, s]));
+      let minY = Infinity;
+      for (const id of ids) {
+        const s = byId.get(id); if (!s) continue;
+        const sr = s.res || (state.barrow?.meta?.voxelSize || 1);
+        const y0 = (s.origin?.y||0) - ((s.size?.y||0) * sr)/2;
+        if (y0 < minY) minY = y0;
+      }
+      if (!isFinite(minY)) minY = 0;
+      const center = moveWidget.group ? (moveWidget.groupCenter || new BABYLON.Vector3(0,0,0)) : ((state?.built?.spaces||[]).find(x => ids.includes(x.id))?.mesh?.position || new BABYLON.Vector3(0,0,0));
+      moveWidget.disc.position.x = center.x;
+      moveWidget.disc.position.z = center.z;
+      moveWidget.disc.position.y = minY;
+      moveWidget.planeY = minY;
+    } catch {}
+  }
+
   // ——————————— Move widget (drag on XZ plane) ———————————
-  let moveWidget = { mesh: null, root: null, arrowMeshes: [], spaceId: null, dragging: false, preDrag: false, downX: 0, downY: 0, startPoint: null, startOrigin: null, offsetVec: null, planeNormal: null, group: false, groupIDs: [], groupCenter: null, startCenter: null, startById: null, groupKey: '', axis: null, axisStart: 0 };
+  let moveWidget = { mesh: null, root: null, arrowMeshes: [], disc: null, spaceId: null, dragging: false, preDrag: false, mode: 'axis', downX: 0, downY: 0, startPoint: null, startOrigin: null, offsetVec: null, planeNormal: null, planeY: 0, group: false, groupIDs: [], groupCenter: null, startCenter: null, startById: null, groupKey: '', axis: null, axisStart: 0 };
   function disposeMoveWidget() {
     try {
       try { for (const m of moveWidget.arrowMeshes || []) { try { m.dispose(); } catch {} } } catch {}
       moveWidget.arrowMeshes = [];
+      try { moveWidget.disc?.dispose?.(); } catch {}
       if (moveWidget.root) { try { moveWidget.root.dispose(); } catch {} }
       // Fallback cleanup by name in case references were lost
       try { (scene.meshes||[]).filter(m => (m?.name||'').startsWith('moveGizmo:')).forEach(m => { try { m.dispose(); } catch {} }); } catch {}
     } catch {}
-    moveWidget = { mesh: null, root: null, arrowMeshes: [], spaceId: null, dragging: false, preDrag: false, downX: 0, downY: 0, startPoint: null, startOrigin: null, offsetVec: null, planeNormal: null, group: false, groupIDs: [], groupCenter: null, startCenter: null, startById: null, groupKey: '', axis: null, axisStart: 0 };
+    moveWidget = { mesh: null, root: null, arrowMeshes: [], disc: null, spaceId: null, dragging: false, preDrag: false, mode: 'axis', downX: 0, downY: 0, startPoint: null, startOrigin: null, offsetVec: null, planeNormal: null, planeY: 0, group: false, groupIDs: [], groupCenter: null, startCenter: null, startById: null, groupKey: '', axis: null, axisStart: 0 };
   }
   function ensureMoveWidget() {
       if (_gizmosSuppressed) { try { disposeMoveWidget(); } catch {} return; }
@@ -868,15 +1001,17 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       const groupKey = isGroup ? sel.slice().sort().join(',') : sel[0];
       let id = entries[0].id;
       let rad = 1; let center = null;
+      let planeY = 0;
       if (isGroup) {
         // Compute group bbox and center of mass for radius and position
-        let minX = Infinity, minZ = Infinity; let maxX = -Infinity, maxZ = -Infinity;
+        let minX = Infinity, minY = Infinity, minZ = Infinity; let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
         let cx = 0, cy = 0, cz = 0, mass = 0;
         for (const e of entries) {
           try { e.mesh.computeWorldMatrix(true); e.mesh.refreshBoundingInfo(); } catch {}
           const bb = e.mesh.getBoundingInfo()?.boundingBox; if (!bb) continue;
           const bmin = bb.minimumWorld, bmax = bb.maximumWorld;
           minX = Math.min(minX, bmin.x); maxX = Math.max(maxX, bmax.x);
+          minY = Math.min(minY, bmin.y); maxY = Math.max(maxY, bmax.y);
           minZ = Math.min(minZ, bmin.z); maxZ = Math.max(maxZ, bmax.z);
           const cxi = (bmin.x + bmax.x) / 2, cyi = (bmin.y + bmax.y) / 2, czi = (bmin.z + bmax.z) / 2;
           const dx = (bmax.x - bmin.x), dy = (bmax.y - bmin.y), dz = (bmax.z - bmin.z);
@@ -888,6 +1023,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
         const halfX = Math.max(0.1, (maxX - minX) / 2);
         const halfZ = Math.max(0.1, (maxZ - minZ) / 2);
         rad = Math.max(halfX, halfZ) * 0.9;
+        planeY = isFinite(minY) ? minY : 0;
         id = 'group';
       } else {
         const mesh = entries[0].mesh;
@@ -897,6 +1033,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
         const halfZ = Math.max(0.1, (max.z - min.z) / 2);
         rad = Math.max(halfX, halfZ) * 0.9; // slightly inside
         center = new BABYLON.Vector3((min.x+max.x)/2, (min.y+max.y)/2, (min.z+max.z)/2);
+        planeY = min.y;
       }
       if (!moveWidget.root || moveWidget.group !== isGroup || moveWidget.groupKey !== groupKey || (moveWidget.root.isDisposed && moveWidget.root.isDisposed())) {
         disposeMoveWidget();
@@ -927,6 +1064,16 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
         mkArrow('x', new BABYLON.Color3(0.95, 0.2, 0.2));
         mkArrow('y', new BABYLON.Color3(0.2, 0.95, 0.2));
         mkArrow('z', new BABYLON.Color3(0.2, 0.45, 0.95));
+        // Ground-plane drag disc (XZ plane)
+        try {
+          const discR = Math.max(0.6, rad * 0.9 * gScale);
+          const disc = BABYLON.MeshBuilder.CreateDisc(`moveGizmo:disc:${id}`, { radius: discR, tessellation: 64 }, scene);
+          const dmat = new BABYLON.StandardMaterial(`moveGizmo:disc:${id}:mat`, scene);
+          dmat.diffuseColor = new BABYLON.Color3(0.15, 0.5, 0.95); dmat.emissiveColor = new BABYLON.Color3(0.12, 0.42, 0.85); dmat.alpha = 0.18; dmat.specularColor = new BABYLON.Color3(0,0,0);
+          disc.material = dmat; disc.isPickable = true; disc.alwaysSelectAsActiveMesh = true; disc.renderingGroupId = 2;
+          disc.rotation.x = Math.PI / 2; // lie on XZ
+          moveWidget.disc = disc;
+        } catch {}
       }
       // Position root
       if (isGroup) {
@@ -942,6 +1089,12 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
         const c = (min && max) ? new BABYLON.Vector3((min.x+max.x)/2, (min.y+max.y)/2, (min.z+max.z)/2) : mesh.position.clone();
         try { moveWidget.root.position.copyFrom(c); } catch {}
       }
+      // Position the plane disc over XZ at lowest AABB Y, centered in XZ on current gizmo center
+      try {
+        const p = isGroup ? center : (entries[0]?.mesh?.position || center);
+        moveWidget.planeY = planeY || 0;
+        if (moveWidget.disc) { moveWidget.disc.position.x = p.x; moveWidget.disc.position.y = moveWidget.planeY; moveWidget.disc.position.z = p.z; }
+      } catch {}
     } catch { try { disposeMoveWidget(); } catch {} }
   }
 
@@ -1040,8 +1193,10 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
         // Prepare possible drag
         moveWidget.preDrag = true;
         moveWidget.downX = scene.pointerX; moveWidget.downY = scene.pointerY;
-        try { const m = String(pick2.pickedMesh.name||'').match(/^moveGizmo:(x|y|z):/i); moveWidget.axis = m ? m[1].toLowerCase() : null; } catch { moveWidget.axis = null; }
-        dPick('preDrag:move', { x: moveWidget.downX, y: moveWidget.downY });
+        const _nm = String(pick2.pickedMesh.name||'');
+        try { const m = _nm.match(/^moveGizmo:(x|y|z):/i); moveWidget.axis = m ? m[1].toLowerCase() : null; } catch { moveWidget.axis = null; }
+        moveWidget.mode = _nm.startsWith('moveGizmo:disc:') ? 'plane' : 'axis';
+        dPick('preDrag:move', { x: moveWidget.downX, y: moveWidget.downY, mode: moveWidget.mode, axis: moveWidget.axis });
       }
     } else if (type === BABYLON.PointerEventTypes.POINTERUP) {
       if (rotWidget.dragging) {
@@ -1294,16 +1449,21 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
           try { pi.event?.stopImmediatePropagation?.(); pi.event?.stopPropagation?.(); pi.event?.preventDefault?.(); pi.skipOnPointerObservable = true; } catch {}
           const selNow = Array.from(state.selection || []);
           const isGroup = selNow.length > 1;
+          const isPlane = (moveWidget.mode === 'plane');
           const axis = (moveWidget.axis === 'x') ? new BABYLON.Vector3(1,0,0) : (moveWidget.axis === 'y') ? new BABYLON.Vector3(0,1,0) : new BABYLON.Vector3(0,0,1);
           const view = camera.getForwardRay().direction.clone();
-          let n = BABYLON.Vector3.Cross(axis, BABYLON.Vector3.Cross(view, axis));
-          if (n.lengthSquared() < 1e-4) n = BABYLON.Vector3.Cross(axis, new BABYLON.Vector3(0,1,0));
-          if (n.lengthSquared() < 1e-4) n = BABYLON.Vector3.Cross(axis, new BABYLON.Vector3(1,0,0));
+          let n = isPlane ? new BABYLON.Vector3(0,1,0) : BABYLON.Vector3.Cross(axis, BABYLON.Vector3.Cross(view, axis));
+          if (!isPlane) {
+            if (n.lengthSquared() < 1e-4) n = BABYLON.Vector3.Cross(axis, new BABYLON.Vector3(0,1,0));
+            if (n.lengthSquared() < 1e-4) n = BABYLON.Vector3.Cross(axis, new BABYLON.Vector3(1,0,0));
+          }
           try { n.normalize(); } catch {}
           if (isGroup) {
             const center = moveWidget.groupCenter || new BABYLON.Vector3(0,0,0);
-            const p0 = pickPointOnPlane(n, center) || center.clone();
-            moveWidget.axisStart = BABYLON.Vector3.Dot(p0, axis);
+            const base0 = isPlane ? new BABYLON.Vector3(0, moveWidget.planeY || 0, 0) : center;
+            const p0 = pickPointOnPlane(n, base0) || base0.clone();
+            moveWidget.axisStart = isPlane ? 0 : BABYLON.Vector3.Dot(p0, axis);
+            moveWidget.startPoint = p0.clone();
             moveWidget.startCenter = center.clone ? center.clone() : new BABYLON.Vector3(center.x, center.y, center.z);
             moveWidget.startById = new Map();
             moveWidget.groupIDs = selNow.slice();
@@ -1313,16 +1473,18 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
             }
             moveWidget.planeNormal = n.clone();
             moveWidget.dragging = true; moveWidget.preDrag = false;
-            try { const canvas = engine.getRenderingCanvas(); camera.inputs?.attached?.pointers?.detachControl(canvas); const pe = pi.event; if (pe && pe.pointerId != null && canvas.setPointerCapture) canvas.setPointerCapture(pe.pointerId); Log.log('GIZMO', 'Group Move start', { ids: moveWidget.groupIDs, axis: moveWidget.axis }); } catch {}
+            try { const canvas = engine.getRenderingCanvas(); camera.inputs?.attached?.pointers?.detachControl(canvas); const pe = pi.event; if (pe && pe.pointerId != null && canvas.setPointerCapture) canvas.setPointerCapture(pe.pointerId); Log.log('GIZMO', isPlane ? 'Group Plane Move start' : 'Group Move start', { ids: moveWidget.groupIDs, mode: moveWidget.mode, axis: moveWidget.axis }); } catch {}
           } else {
             const mref = (state?.built?.spaces || []).find(x => x.id === selNow[0])?.mesh; if (!mref) return;
             const center = mref.position.clone();
-            const p0 = pickPointOnPlane(n, center) || center.clone();
-            moveWidget.axisStart = BABYLON.Vector3.Dot(p0, axis);
+            const base0 = isPlane ? new BABYLON.Vector3(0, moveWidget.planeY || 0, 0) : center;
+            const p0 = pickPointOnPlane(n, base0) || base0.clone();
+            moveWidget.axisStart = isPlane ? 0 : BABYLON.Vector3.Dot(p0, axis);
+            moveWidget.startPoint = p0.clone();
             moveWidget.startCenter = center.clone();
             moveWidget.planeNormal = n.clone();
             moveWidget.dragging = true; moveWidget.preDrag = false;
-            try { const canvas = engine.getRenderingCanvas(); camera.inputs?.attached?.pointers?.detachControl(canvas); const pe = pi.event; if (pe && pe.pointerId != null && canvas.setPointerCapture) canvas.setPointerCapture(pe.pointerId); Log.log('GIZMO', 'Move start', { id: moveWidget.spaceId, axis: moveWidget.axis, start: center }); } catch {}
+            try { const canvas = engine.getRenderingCanvas(); camera.inputs?.attached?.pointers?.detachControl(canvas); const pe = pi.event; if (pe && pe.pointerId != null && canvas.setPointerCapture) canvas.setPointerCapture(pe.pointerId); Log.log('GIZMO', isPlane ? 'Plane Move start' : 'Move start', { id: moveWidget.spaceId, mode: moveWidget.mode, axis: moveWidget.axis, start: center }); } catch {}
           }
           dPick('dragStart:move', {});
           // Hide built intersections during drag to avoid stale boxes
@@ -1334,21 +1496,26 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
         try { pi.event?.stopImmediatePropagation?.(); pi.event?.stopPropagation?.(); pi.event?.preventDefault?.(); pi.skipOnPointerObservable = true; } catch {}
         const selNow = Array.from(state.selection || []);
         const isGroup = selNow.length > 1;
+        const isPlane = (moveWidget.mode === 'plane');
         const axis = (moveWidget.axis === 'x') ? new BABYLON.Vector3(1,0,0) : (moveWidget.axis === 'y') ? new BABYLON.Vector3(0,1,0) : new BABYLON.Vector3(0,0,1);
         if (isGroup) {
           const n = moveWidget.planeNormal || new BABYLON.Vector3(0,1,0);
-          const p = pickPointOnPlane(n, moveWidget.startCenter || new BABYLON.Vector3(0,0,0)); if (!p) return;
-          const s = BABYLON.Vector3.Dot(p, axis);
-          const deltaScalar = s - (moveWidget.axisStart || 0);
+          const basePt = isPlane ? new BABYLON.Vector3(0, moveWidget.planeY || 0, 0) : (moveWidget.startCenter || new BABYLON.Vector3(0,0,0));
+          const p = pickPointOnPlane(n, basePt); if (!p) return;
+          let deltaScalar = 0; let deltaVec = null;
+          if (isPlane) { deltaVec = p.subtract(moveWidget.startPoint || basePt); }
+          else { const s = BABYLON.Vector3.Dot(p, axis); deltaScalar = s - (moveWidget.axisStart || 0); }
           for (const id2 of moveWidget.groupIDs || []) {
             const entry = (state?.built?.spaces || []).find(x => x.id === id2); if (!entry?.mesh) continue;
             const startPos = moveWidget.startById?.get?.(id2); if (!startPos) continue;
-            const targetPos = startPos.add(axis.scale(deltaScalar));
+            const targetPos = isPlane ? startPos.add(deltaVec) : startPos.add(axis.scale(deltaScalar));
             const m2 = entry.mesh; m2.position.copyFrom(targetPos);
             try { m2.computeWorldMatrix(true); m2.refreshBoundingInfo(); } catch {}
           }
-          const targetCenter = (moveWidget.startCenter || new BABYLON.Vector3(0,0,0)).add(axis.scale(deltaScalar));
+          const targetCenter = isPlane ? (moveWidget.startCenter || new BABYLON.Vector3(0,0,0)).add(deltaVec) : (moveWidget.startCenter || new BABYLON.Vector3(0,0,0)).add(axis.scale(deltaScalar));
           try { moveWidget.root.position.copyFrom(targetCenter); } catch {}
+          try { updateMoveDiscPlacement(); } catch {}
+          try { updateContactShadowPlacement(); } catch {}
           moveWidget.groupCenter = targetCenter;
           // Keep rotation gizmo (group rings) following
           try { if (rotWidget.group && rotWidget.groupNode) rotWidget.groupNode.position.copyFrom(targetCenter); } catch {}
@@ -1361,27 +1528,42 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
               sp.origin = { x: m2.position.x, y: m2.position.y, z: m2.position.z };
             }
             const now = performance.now();
-            if (now - _lastDbRefresh > 60) { _lastDbRefresh = now; Log.log('GIZMO', 'Group Move update', { ids: moveWidget.groupIDs, axis: moveWidget.axis }); try { renderDbView(state.barrow); } catch {} }
+            if (now - _lastDbRefresh > 60) {
+              _lastDbRefresh = now;
+              Log.log('GIZMO', isPlane ? 'Group Plane Move update' : 'Group Move update', { ids: moveWidget.groupIDs, mode: moveWidget.mode, axis: moveWidget.axis });
+              try { renderDbView(state.barrow); } catch {}
+              try { updateSelectionObbLive(); } catch {}
+            }
           } catch {}
         } else {
           const n = moveWidget.planeNormal || new BABYLON.Vector3(0,1,0);
-          const p = pickPointOnPlane(n, moveWidget.startCenter || new BABYLON.Vector3(0,0,0)); if (!p) return;
-          const s = BABYLON.Vector3.Dot(p, axis);
-          const deltaScalar = s - (moveWidget.axisStart || 0);
-          const target = (moveWidget.startCenter || mesh.position).add(axis.scale(deltaScalar));
+          const basePt = isPlane ? new BABYLON.Vector3(0, moveWidget.planeY || 0, 0) : (moveWidget.startCenter || mesh.position || new BABYLON.Vector3(0,0,0));
+          const p = pickPointOnPlane(n, basePt); if (!p) return;
+          let target;
+          if (isPlane) {
+            const deltaVec = p.subtract(moveWidget.startPoint || basePt);
+            target = (moveWidget.startCenter || mesh.position).add(deltaVec);
+          } else {
+            const s = BABYLON.Vector3.Dot(p, axis);
+            const deltaScalar = s - (moveWidget.axisStart || 0);
+            target = (moveWidget.startCenter || mesh.position).add(axis.scale(deltaScalar));
+          }
           mesh.position.copyFrom(target);
           try { mesh.computeWorldMatrix(true); mesh.refreshBoundingInfo(); } catch {}
           try { if (moveWidget.root) moveWidget.root.position.copyFrom(target); } catch {}
+          try { updateMoveDiscPlacement(); } catch {}
+          try { updateContactShadowPlacement(); } catch {}
           try { updateRotWidgetFromMesh(mesh); } catch {}
           try {
             if (space) {
               space.origin = space.origin || { x: 0, y: 0, z: 0 };
               space.origin.x = mesh.position.x; space.origin.y = mesh.position.y; space.origin.z = mesh.position.z;
               const now = performance.now();
-              if (now - _lastDbRefresh > 60) { _lastDbRefresh = now; Log.log('GIZMO', 'Move update', { id: moveWidget.spaceId, axis: moveWidget.axis, origin: space.origin }); try { renderDbView(state.barrow); } catch {} }
+              if (now - _lastDbRefresh > 60) { _lastDbRefresh = now; Log.log('GIZMO', isPlane ? 'Plane Move update' : 'Move update', { id: moveWidget.spaceId, mode: moveWidget.mode, axis: moveWidget.axis, origin: space.origin }); try { renderDbView(state.barrow); } catch {} }
               try { updateLiveIntersectionsFor(id); } catch {}
             }
           } catch {}
+          try { updateSelectionObbLive(); } catch {}
         }
       }
       }

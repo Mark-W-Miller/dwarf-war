@@ -11,6 +11,18 @@ export function initGrids(scene) {
   grid.lineColor = baseLineXZ.clone();
   grid.gridRatio = 2; grid.opacity = 0.95; ground.material = grid;
 
+  // Transparent shadow-catcher slightly above ground to show shadows without obscuring grid
+  let shadowCatcher = null;
+  try {
+    shadowCatcher = BABYLON.MeshBuilder.CreateGround('shadowCatcher', { width: 800, height: 800 }, scene);
+    shadowCatcher.position.y = 0.001; shadowCatcher.isPickable = false; shadowCatcher.receiveShadows = true;
+    const sh = new BABYLON.ShadowOnlyMaterial('shadowOnly', scene);
+    sh.alpha = 0.9; // stronger shadows for clarity
+    shadowCatcher.material = sh;
+    // Render just above the grid to avoid z-fighting
+    try { shadowCatcher.renderingGroupId = 1; ground.renderingGroupId = 0; } catch {}
+  } catch {}
+
   // XY at Z=0
   const vGrid = BABYLON.MeshBuilder.CreatePlane('gridYX', { width: 800, height: 800 }, scene);
   vGrid.position = new BABYLON.Vector3(0, 0, 0);
@@ -69,6 +81,8 @@ export function initGrids(scene) {
       shaft.rotationQuaternion = q.clone(); tip.rotationQuaternion = q.clone();
       shaft.parent = group; tip.parent = group;
 
+      // No labels near arrow heads
+
       function setLength(totalLen) {
         // Head length proportionate and clamped for visibility
         const headLen = Math.min(Math.max(totalLen * 0.1, 8), Math.max(30, totalLen * 0.3));
@@ -84,6 +98,7 @@ export function initGrids(scene) {
         shaft.position.copyFrom(shaftCenter);
         const tipCenter = dir.scale(shaftLen + headLen / 2);
         tip.position.copyFrom(tipCenter);
+        // (labels removed)
       }
 
       return { shaft, tip, setLength };
@@ -138,6 +153,7 @@ export function initGrids(scene) {
     const sizeXY = Math.max(1000, 2 * Math.max(maxAbsX, maxAbsY) + pad);
     const sizeYZ = Math.max(1000, 2 * Math.max(maxAbsY, maxAbsZ) + pad);
     ground.scaling.x = sizeXZ / 800; ground.scaling.z = sizeXZ / 800;
+    try { if (shadowCatcher) { shadowCatcher.scaling.x = ground.scaling.x; shadowCatcher.scaling.z = ground.scaling.z; } } catch {}
     vGrid.scaling.x = sizeXY / 800; vGrid.scaling.y = sizeXY / 800;
     wGrid.scaling.x = sizeYZ / 800; wGrid.scaling.y = sizeYZ / 800;
 
@@ -181,5 +197,5 @@ export function initGrids(scene) {
     gridTimer = setTimeout(() => updateGridExtent(built), 2000);
   }
 
-  return { ground, vGrid, wGrid, arrows, updateUnitGrids, updateGridExtent, scheduleGridUpdate, applyVisualStrengths };
+  return { ground, shadowCatcher, vGrid, wGrid, arrows, updateUnitGrids, updateGridExtent, scheduleGridUpdate, applyVisualStrengths };
 }
