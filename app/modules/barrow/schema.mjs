@@ -17,7 +17,8 @@ export function makeDefaultBarrow() {
   };
 }
 
-export function makeSpace(id, type = 'Space', origin = { x:0, y:0, z:0 }, size = { x:200, y:100, z:200 }, res = 10) {
+// Default size halved for dims > 10 (200,100,200 -> 100,50,100)
+export function makeSpace(id, type = 'Space', origin = { x:0, y:0, z:0 }, size = { x:100, y:50, z:100 }, res = 10) {
   return { id, type, origin, size, res, chunks: {}, attrs: {} };
 }
 

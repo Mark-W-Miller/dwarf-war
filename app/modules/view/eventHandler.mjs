@@ -217,6 +217,47 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     } catch (e) { logErr('EH:renderGizmoHud', e); }
   }
 
+  // ——————————— Gizmo suppression for long ops ———————————
+  function suppressGizmos(on) {
+    _gizmosSuppressed = !!on;
+    if (_gizmosSuppressed) {
+      try { Log.log('GIZMO', 'Suppress on', { reason: 'voxel-op' }); } catch {}
+      try { if (rotWidget) { rotWidget.dragging = false; rotWidget.preDrag = false; rotWidget.axis = null; } } catch {}
+      try { if (moveWidget) { moveWidget.dragging = false; moveWidget.preDrag = false; moveWidget.axis = null; } } catch {}
+      try { disposeMoveWidget(); } catch {}
+      try { disposeRotWidget(); } catch {}
+      try { setGizmoHudVisible(false); } catch {}
+    } else {
+      try { Log.log('GIZMO', 'Suppress off', {}); } catch {}
+      try { ensureRotWidget(); ensureMoveWidget(); } catch {}
+    }
+  }
+  try {
+    window.addEventListener('dw:gizmos:disable', () => suppressGizmos(true));
+    window.addEventListener('dw:gizmos:enable', () => suppressGizmos(false));
+  } catch {}
+
+  // Global enable/disable for gizmos during long operations (merge/bake/fill)
+  function suppressGizmos(on) {
+    _gizmosSuppressed = !!on;
+    if (_gizmosSuppressed) {
+      try { Log.log('GIZMO', 'Suppress on', { reason: 'voxel-op' }); } catch {}
+      // Cancel any in-progress drags
+      try { if (rotWidget) { rotWidget.dragging = false; rotWidget.preDrag = false; rotWidget.axis = null; } } catch {}
+      try { if (moveWidget) { moveWidget.dragging = false; moveWidget.preDrag = false; moveWidget.axis = null; } } catch {}
+      try { disposeMoveWidget(); } catch {}
+      try { disposeRotWidget(); } catch {}
+      try { setGizmoHudVisible(false); } catch {}
+    } else {
+      try { Log.log('GIZMO', 'Suppress off', {}); } catch {}
+      try { ensureRotWidget(); ensureMoveWidget(); } catch {}
+    }
+  }
+  try {
+    window.addEventListener('dw:gizmos:disable', () => suppressGizmos(true));
+    window.addEventListener('dw:gizmos:enable', () => suppressGizmos(false));
+  } catch {}
+
   // Manual grid resize to fit all spaces
   resizeGridBtn?.addEventListener('click', () => {
     try { helpers.updateGridExtent?.(); } catch (e) { logErr('EH:updateGridExtent', e); }
@@ -350,14 +391,19 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
 
   // ——————————— Type defaults & size fields ———————————
   function defaultSizeForType(t) {
+    // Base defaults
+    let base;
     switch (t) {
-      case 'Cavern': return { x: 100, y: 75, z: 100 };
-      case 'Carddon': return { x: 200, y: 15, z: 200 };
-      case 'Tunnel': return { x: 100, y: 40, z: 20 };
-      case 'Room': return { x: 10, y: 10, z: 10 };
-      case 'Space': return { x: 5, y: 5, z: 5 };
-      default: return { x: 200, y: 100, z: 200 };
+      case 'Cavern': base = { x: 100, y: 75, z: 100 }; break;
+      case 'Carddon': base = { x: 200, y: 15, z: 200 }; break;
+      case 'Tunnel': base = { x: 100, y: 40, z: 20 }; break;
+      case 'Room': base = { x: 10, y: 10, z: 10 }; break;
+      case 'Space': base = { x: 5, y: 5, z: 5 }; break;
+      default: base = { x: 200, y: 100, z: 200 }; break;
     }
+    // Halve any dimension greater than 10
+    const shrink = (n) => (n > 10 ? Math.round(n / 2) : n);
+    return { x: shrink(base.x), y: shrink(base.y), z: shrink(base.z) };
   }
   function applyDefaultSizeFields() {
     const t = spaceTypeEl?.value || 'Space';
@@ -423,7 +469,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     function addRepeat(btn, fn){
       if (!btn) return;
       let timer = null;
-      const fire = () => fn();
+      const fire = () => { if (_gizmosSuppressed) return; try { fn(); } catch {} };
       btn.addEventListener('mousedown', () => {
         if (timer) clearInterval(timer);
         fire();
@@ -903,6 +949,12 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
   let _lastGizmoClick = 0;
   const _GIZMO_DCLICK_MS = Number(localStorage.getItem('dw:ui:doubleClickMs') || '500') || 500;
   scene.onPointerObservable.add((pi) => {
+    // Block gizmo input while suppressed (voxelizing)
+    if (_gizmosSuppressed) {
+      try { if (rotWidget) { rotWidget.dragging = false; rotWidget.preDrag = false; rotWidget.axis = null; } } catch {}
+      try { if (moveWidget) { moveWidget.dragging = false; moveWidget.preDrag = false; moveWidget.axis = null; } } catch {}
+      return;
+    }
     if (state.mode !== 'edit') return;
     const type = pi.type;
     if (type === BABYLON.PointerEventTypes.POINTERDOWN) {
@@ -1426,6 +1478,12 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     } catch {}
   }
   scene.onPointerObservable.add((pi) => {
+    if (_gizmosSuppressed) {
+      try { if (rotWidget) { rotWidget.dragging = false; rotWidget.preDrag = false; rotWidget.axis = null; } } catch {}
+      try { if (moveWidget) { moveWidget.dragging = false; moveWidget.preDrag = false; moveWidget.axis = null; } } catch {}
+      try { Log.log('GIZMO', 'Pointer blocked during voxel-op', { type: pi.type }); } catch {}
+      return;
+    }
     if (state.mode !== 'edit') return;
     if (pi.type !== BABYLON.PointerEventTypes.POINTERDOWN) return;
     if (rotWidget.dragging || moveWidget.dragging) return; // do not interfere while dragging gizmo
@@ -1812,18 +1870,3 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     } catch (err) { Log.log('ERROR', 'Open DB to space failed', { id, error: String(err) }); }
   });
 }
-  // Global enable/disable for gizmos during long operations (merge/bake/fill)
-  function suppressGizmos(on) {
-    _gizmosSuppressed = !!on;
-    if (_gizmosSuppressed) {
-      try { disposeMoveWidget(); } catch {}
-      try { disposeRotWidget(); } catch {}
-      try { setGizmoHudVisible(false); } catch {}
-    } else {
-      try { ensureRotWidget(); ensureMoveWidget(); } catch {}
-    }
-  }
-  try {
-    window.addEventListener('dw:gizmos:disable', () => suppressGizmos(true));
-    window.addEventListener('dw:gizmos:enable', () => suppressGizmos(false));
-  } catch {}

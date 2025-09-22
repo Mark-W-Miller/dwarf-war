@@ -20,6 +20,8 @@ export function bakeHollowContainer(space, opts = {}) {
   const sy = Math.max(1, Math.floor(space?.size?.y || 1));
   const sz = Math.max(1, Math.floor(space?.size?.z || 1));
   const res = space?.res || 1;
+  // Space center in world units
+  const cx = space?.origin?.x || 0, cy = space?.origin?.y || 0, cz = space?.origin?.z || 0;
   // Expand the voxel grid to the world-aligned AABB of the rotated space
   let bb = null; try { bb = worldAabbFromSpace(space, res); } catch {}
   const wxSpan = bb ? (bb.max.x - bb.min.x) : (sx * res);
@@ -274,7 +276,7 @@ export function bakeCavernOvoid(space, opts = {}) {
     source: space?.id || null,
     wallThickness: t,
     hasRock: false,
-    shape: 'cavern-ovoid',
+    shape: 'box-hollow',
     worldAligned: true,
   };
 }

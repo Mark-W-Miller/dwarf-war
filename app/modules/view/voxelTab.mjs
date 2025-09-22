@@ -26,6 +26,7 @@ export function initVoxelTab(panelContent, api) {
   const row2 = document.createElement('div'); row2.className = 'row';
   const mergeBtn = document.createElement('button'); mergeBtn.className = 'btn'; mergeBtn.textContent = 'Merge Overlapping Spaces'; row2.appendChild(mergeBtn);
   const fillBtn = document.createElement('button'); fillBtn.className = 'btn'; fillBtn.textContent = 'Fill Space Voxels = Rock'; row2.appendChild(fillBtn);
+  const cancelBtn = document.createElement('button'); cancelBtn.className = 'btn warn'; cancelBtn.textContent = 'Cancel'; cancelBtn.disabled = true; row2.appendChild(cancelBtn);
   voxPane.appendChild(row2);
 
   // Central tab activation is handled elsewhere; we just log
@@ -127,6 +128,9 @@ export function initVoxelTab(panelContent, api) {
   });
 
   // New: explicit Merge button handler (union merge of overlapping spaces)
+  let _cancelMerge = { value: false };
+  cancelBtn.addEventListener('click', () => { if (!cancelBtn.disabled) { _cancelMerge.value = true; try { Log.log('UI', 'Cancel voxel op', {}); } catch {} } });
+
   mergeBtn.addEventListener('click', async () => {
     const spaces = getSelectedSpaces(); if (!spaces.length) return;
     // Use the first selected space as the seed for overlap union
@@ -139,6 +143,8 @@ export function initVoxelTab(panelContent, api) {
       const showDots = !!scanDotsCb?.checked;
       // Record last res for mid-run enable
       try { lastScanRes = res; } catch {}
+      // Enable cancel UI
+      _cancelMerge.value = false; cancelBtn.disabled = false;
       Log.log('DEBUG', 'mergeAsync:invoke', { seed: seed.id });
       const debugCfg = {
         chunk: 256,
@@ -155,20 +161,21 @@ export function initVoxelTab(panelContent, api) {
       debugCfg.onTestInside = (wx, wy, wz) => { if (scanDotsOn) { try { api.debug?.addVoxelScanPointInside?.(wx, wy, wz); } catch {} } };
       debugCfg.onTestOutside = (wx, wy, wz) => { if (scanDotsOn) { try { api.debug?.addVoxelScanPointOutside?.(wx, wy, wz); } catch {} } };
       debugCfg.flush = () => { if (scanDotsOn) { try { api.debug?.flushVoxelScanPoints?.(); } catch {} } };
-      keepId = await mergeOverlappingSpacesAsync(api.state.barrow, seed.id, { debug: debugCfg });
+      keepId = await mergeOverlappingSpacesAsync(api.state.barrow, seed.id, { debug: debugCfg, cancel: () => _cancelMerge.value });
       Log.log('DEBUG', 'mergeAsync:returned', { keepId });
-      if (keepId && keepId !== seed.id) {
+      if (!_cancelMerge.value && keepId && keepId !== seed.id) {
         Log.log('UI', 'Merged overlapping spaces', { keepId, from: seed.id });
       }
     } catch {}
     // Update selection to the kept id (or seed)
-    try { const id = keepId || seed.id; api.state.selection.clear(); api.state.selection.add(id); } catch {}
+    try { if (!_cancelMerge.value) { const id = keepId || seed.id; api.state.selection.clear(); api.state.selection.add(id); } } catch {}
     try { api.saveBarrow(api.state.barrow); api.snapshot(api.state.barrow); } catch {}
     try { api.renderDbView(api.state.barrow); } catch {}
     try { api.rebuildScene?.(); } catch {}
     try { api.scheduleGridUpdate?.(); } catch {}
-    try { window.dispatchEvent(new CustomEvent('dw:transform', { detail: { kind: 'voxel-merge', sel: [seed.id], keepId: keepId||seed.id } })); } catch {}
+    try { if (!_cancelMerge.value) window.dispatchEvent(new CustomEvent('dw:transform', { detail: { kind: 'voxel-merge', sel: [seed.id], keepId: keepId||seed.id } })); } catch {}
     try { window.dispatchEvent(new CustomEvent('dw:gizmos:enable')); } catch {}
+    cancelBtn.disabled = true;
   });
 
   // Add a Clear Dots button for debug

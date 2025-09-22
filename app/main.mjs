@@ -98,6 +98,13 @@ const state = {
   voxHl: new Map(), // id -> selected voxel highlight mesh
 };
 
+// Global flag to block transforms during voxel operations (bake/merge/fill)
+let _voxOpActive = false;
+try {
+  window.addEventListener('dw:gizmos:disable', () => { _voxOpActive = true; try { Log.log('VOXEL', 'Op start: suppress transforms', {}); } catch {} });
+  window.addEventListener('dw:gizmos:enable', () => { _voxOpActive = false; try { Log.log('VOXEL', 'Op end: allow transforms', {}); } catch {} });
+} catch {}
+
 // Load or create barrow
 state.barrow = loadBarrow() || makeDefaultBarrow();
 layoutBarrow(state.barrow); // ensure positions from directions
@@ -614,6 +621,7 @@ function rebuildHalos() {
 }
 
 function moveSelection(dx=0, dy=0, dz=0) {
+  if (_voxOpActive) { try { Log.log('XFORM', 'Move blocked during voxel op', { dx, dy, dz }); } catch {} return; }
   if (!state.selection.size) return;
   const bySpace = new Map((state.barrow.spaces||[]).map(s => [s.id, s]));
   const byCav = new Map((state.barrow.caverns||[]).map(c => [c.id, c]));
