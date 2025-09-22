@@ -190,6 +190,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
 
   // ——————————— Gizmo HUD (temporary) ———————————
   let _gizmoHudEl = null;
+  let _gizmosSuppressed = false;
   function ensureGizmoHud() {
     if (_gizmoHudEl && document.body.contains(_gizmoHudEl)) return _gizmoHudEl;
     const el = document.createElement('div'); el.id = 'gizmoHud';
@@ -497,6 +498,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     rotWidget = { meshes: { x: null, y: null, z: null }, mats: { x: null, y: null, z: null }, axis: 'y', activeAxis: null, spaceId: null, dragging: false, preDrag: false, downX: 0, downY: 0, startAngle: 0, startRot: 0, lastRot: 0, baseDiam: { x: 0, y: 0, z: 0 }, startQuat: null, axisLocal: null, refLocal: null, group: false, groupIDs: [], groupCenter: null, groupNode: null, startById: null, axisWorld: null, refWorld: null, groupKey: '' };
   }
   function ensureRotWidget() {
+      if (_gizmosSuppressed) { try { disposeRotWidget(); setGizmoHudVisible(false); } catch {} return; }
     try {
       try { Log.log('GIZMO', 'Ensure widget', { selection: Array.from(state.selection||[]) }); } catch {}
       // Support single or multi selection
@@ -809,6 +811,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     moveWidget = { mesh: null, root: null, arrowMeshes: [], spaceId: null, dragging: false, preDrag: false, downX: 0, downY: 0, startPoint: null, startOrigin: null, offsetVec: null, planeNormal: null, group: false, groupIDs: [], groupCenter: null, startCenter: null, startById: null, groupKey: '', axis: null, axisStart: 0 };
   }
   function ensureMoveWidget() {
+      if (_gizmosSuppressed) { try { disposeMoveWidget(); } catch {} return; }
     try {
       const sel = Array.from(state.selection || []);
       const builtSpaces = (state?.built?.spaces || []);
@@ -1809,3 +1812,18 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     } catch (err) { Log.log('ERROR', 'Open DB to space failed', { id, error: String(err) }); }
   });
 }
+  // Global enable/disable for gizmos during long operations (merge/bake/fill)
+  function suppressGizmos(on) {
+    _gizmosSuppressed = !!on;
+    if (_gizmosSuppressed) {
+      try { disposeMoveWidget(); } catch {}
+      try { disposeRotWidget(); } catch {}
+      try { setGizmoHudVisible(false); } catch {}
+    } else {
+      try { ensureRotWidget(); ensureMoveWidget(); } catch {}
+    }
+  }
+  try {
+    window.addEventListener('dw:gizmos:disable', () => suppressGizmos(true));
+    window.addEventListener('dw:gizmos:enable', () => suppressGizmos(false));
+  } catch {}

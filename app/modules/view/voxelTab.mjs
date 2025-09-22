@@ -108,6 +108,7 @@ export function initVoxelTab(panelContent, api) {
 
   bakeBtn.addEventListener('click', async () => {
     const spaces = getSelectedSpaces(); if (!spaces.length) return;
+    try { window.dispatchEvent(new CustomEvent('dw:gizmos:disable')); } catch {}
     const t = Math.max(1, Math.floor(Number(tInput.value || '1')));
     Log.log('UI', 'Voxel bake', { sel: spaces.map(s => s?.id), wallThickness: t });
     for (const s of spaces) {
@@ -122,6 +123,7 @@ export function initVoxelTab(panelContent, api) {
     try { api.rebuildScene?.(); } catch {}
     try { api.scheduleGridUpdate?.(); } catch {}
     try { window.dispatchEvent(new CustomEvent('dw:transform', { detail: { kind: 'voxel-bake', sel: spaces.map(s => s.id), wallThickness: t } })); } catch {}
+    try { window.dispatchEvent(new CustomEvent('dw:gizmos:enable')); } catch {}
   });
 
   // New: explicit Merge button handler (union merge of overlapping spaces)
@@ -132,8 +134,11 @@ export function initVoxelTab(panelContent, api) {
     Log.log('UI', 'Voxel merge', { sel: spaces.map(s => s?.id), seed: seed?.id });
     let keepId = null;
     try {
+      try { window.dispatchEvent(new CustomEvent('dw:gizmos:disable')); } catch {}
       const res = seed.res || (api.state.barrow?.meta?.voxelSize || 1);
       const showDots = !!scanDotsCb?.checked;
+      // Record last res for mid-run enable
+      try { lastScanRes = res; } catch {}
       Log.log('DEBUG', 'mergeAsync:invoke', { seed: seed.id });
       const debugCfg = {
         chunk: 256,
@@ -141,15 +146,15 @@ export function initVoxelTab(panelContent, api) {
         onStart: ({ nx, ny, nz }) => { try { Log.log('DEBUG', 'Union scan start', { ny }); } catch {} },
         // Only log plane number (Y)
         onLayer: (y) => { try { Log.log('DEBUG', 'Layer', { y }); } catch {} },
-        onEnd: () => { try { if (showDots) api.debug?.flushVoxelScanPoints?.(); Log.log('DEBUG', 'Union scan end', {}); } catch {} },
+        onEnd: () => { try { if (scanDotsOn) api.debug?.flushVoxelScanPoints?.(); Log.log('DEBUG', 'Union scan end', {}); } catch {} },
         showObb: (corners) => { try { api.debug?.showObbDebug?.(corners); } catch {} }
       };
-      if (showDots) {
-        try { api.debug?.startVoxelScanDebug?.(res); } catch {}
-        debugCfg.onTestInside = (wx, wy, wz) => { try { api.debug?.addVoxelScanPointInside?.(wx, wy, wz); } catch {} };
-        debugCfg.onTestOutside = (wx, wy, wz) => { try { api.debug?.addVoxelScanPointOutside?.(wx, wy, wz); } catch {} };
-        debugCfg.flush = () => { try { api.debug?.flushVoxelScanPoints?.(); } catch {} };
-      }
+      // If currently enabled, prepare base meshes
+      try { if (scanDotsOn) api.debug?.startVoxelScanDebug?.(res); } catch {}
+      // Always provide callbacks; gate with scanDotsOn so toggling works mid-run
+      debugCfg.onTestInside = (wx, wy, wz) => { if (scanDotsOn) { try { api.debug?.addVoxelScanPointInside?.(wx, wy, wz); } catch {} } };
+      debugCfg.onTestOutside = (wx, wy, wz) => { if (scanDotsOn) { try { api.debug?.addVoxelScanPointOutside?.(wx, wy, wz); } catch {} } };
+      debugCfg.flush = () => { if (scanDotsOn) { try { api.debug?.flushVoxelScanPoints?.(); } catch {} } };
       keepId = await mergeOverlappingSpacesAsync(api.state.barrow, seed.id, { debug: debugCfg });
       Log.log('DEBUG', 'mergeAsync:returned', { keepId });
       if (keepId && keepId !== seed.id) {
@@ -163,6 +168,7 @@ export function initVoxelTab(panelContent, api) {
     try { api.rebuildScene?.(); } catch {}
     try { api.scheduleGridUpdate?.(); } catch {}
     try { window.dispatchEvent(new CustomEvent('dw:transform', { detail: { kind: 'voxel-merge', sel: [seed.id], keepId: keepId||seed.id } })); } catch {}
+    try { window.dispatchEvent(new CustomEvent('dw:gizmos:enable')); } catch {}
   });
 
   // Add a Clear Dots button for debug
@@ -170,16 +176,26 @@ export function initVoxelTab(panelContent, api) {
   // Scan dots toggle (unchecked by default)
   const dotsLabel = document.createElement('label'); dotsLabel.style.display = 'inline-flex'; dotsLabel.style.alignItems = 'center'; dotsLabel.style.gap = '6px';
   const scanDotsCb = document.createElement('input'); scanDotsCb.type = 'checkbox'; scanDotsCb.id = 'scanDots';
+  // Runtime flag + last resolution for mid-run toggling
+  let scanDotsOn = false;
+  let lastScanRes = 1;
   // Remember preference in localStorage; default = on
   try {
     const key = 'dw:ui:scanDots';
     const stored = localStorage.getItem(key);
     const def = true; // on by default
     scanDotsCb.checked = (stored == null) ? def : (stored === '1');
+    scanDotsOn = !!scanDotsCb.checked;
     scanDotsCb.addEventListener('change', () => {
+      scanDotsOn = !!scanDotsCb.checked;
       try { localStorage.setItem(key, scanDotsCb.checked ? '1' : '0'); } catch {}
+      // If enabling mid-run and no base meshes exist, (re)start debug so dots appear
+      try {
+        const hasBases = !!(api.state?._scanDebug?.redBase && api.state?._scanDebug?.greenBase);
+        if (scanDotsOn && !hasBases) api.debug?.startVoxelScanDebug?.(lastScanRes || 1);
+      } catch {}
     });
-  } catch { scanDotsCb.checked = true; }
+  } catch { scanDotsCb.checked = true; scanDotsOn = true; }
   dotsLabel.appendChild(scanDotsCb); dotsLabel.appendChild(document.createTextNode('Show scan dots'));
   row3.appendChild(dotsLabel);
   const clearBtn = document.createElement('button'); clearBtn.className = 'btn warn'; clearBtn.textContent = 'Clear Scan Dots';
@@ -219,6 +235,7 @@ export function initVoxelTab(panelContent, api) {
 
   fillBtn.addEventListener('click', () => {
     const spaces = getSelectedSpaces(); if (!spaces.length) return;
+    try { window.dispatchEvent(new CustomEvent('dw:gizmos:disable')); } catch {}
     Log.log('UI', 'Voxel fill', { sel: spaces.map(s => s?.id), value: 'Rock' });
     for (const s of spaces) {
       try {
@@ -234,6 +251,7 @@ export function initVoxelTab(panelContent, api) {
     try { api.rebuildScene?.(); } catch {}
     try { api.scheduleGridUpdate?.(); } catch {}
     try { window.dispatchEvent(new CustomEvent('dw:transform', { detail: { kind: 'voxel-fill', sel: spaces.map(s => s.id), value: 'Rock' } })); } catch {}
+    try { window.dispatchEvent(new CustomEvent('dw:gizmos:enable')); } catch {}
   });
 
   // Warn/log when buttons are clicked with no selection
