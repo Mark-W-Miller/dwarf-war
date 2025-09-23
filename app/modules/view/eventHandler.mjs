@@ -472,6 +472,90 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     } catch { return VoxelType.Uninstantiated; }
   }
 
+  // Helper: perform voxel pick at current pointer for a given space and dispatch dw:voxelPick
+  function doVoxelPickAtPointer(s) {
+    try {
+      if (!s || !s.vox || !s.vox.size) return;
+      const vox = decompressVox(s.vox);
+      const nx = Math.max(1, vox.size?.x || 1);
+      const ny = Math.max(1, vox.size?.y || 1);
+      const nz = Math.max(1, vox.size?.z || 1);
+      const res = vox.res || s.res || (state?.barrow?.meta?.voxelSize || 1);
+      const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), camera);
+      const roW = ray.origin.clone(), rdW = ray.direction.clone();
+      const cx = s.origin?.x||0, cy = s.origin?.y||0, cz = s.origin?.z||0;
+      let q = BABYLON.Quaternion.Identity();
+      const worldAligned = !!(s.vox && s.vox.worldAligned);
+      try {
+        if (!worldAligned) {
+          const rx = Number(s.rotation?.x ?? 0) || 0;
+          const ry = (s.rotation && typeof s.rotation.y === 'number') ? Number(s.rotation.y) : Number(s.rotY || 0) || 0;
+          const rz = Number(s.rotation?.z ?? 0) || 0;
+          q = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz);
+        }
+      } catch {}
+      const qInv = BABYLON.Quaternion.Inverse(q);
+      const rotInv = (() => { try { return BABYLON.Matrix.Compose(new BABYLON.Vector3(1,1,1), qInv, BABYLON.Vector3.Zero()); } catch { return BABYLON.Matrix.Identity(); } })();
+      const roL = BABYLON.Vector3.TransformCoordinates(roW.subtract(new BABYLON.Vector3(cx, cy, cz)), rotInv);
+      const rdL = BABYLON.Vector3.TransformNormal(rdW, rotInv);
+      const minX = -(nx * res) / 2, maxX = +(nx * res) / 2;
+      const minY = -(ny * res) / 2, maxY = +(ny * res) / 2;
+      const minZ = -(nz * res) / 2, maxZ = +(nz * res) / 2;
+      const inv = (v) => (Math.abs(v) < 1e-12 ? Infinity : 1 / v);
+      const tx1 = (minX - roL.x) * inv(rdL.x), tx2 = (maxX - roL.x) * inv(rdL.x);
+      const ty1 = (minY - roL.y) * inv(rdL.y), ty2 = (maxY - roL.y) * inv(rdL.y);
+      const tz1 = (minZ - roL.z) * inv(rdL.z), tz2 = (maxZ - roL.z) * inv(rdL.z);
+      const tmin = Math.max(Math.min(tx1, tx2), Math.min(ty1, ty2), Math.min(tz1, tz2));
+      const tmax = Math.min(Math.max(tx1, tx2), Math.max(ty1, ty2), Math.max(tz1, tz2));
+      if (!(tmax >= Math.max(0, tmin))) return;
+      const EPS = 1e-6; let t = Math.max(tmin, 0) + EPS;
+      const pos = new BABYLON.Vector3(roL.x + rdL.x * t, roL.y + rdL.y * t, roL.z + rdL.z * t);
+      const toIdx = (x, y, z) => ({
+        ix: Math.min(nx-1, Math.max(0, Math.floor((x - minX) / res))),
+        iy: Math.min(ny-1, Math.max(0, Math.floor((y - minY) / res))),
+        iz: Math.min(nz-1, Math.max(0, Math.floor((z - minZ) / res))),
+      });
+      let { ix, iy, iz } = toIdx(pos.x, pos.y, pos.z);
+      const stepX = (rdL.x > 0) ? 1 : (rdL.x < 0 ? -1 : 0);
+      const stepY = (rdL.y > 0) ? 1 : (rdL.y < 0 ? -1 : 0);
+      const stepZ = (rdL.z > 0) ? 1 : (rdL.z < 0 ? -1 : 0);
+      const nextBound = (i, step, min) => min + (i + (step > 0 ? 1 : 0)) * res;
+      let tMaxX = (stepX !== 0) ? (nextBound(ix, stepX, minX) - roL.x) / rdL.x : Infinity;
+      let tMaxY = (stepY !== 0) ? (nextBound(iy, stepY, minY) - roL.y) / rdL.y : Infinity;
+      let tMaxZ = (stepZ !== 0) ? (nextBound(iz, stepZ, minZ) - roL.z) / rdL.z : Infinity;
+      const tDeltaX = (stepX !== 0) ? Math.abs(res / rdL.x) : Infinity;
+      const tDeltaY = (stepY !== 0) ? Math.abs(res / rdL.y) : Infinity;
+      const tDeltaZ = (stepZ !== 0) ? Math.abs(res / rdL.z) : Infinity;
+      let hideTop = 0; try { hideTop = Math.max(0, Math.min(ny, Math.floor(Number(s.voxExposeTop || 0) || 0))); } catch {}
+      const yCut = ny - hideTop;
+      const data = Array.isArray(vox.data) ? vox.data : [];
+      let guard = 0, guardMax = (nx + ny + nz) * 3 + 10;
+      while (t <= tmax + EPS && ix >= 0 && iy >= 0 && iz >= 0 && ix < nx && iy < ny && iz < nz && guard++ < guardMax) {
+        if (iy < yCut) {
+          const flat = ix + nx * (iy + ny * iz);
+          const v = data[flat] ?? VoxelType.Uninstantiated;
+          if (v !== VoxelType.Uninstantiated && v !== VoxelType.Empty) {
+            try { s.voxPick = { x: ix, y: iy, z: iz, v }; } catch {}
+            try {
+              const worldAligned = !!(s.vox && s.vox.worldAligned);
+              const rx = Number(s.rotation?.x || 0), ry = (typeof s.rotation?.y === 'number') ? Number(s.rotation.y) : Number(s.rotY || 0) || 0, rz = Number(s.rotation?.z || 0);
+              const centerX = (nx * res) / 2, centerY = (ny * res) / 2, centerZ = (nz * res) / 2;
+              const lx = (ix + 0.5) * res - centerX;
+              const ly = (iy + 0.5) * res - centerY;
+              const lz = (iz + 0.5) * res - centerZ;
+              sLog('voxelPick:hit', { id: s.id, i: ix, j: iy, k: iz, v, worldAligned, rot: { rx, ry, rz }, local: { lx, ly, lz } });
+            } catch {}
+            try { window.dispatchEvent(new CustomEvent('dw:voxelPick', { detail: { id: s.id, i: ix, j: iy, k: iz, v } })); } catch {}
+            return;
+          }
+        }
+        if (tMaxX <= tMaxY && tMaxX <= tMaxZ) { ix += stepX; t = tMaxX + EPS; tMaxX += tDeltaX; }
+        else if (tMaxY <= tMaxX && tMaxY <= tMaxZ) { iy += stepY; t = tMaxY + EPS; tMaxY += tDeltaY; }
+        else { iz += stepZ; t = tMaxZ + EPS; tMaxZ += tDeltaZ; }
+      }
+    } catch (e) { logErr('EH:doVoxelPick', e); }
+  }
+
   function enterScryMode() {
     try {
       if (state.mode !== 'cavern') return;
@@ -1550,7 +1634,17 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
           if ((now - last) <= DOUBLE_CLICK_MS) { enterScryMode(); state._scry.lastClickTime = 0; return; }
           state._scry.lastClickTime = now; return;
         }
-      } catch {}
+      } catch (e) { logErr('EH:cm:pickBall', e); }
+      // Always attempt a voxel pick for the space under the pointer (does not depend on selection)
+      try {
+        let spacePick = scene.pick(scene.pointerX, scene.pointerY, (m) => m && typeof m.name === 'string' && m.name.startsWith('space:'));
+        if (spacePick?.hit && spacePick.pickedMesh) {
+          const pickedName = String(spacePick.pickedMesh.name||'');
+          const id = pickedName.slice('space:'.length).split(':')[0];
+          const s = (state?.barrow?.spaces || []).find(x => x && x.id === id);
+          if (s && s.vox && s.vox.size) doVoxelPickAtPointer(s);
+        }
+      } catch (e) { logErr('EH:cm:voxelPickUnderPointer', e); }
       try {
         const isLeft = (ev && typeof ev.button === 'number') ? (ev.button === 0) : true;
         if (!isLeft) return;
@@ -2128,6 +2222,8 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     scene.onPointerObservable.add((pi) => {
       try {
         if (pi.type !== BABYLON.PointerEventTypes.POINTERMOVE) return;
+        // Gate hover-based voxel picking (default off)
+        try { if (localStorage.getItem('dw:ui:hoverVoxel') !== '1') return; } catch {}
         if (rotWidget.dragging || moveWidget.dragging) return;
         // Active space: prefer current selection (single) else cavern focus (while in cavern)
         let activeId = null;
@@ -2396,6 +2492,11 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       name = 'cavern:' + id;
     }
     dPick('selectId', { id, name });
+    // Always compute voxel pick for the clicked space, regardless of selection modifiers
+    try {
+      const s = (state?.barrow?.spaces || []).find(x => x && x.id === id);
+      if (s && s.vox && s.vox.size) doVoxelPickAtPointer(s);
+    } catch {}
     sLog('edit:selectId', { id, name });
     // Selection requires cmd-left-click (meta + left button)
     try {

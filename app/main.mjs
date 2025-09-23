@@ -525,6 +525,13 @@ try {
 } catch {}
 
 function rebuildHalos() {
+  const report = (ctx, e) => {
+    try { Log.log('ERROR', ctx, { error: String(e && e.message ? e.message : e), stack: e && e.stack ? String(e.stack) : undefined }); } catch {}
+  };
+  try {
+    const selArr = Array.from(state.selection || []);
+    Log.log('HILITE', 'rebuild:start', { sel: selArr, last: state.lastVoxPick || null, locked: state.lockedVoxPick || null });
+  } catch {}
   // clear old torus meshes if any
   for (const [id, mesh] of state.halos) { try { mesh.dispose(); } catch {} }
   state.halos.clear();
@@ -543,6 +550,7 @@ function rebuildHalos() {
   const byCav = new Map((state.built.caverns||[]).map(x => [x.id, x.mesh]));
   const blue = new BABYLON.Color3(0.12 * glowK, 0.35 * glowK, 0.7 * glowK);
   const yellow = new BABYLON.Color3(0.7 * glowK, 0.65 * glowK, 0.15 * glowK);
+  const redGlow = new BABYLON.Color3(0.9 * glowK, 0.18 * glowK, 0.18 * glowK);
   const subtleBlue = new BABYLON.Color3(0.10 * glowK, 0.28 * glowK, 0.55 * glowK);
   // Clear any outlines from previous selection
   try {
@@ -615,20 +623,66 @@ function rebuildHalos() {
           const yCut = ny - hideTop;
           if (iy < yCut) {
             const centerX = (nx * res) / 2, centerY = (ny * res) / 2, centerZ = (nz * res) / 2;
-            const px = (ix + 0.5) * res - centerX;
-            const py = (iy + 0.5) * res - centerY;
-            const pz = (iz + 0.5) * res - centerZ;
-            const cx = (s2.origin?.x||0) + px;
-            const cy = (s2.origin?.y||0) + py;
-            const cz = (s2.origin?.z||0) + pz;
-            const box = BABYLON.MeshBuilder.CreateBox(`sel:voxel:${id}`, { size: res * 1.05 }, scene);
+            const lx = (ix + 0.5) * res - centerX;
+            const ly = (iy + 0.5) * res - centerY;
+            const lz = (iz + 0.5) * res - centerZ;
+            // Apply rotation if vox not world-aligned
+            let q = BABYLON.Quaternion.Identity();
+            try {
+              const worldAligned = !!(s2.vox && s2.vox.worldAligned);
+              if (!worldAligned) {
+                const rx = Number(s2.rotation?.x ?? 0) || 0;
+                const ry = (s2.rotation && typeof s2.rotation.y === 'number') ? Number(s2.rotation.y) : Number(s2.rotY || 0) || 0;
+                const rz = Number(s2.rotation?.z ?? 0) || 0;
+                q = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz);
+              }
+            } catch {}
+            // Parent highlight to the space mesh and use local coordinates (matches instancing path)
+            const parent = bySpace.get(id);
+            try { if (!parent) Log.log('HILITE', 'parent:missing', { id }); } catch {}
+            const cx = (s2.origin?.x||0) + 0; // unused with parenting
+            const cy = (s2.origin?.y||0) + 0;
+            const cz = (s2.origin?.z||0) + 0;
+            const box = BABYLON.MeshBuilder.CreateBox(`sel:voxel:${id}`, { size: res * 1.06 }, scene);
             const mat = new BABYLON.StandardMaterial(`sel:voxel:${id}:mat`, scene);
-            mat.diffuseColor = new BABYLON.Color3(1.0, 0.9, 0.2);
-            mat.emissiveColor = new BABYLON.Color3(0.95, 0.8, 0.1);
-            mat.alpha = 0.55; mat.specularColor = new BABYLON.Color3(0,0,0);
+            mat.diffuseColor = new BABYLON.Color3(0.4, 0.05, 0.05);
+            mat.emissiveColor = new BABYLON.Color3(0.9, 0.1, 0.1);
+            mat.alpha = 0.35; mat.specularColor = new BABYLON.Color3(0,0,0);
+            try { mat.disableDepthWrite = true; } catch (e) { report('HILITE:mat:disableDepthWrite', e); }
             mat.backFaceCulling = false;
-            box.material = mat; box.isPickable = false; box.renderingGroupId = 2;
-            box.position.set(cx, cy, cz);
+            try { mat.zOffset = -2; } catch (e) { report('HILITE:mat:zOffset', e); }
+            box.material = mat; box.isPickable = false; box.renderingGroupId = 3;
+            // Rotate local voxel center by space rotation, then parent to space mesh
+            const rotM = (() => { try { return BABYLON.Matrix.Compose(new BABYLON.Vector3(1,1,1), q, BABYLON.Vector3.Zero()); } catch { return BABYLON.Matrix.Identity(); } })();
+            const afterLocal = BABYLON.Vector3.TransformCoordinates(new BABYLON.Vector3(lx,ly,lz), rotM);
+            try { box.parent = parent; } catch (e) { report('HILITE:box:parent', e); }
+            box.position.set(afterLocal.x, afterLocal.y, afterLocal.z);
+            try { box.rotationQuaternion = BABYLON.Quaternion.Identity(); } catch (e) { report('HILITE:box:rot', e); }
+            // Red glow on selected voxel
+            try { state.hl.addMesh(box, redGlow); } catch (e) { report('HILITE:hl:add:box', e); }
+            // Add crisp edge lines to ensure visibility over voxels
+            try {
+              const h = (res * 0.52);
+              const c = [
+                new BABYLON.Vector3(-h,-h,-h), new BABYLON.Vector3(+h,-h,-h),
+                new BABYLON.Vector3(-h,+h,-h), new BABYLON.Vector3(+h,+h,-h),
+                new BABYLON.Vector3(-h,-h,+h), new BABYLON.Vector3(+h,-h,+h),
+                new BABYLON.Vector3(-h,+h,+h), new BABYLON.Vector3(+h,+h,+h)
+              ];
+              const edges = [
+                [c[0],c[1]],[c[1],c[3]],[c[3],c[2]],[c[2],c[0]],
+                [c[4],c[5]],[c[5],c[7]],[c[7],c[6]],[c[6],c[4]],
+                [c[0],c[4]],[c[1],c[5]],[c[2],c[6]],[c[3],c[7]]
+              ];
+              const lines = BABYLON.MeshBuilder.CreateLineSystem(`sel:voxel:${id}:edges`, { lines: edges }, scene);
+              lines.color = new BABYLON.Color3(0.95, 0.2, 0.2);
+              lines.isPickable = false; lines.renderingGroupId = 3;
+              try { lines.parent = box; } catch (e) { report('HILITE:lines:parent', e); }
+              lines.position.set(0, 0, 0);
+              try { lines.rotationQuaternion = BABYLON.Quaternion.Identity(); } catch (e) { report('HILITE:lines:rot', e); }
+              try { state.hl.addMesh(lines, redGlow); } catch (e) { report('HILITE:hl:add:lines', e); }
+              
+            } catch {}
             state.voxHl.set(id, box);
           }
         }
@@ -652,20 +706,57 @@ function rebuildHalos() {
           const yCut = ny - hideTop;
           if (iy < yCut) {
             const centerX = (nx * res) / 2, centerY = (ny * res) / 2, centerZ = (nz * res) / 2;
-            const px = (ix + 0.5) * res - centerX;
-            const py = (iy + 0.5) * res - centerY;
-            const pz = (iz + 0.5) * res - centerZ;
-            const cx = (s2.origin?.x||0) + px;
-            const cy = (s2.origin?.y||0) + py;
-            const cz = (s2.origin?.z||0) + pz;
-            const box = BABYLON.MeshBuilder.CreateBox(`sel:voxel:last:${last.id}`, { size: res * 1.05 }, scene);
+            const lx2 = (ix + 0.5) * res - centerX;
+            const ly2 = (iy + 0.5) * res - centerY;
+            const lz2 = (iz + 0.5) * res - centerZ;
+            let q2 = BABYLON.Quaternion.Identity();
+            try {
+              const worldAligned2 = !!(s2.vox && s2.vox.worldAligned);
+              if (!worldAligned2) {
+                const rx2 = Number(s2.rotation?.x ?? 0) || 0;
+                const ry2 = (s2.rotation && typeof s2.rotation.y === 'number') ? Number(s2.rotation.y) : Number(s2.rotY || 0) || 0;
+                const rz2 = Number(s2.rotation?.z ?? 0) || 0;
+                q2 = BABYLON.Quaternion.FromEulerAngles(rx2, ry2, rz2);
+              }
+            } catch {}
+            const parent2 = bySpace.get(fall.id);
+            const cx = 0, cy = 0, cz = 0;
+            const box = BABYLON.MeshBuilder.CreateBox(`sel:voxel:last:${last.id}`, { size: res * 1.06 }, scene);
             const mat = new BABYLON.StandardMaterial(`sel:voxel:last:${last.id}:mat`, scene);
-            mat.diffuseColor = new BABYLON.Color3(1.0, 0.9, 0.2);
-            mat.emissiveColor = new BABYLON.Color3(0.95, 0.8, 0.1);
-            mat.alpha = 0.55; mat.specularColor = new BABYLON.Color3(0,0,0);
+            mat.diffuseColor = new BABYLON.Color3(0.4, 0.05, 0.05);
+            mat.emissiveColor = new BABYLON.Color3(0.9, 0.1, 0.1);
+            mat.alpha = 0.35; mat.specularColor = new BABYLON.Color3(0,0,0);
+            try { mat.disableDepthWrite = true; } catch (e) { report('HILITE:last:mat:disableDepthWrite', e); }
             mat.backFaceCulling = false;
-            box.material = mat; box.isPickable = false; box.renderingGroupId = 2;
-            box.position.set(cx, cy, cz);
+            try { mat.zOffset = -2; } catch (e) { report('HILITE:last:mat:zOffset', e); }
+            box.material = mat; box.isPickable = false; box.renderingGroupId = 3;
+            try { box.parent = parent2; } catch (e) { report('HILITE:last:box:parent', e); }
+            box.position.set(lx2, ly2, lz2);
+            try { box.rotationQuaternion = BABYLON.Quaternion.Identity(); } catch (e) { report('HILITE:last:box:rot', e); }
+            // Red glow on last picked voxel
+            try { state.hl.addMesh(box, redGlow); } catch (e) { report('HILITE:last:hl:add:box', e); }
+            try {
+              const h = (res * 0.52);
+              const c = [
+                new BABYLON.Vector3(-h,-h,-h), new BABYLON.Vector3(+h,-h,-h),
+                new BABYLON.Vector3(-h,+h,-h), new BABYLON.Vector3(+h,+h,-h),
+                new BABYLON.Vector3(-h,-h,+h), new BABYLON.Vector3(+h,-h,+h),
+                new BABYLON.Vector3(-h,+h,+h), new BABYLON.Vector3(+h,+h,+h)
+              ];
+              const edges = [
+                [c[0],c[1]],[c[1],c[3]],[c[3],c[2]],[c[2],c[0]],
+                [c[4],c[5]],[c[5],c[7]],[c[7],c[6]],[c[6],c[4]],
+                [c[0],c[4]],[c[1],c[5]],[c[2],c[6]],[c[3],c[7]]
+              ];
+              const lines = BABYLON.MeshBuilder.CreateLineSystem(`sel:voxel:last:${last.id}:edges`, { lines: edges }, scene);
+              lines.color = new BABYLON.Color3(0.95, 0.2, 0.2);
+              lines.isPickable = false; lines.renderingGroupId = 3;
+              try { lines.parent = box; } catch (e) { report('HILITE:last:lines:parent', e); }
+              lines.position.set(0, 0, 0);
+              try { lines.rotationQuaternion = BABYLON.Quaternion.Identity(); } catch (e) { report('HILITE:last:lines:rot', e); }
+              try { state.hl.addMesh(lines, redGlow); } catch (e) { report('HILITE:last:hl:add:lines', e); }
+              
+            } catch {}
             state.voxHl.set(last.id, box);
           }
         }
