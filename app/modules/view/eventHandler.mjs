@@ -396,23 +396,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       try { disposeMoveWidget(); } catch {}
       try { disposeRotWidget(); } catch {}
       try { setGizmoHudVisible(false); } catch {}
-      // Exit observer: leave cavern mode when camera position is outside the space AABB
-      try {
-        if (state._scry.exitObs) { engine.onBeginFrameObservable.remove(state._scry.exitObs); state._scry.exitObs = null; }
-        state._scry.exitObs = engine.onBeginFrameObservable.add(() => {
-          try {
-            if (state.mode !== 'cavern') return;
-            const id = state._scry.spaceId;
-            const sp = (state?.barrow?.spaces || []).find(x => x && x.id === id);
-            if (!sp) { exitCavernMode(); return; }
-            const bb = worldAabbFromSpace(sp, state?.barrow?.meta?.voxelSize || 1);
-            const p = camera.position;
-            const eps = 0.001;
-            const inside = (p.x > bb.min.x - eps && p.x < bb.max.x + eps && p.y > bb.min.y - eps && p.y < bb.max.y + eps && p.z > bb.min.z - eps && p.z < bb.max.z + eps);
-            if (!inside) exitCavernMode();
-          } catch {}
-        });
-      } catch {}
+      // Do not auto-exit cavern mode; only Escape key exits
     } catch (e) { logErr('EH:enterCavern', e); }
   }
 
