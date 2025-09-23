@@ -153,7 +153,8 @@ applyGlowStrength();
 
 function updateHud() {
   const barrowName = state.barrow?.id || 'Barrow';
-  hud.textContent = `Dwarf War • ${barrowName} • ${state.mode === 'edit' ? 'Edit' : 'Game'} ${state.running ? '• Running' : '• Paused'}`;
+  const modeLabel = (state.mode === 'cavern') ? 'Cavern' : (state.mode === 'edit' ? 'Edit' : 'Game');
+  hud.textContent = `Dwarf War • ${barrowName} • ${modeLabel} ${state.running ? '• Running' : '• Paused'}`;
 }
 function setMode(mode) { state.mode = mode; updateHud(); }
 function setRunning(run) { state.running = run; updateHud(); }
@@ -203,7 +204,7 @@ function ensureVoxelTab() {
     const panelContent = document.querySelector('.panel-content');
     if (!panelContent) return;
     if (!panelContent.querySelector('#tab-vox')) {
-      initVoxelTab(panelContent, { state, saveBarrow, snapshot, renderDbView, rebuildScene, scheduleGridUpdate: () => grids.scheduleGridUpdate(state.built), scene, debug: { startVoxelScanDebug, addVoxelScanPointInside, addVoxelScanPointOutside, flushVoxelScanPoints, endVoxelScanDebug, showObbDebug, clearObbDebug } });
+      initVoxelTab(panelContent, { state, saveBarrow, snapshot, renderDbView, rebuildScene, scheduleGridUpdate: () => grids.scheduleGridUpdate(state.built), scene, debug: { startVoxelScanDebug, addVoxelScanPointInside, addVoxelScanPointOutside, addVoxelScanPointWall, addVoxelScanPointRock, addVoxelScanPointUninst, flushVoxelScanPoints, endVoxelScanDebug, showObbDebug, clearObbDebug } });
       try { Log.log('UI', 'Voxel tab initialized', {}); } catch {}
     }
   } catch (e) { try { Log.log('ERROR', 'Init voxel tab failed', { error: String(e) }); } catch {} }
@@ -415,40 +416,58 @@ function rebuildScene() {
 }
 
 // ——————————— Voxel scan debug visualization ———————————
-state._scanDebug = { redBase: null, greenBase: null, redArr: [], greenArr: [], count: 0 };
+state._scanDebug = { redBase: null, greenBase: null, orangeBase: null, blueBase: null, redArr: [], greenArr: [], orangeArr: [], blueArr: [], count: 0, jitter: 0 };
 state._obbDebug = { mesh: null };
 function startVoxelScanDebug(res=1) {
   try { endVoxelScanDebug(); } catch {}
-  // Reduce dot size to 1/4 of previous
+  // Reduce dot size to 1/4 of previous and set jitter amplitude
   const dia = Math.max(0.0625, (res * 0.7) / 4);
-  const red = BABYLON.MeshBuilder.CreateSphere('dbg:scanDot:red', { diameter: dia, segments: 8 }, scene);
-  const rmat = new BABYLON.StandardMaterial('dbg:scanDot:red:mat', scene);
-  rmat.diffuseColor = new BABYLON.Color3(0.95, 0.15, 0.15); rmat.emissiveColor = new BABYLON.Color3(0.85, 0.12, 0.12); rmat.specularColor = new BABYLON.Color3(0,0,0);
-  red.material = rmat; red.isPickable = false; red.renderingGroupId = 3;
-  const green = BABYLON.MeshBuilder.CreateSphere('dbg:scanDot:green', { diameter: dia, segments: 8 }, scene);
-  const gmat = new BABYLON.StandardMaterial('dbg:scanDot:green:mat', scene);
-  gmat.diffuseColor = new BABYLON.Color3(0.1, 0.85, 0.2); gmat.emissiveColor = new BABYLON.Color3(0.1, 0.75, 0.2); gmat.specularColor = new BABYLON.Color3(0,0,0);
-  green.material = gmat; green.isPickable = false; green.renderingGroupId = 3;
-  state._scanDebug.redBase = red; state._scanDebug.greenBase = green; state._scanDebug.redArr = []; state._scanDebug.greenArr = []; state._scanDebug.count = 0;
+  state._scanDebug.jitter = Math.max(0, res * 0.12); // ~12% of voxel size
+  function mkBase(name, diffuse, emissive) {
+    const m = BABYLON.MeshBuilder.CreateSphere(`dbg:scanDot:${name}`, { diameter: dia, segments: 8 }, scene);
+    const mat = new BABYLON.StandardMaterial(`dbg:scanDot:${name}:mat`, scene);
+    mat.diffuseColor = diffuse; mat.emissiveColor = emissive; mat.specularColor = new BABYLON.Color3(0,0,0);
+    m.material = mat; m.isPickable = false; m.renderingGroupId = 3; return m;
+  }
+  // Lower intensity for red (uninstantiated) and green (empty)
+  const red = mkBase('red', new BABYLON.Color3(0.60,0.10,0.10), new BABYLON.Color3(0.40,0.08,0.08));
+  const green = mkBase('green', new BABYLON.Color3(0.08,0.50,0.12), new BABYLON.Color3(0.06,0.40,0.10));
+  const orange = mkBase('orange', new BABYLON.Color3(0.95,0.55,0.10), new BABYLON.Color3(0.90,0.50,0.08));
+  const blue = mkBase('blue', new BABYLON.Color3(0.20,0.45,0.95), new BABYLON.Color3(0.18,0.38,0.85));
+  state._scanDebug.redBase = red; state._scanDebug.greenBase = green; state._scanDebug.orangeBase = orange; state._scanDebug.blueBase = blue;
+  state._scanDebug.redArr = []; state._scanDebug.greenArr = []; state._scanDebug.orangeArr = []; state._scanDebug.blueArr = []; state._scanDebug.count = 0;
   try { Log.log('VOXEL', 'scan:start', { res, dia }); } catch {}
 }
 function _pushDot(arr, wx, wy, wz) {
-  const t = BABYLON.Vector3.Zero(); t.x = wx; t.y = wy; t.z = wz;
+  // Apply small random jitter so dots don't perfectly stack on the lattice
+  const j = state._scanDebug.jitter || 0;
+  const jx = (Math.random() - 0.5) * j;
+  const jy = (Math.random() - 0.5) * j;
+  const jz = (Math.random() - 0.5) * j;
+  const t = BABYLON.Vector3.Zero(); t.x = wx + jx; t.y = wy + jy; t.z = wz + jz;
   const sc = new BABYLON.Vector3(1,1,1);
   const m = BABYLON.Matrix.Compose(sc, BABYLON.Quaternion.Identity(), t);
   for (let k = 0; k < 16; k++) arr.push(m.m[k]);
 }
 function addVoxelScanPointOutside(wx, wy, wz) { _pushDot(state._scanDebug.redArr, wx, wy, wz); state._scanDebug.count++; if (state._scanDebug.count % 256 === 0) flushVoxelScanPoints(); }
 function addVoxelScanPointInside(wx, wy, wz) { _pushDot(state._scanDebug.greenArr, wx, wy, wz); state._scanDebug.count++; if (state._scanDebug.count % 256 === 0) flushVoxelScanPoints(); }
+function addVoxelScanPointWall(wx, wy, wz) { _pushDot(state._scanDebug.orangeArr, wx, wy, wz); state._scanDebug.count++; if (state._scanDebug.count % 256 === 0) flushVoxelScanPoints(); }
+function addVoxelScanPointRock(wx, wy, wz) { _pushDot(state._scanDebug.blueArr, wx, wy, wz); state._scanDebug.count++; if (state._scanDebug.count % 256 === 0) flushVoxelScanPoints(); }
+function addVoxelScanPointUninst(wx, wy, wz) { _pushDot(state._scanDebug.redArr, wx, wy, wz); state._scanDebug.count++; if (state._scanDebug.count % 256 === 0) flushVoxelScanPoints(); }
 function flushVoxelScanPoints() {
   try { const b = state._scanDebug.redBase; if (b && state._scanDebug.redArr.length) b.thinInstanceSetBuffer('matrix', new Float32Array(state._scanDebug.redArr), 16, true); } catch {}
   try { const b2 = state._scanDebug.greenBase; if (b2 && state._scanDebug.greenArr.length) b2.thinInstanceSetBuffer('matrix', new Float32Array(state._scanDebug.greenArr), 16, true); } catch {}
+  try { const b3 = state._scanDebug.orangeBase; if (b3 && state._scanDebug.orangeArr.length) b3.thinInstanceSetBuffer('matrix', new Float32Array(state._scanDebug.orangeArr), 16, true); } catch {}
+  try { const b4 = state._scanDebug.blueBase; if (b4 && state._scanDebug.blueArr.length) b4.thinInstanceSetBuffer('matrix', new Float32Array(state._scanDebug.blueArr), 16, true); } catch {}
   // Quiet: avoid logging each flush to reduce spam
 }
 function endVoxelScanDebug() {
   try { state._scanDebug.redBase?.dispose?.(); } catch {}
   try { state._scanDebug.greenBase?.dispose?.(); } catch {}
-  state._scanDebug.redBase = null; state._scanDebug.greenBase = null; state._scanDebug.redArr = []; state._scanDebug.greenArr = []; state._scanDebug.count = 0;
+  try { state._scanDebug.orangeBase?.dispose?.(); } catch {}
+  try { state._scanDebug.blueBase?.dispose?.(); } catch {}
+  state._scanDebug.redBase = null; state._scanDebug.greenBase = null; state._scanDebug.orangeBase = null; state._scanDebug.blueBase = null;
+  state._scanDebug.redArr = []; state._scanDebug.greenArr = []; state._scanDebug.orangeArr = []; state._scanDebug.blueArr = []; state._scanDebug.count = 0;
   try { Log.log('VOXEL', 'scan:end', {}); } catch {}
 }
 

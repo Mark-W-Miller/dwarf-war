@@ -147,13 +147,33 @@ export function buildSceneFromBarrow(scene, barrow) {
         const HIDE_OFF = 100000; // base is offset in local space; instances compensate
         try { wallBase.parent = mesh; wallBase.position.set(HIDE_OFF, HIDE_OFF, HIDE_OFF); wallBase.rotationQuaternion = BABYLON.Quaternion.Identity(); } catch {}
         const wallMat = new BABYLON.StandardMaterial(`space:${s.id}:vox:wall:mat`, scene);
-        wallMat.diffuseColor = new BABYLON.Color3(0.78, 0.78, 0.80);
-        wallMat.emissiveColor = new BABYLON.Color3(0.22, 0.22, 0.24);
-        wallMat.specularColor = new BABYLON.Color3(0,0,0);
-        try {
-          const pct = Math.max(0, Math.min(100, Number(localStorage.getItem('dw:ui:wallOpacity') || '60') || 60));
-          wallMat.alpha = Math.max(0.0, Math.min(1.0, pct / 100));
-        } catch { wallMat.alpha = 0.6; }
+        // Cavern view: opaque textured cubes
+        let cavernView = false; try { cavernView = (localStorage.getItem('dw:viewMode') === 'cavern'); } catch {}
+        if (cavernView) {
+          const size = 128;
+          const dt = new BABYLON.DynamicTexture(`space:${s.id}:vox:wall:tx`, { width: size, height: size }, scene, false);
+          const ctx = dt.getContext(); ctx.clearRect(0,0,size,size);
+          // Speckled light stone
+          ctx.fillStyle = '#c8cbd1'; ctx.fillRect(0,0,size,size);
+          for (let i = 0; i < 350; i++) {
+            const x = Math.random()*size, y = Math.random()*size, r = Math.random()*3+1;
+            const g = 190 + (Math.random()*40|0); const b = 200 + (Math.random()*30|0);
+            ctx.fillStyle = `rgb(${g},${g},${b})`;
+            ctx.fillRect(x, y, r, r);
+          }
+          dt.update(false);
+          wallMat.diffuseTexture = dt; wallMat.emissiveColor = new BABYLON.Color3(0.2, 0.22, 0.25);
+          wallMat.specularColor = new BABYLON.Color3(0,0,0); wallMat.backFaceCulling = false;
+          wallMat.alpha = 1.0;
+        } else {
+          wallMat.diffuseColor = new BABYLON.Color3(0.78, 0.78, 0.80);
+          wallMat.emissiveColor = new BABYLON.Color3(0.22, 0.22, 0.24);
+          wallMat.specularColor = new BABYLON.Color3(0,0,0);
+          try {
+            const pct = Math.max(0, Math.min(100, Number(localStorage.getItem('dw:ui:wallOpacity') || '60') || 60));
+            wallMat.alpha = Math.max(0.0, Math.min(1.0, pct / 100));
+          } catch { wallMat.alpha = 0.6; }
+        }
         wallBase.material = wallMat;
         built.voxParts.push(wallBase);
 
@@ -161,13 +181,31 @@ export function buildSceneFromBarrow(scene, barrow) {
         rockBase.isPickable = false; // DDA handles picking; keep base offscreen (identity rotation)
         try { rockBase.parent = mesh; rockBase.position.set(HIDE_OFF, HIDE_OFF, HIDE_OFF); rockBase.rotationQuaternion = BABYLON.Quaternion.Identity(); } catch {}
         const rockMat = new BABYLON.StandardMaterial(`space:${s.id}:vox:rock:mat`, scene);
-        rockMat.diffuseColor = new BABYLON.Color3(0.22, 0.22, 0.24);
-        rockMat.emissiveColor = new BABYLON.Color3(0.08, 0.08, 0.10);
-        rockMat.specularColor = new BABYLON.Color3(0,0,0);
-        try {
-          const pctR = Math.max(0, Math.min(100, Number(localStorage.getItem('dw:ui:rockOpacity') || '85') || 85));
-          rockMat.alpha = Math.max(0.0, Math.min(1.0, pctR / 100));
-        } catch { rockMat.alpha = 0.85; }
+        if (cavernView) {
+          const sizeR = 128;
+          const dtR = new BABYLON.DynamicTexture(`space:${s.id}:vox:rock:tx`, { width: sizeR, height: sizeR }, scene, false);
+          const ctxR = dtR.getContext(); ctxR.clearRect(0,0,sizeR,sizeR);
+          // Darker speckled rock
+          ctxR.fillStyle = '#3a3f46'; ctxR.fillRect(0,0,sizeR,sizeR);
+          for (let i = 0; i < 420; i++) {
+            const x = Math.random()*sizeR, y = Math.random()*sizeR, r = Math.random()*3+1;
+            const c = 60 + (Math.random()*30|0); const c2 = 70 + (Math.random()*25|0);
+            ctxR.fillStyle = `rgb(${c},${c2},${c})`;
+            ctxR.fillRect(x, y, r, r);
+          }
+          dtR.update(false);
+          rockMat.diffuseTexture = dtR; rockMat.emissiveColor = new BABYLON.Color3(0.1, 0.12, 0.14);
+          rockMat.specularColor = new BABYLON.Color3(0,0,0); rockMat.backFaceCulling = false;
+          rockMat.alpha = 1.0;
+        } else {
+          rockMat.diffuseColor = new BABYLON.Color3(0.22, 0.22, 0.24);
+          rockMat.emissiveColor = new BABYLON.Color3(0.08, 0.08, 0.10);
+          rockMat.specularColor = new BABYLON.Color3(0,0,0);
+          try {
+            const pctR = Math.max(0, Math.min(100, Number(localStorage.getItem('dw:ui:rockOpacity') || '85') || 85));
+            rockMat.alpha = Math.max(0.0, Math.min(1.0, pctR / 100));
+          } catch { rockMat.alpha = 0.85; }
+        }
         rockBase.material = rockMat;
         built.voxParts.push(rockBase);
 

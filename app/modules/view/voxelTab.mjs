@@ -222,7 +222,13 @@ export function initVoxelTab(panelContent, api) {
       const res = seed.res || (api.state.barrow?.meta?.voxelSize || 1);
       try { lastScanRes = res; } catch {}
       _cancelMerge.value = false; cancelBtn.disabled = false; _nyTotal = 0; _showProg(); _setProgFromLayer(-1);
-      const debugCfg = { chunk: 256, onStart: ({ ny }) => { _nyTotal = ny||0; _setProgFromLayer(-1); }, onLayer: (y) => { _setProgFromLayer(y); }, onEnd: () => { _hideProg(); try { if (scanDotsOn) api.debug?.flushVoxelScanPoints?.(); } catch {} } };
+      const debugCfg = { chunk: 256,
+        onStart: ({ ny }) => { _nyTotal = ny||0; _setProgFromLayer(-1); if (scanDotsOn) { try { api.debug?.flushVoxelScanPoints?.(); } catch {} } },
+        onLayer: (y) => { _setProgFromLayer(y); if (scanDotsOn && (y % 2 === 0)) { try { api.debug?.flushVoxelScanPoints?.(); } catch {} } },
+        onEnd: () => { _hideProg(); try { if (scanDotsOn) api.debug?.flushVoxelScanPoints?.(); } catch {} },
+        onTestInside: (wx, wy, wz) => { if (scanDotsOn) { try { api.debug?.addVoxelScanPointInside?.(wx, wy, wz); } catch {} } },
+        onTestOutside: (wx, wy, wz) => { if (scanDotsOn) { try { api.debug?.addVoxelScanPointOutside?.(wx, wy, wz); } catch {} } }
+      };
       if (scanDotsOn) try { api.debug?.startVoxelScanDebug?.(res); } catch {}
       // Work on a deep clone so we don't delete spaces
       const clone = (typeof structuredClone === 'function') ? structuredClone(api.state.barrow) : JSON.parse(JSON.stringify(api.state.barrow));
@@ -244,6 +250,7 @@ export function initVoxelTab(panelContent, api) {
           const centers = spaces.map(s => ({ id: s.id, cx: s.origin?.x||0, cy: s.origin?.y||0, cz: s.origin?.z||0 }));
           const idx = (x,y,z) => x + nx*(y + ny*z);
           // Iterate cells
+          let _dotCount = 0;
           for (let z = 0; z < nz; z++) {
             for (let y = 0; y < ny; y++) {
               for (let x = 0; x < nx; x++) {
@@ -254,6 +261,8 @@ export function initVoxelTab(panelContent, api) {
                 const wx = uOrigin.x + ((x + 0.5) - nx/2) * uRes;
                 const wy = uOrigin.y + ((y + 0.5) - ny/2) * uRes;
                 const wz = uOrigin.z + ((z + 0.5) - nz/2) * uRes;
+                // (Defer debug dots until after per-space maps are built; dots must reflect final decision per space)
+                if (scanDotsOn) { _dotCount++; if ((_dotCount % 4096) === 0) { try { api.debug?.flushVoxelScanPoints?.(); } catch {}; await new Promise(r => requestAnimationFrame(() => r())); } }
                 if (v === VoxelType.Empty) {
                   // Global Empty dominates: set Empty for all selected spaces
                   for (const [sid, arr] of maps.entries()) arr[i] = VoxelType.Empty;
@@ -287,6 +296,31 @@ export function initVoxelTab(panelContent, api) {
               s.voxelized = 1;
             } catch {}
           }
+          // Emit debug dots for FINAL decisions for the seed space only (to avoid mixed overlays)
+          try {
+            if (scanDotsOn) {
+              const seedMap = maps.get(seed.id) || [];
+              let _emitCount = 0;
+              for (let z = 0; z < nz; z++) {
+                for (let y = 0; y < ny; y++) {
+                  for (let x = 0; x < nx; x++) {
+                    const i = idx(x,y,z);
+                    const vFinal = seedMap[i] ?? VoxelType.Uninstantiated;
+                    const wx = uOrigin.x + ((x + 0.5) - nx/2) * uRes;
+                    const wy = uOrigin.y + ((y + 0.5) - ny/2) * uRes;
+                    const wz = uOrigin.z + ((z + 0.5) - nz/2) * uRes;
+                    if (vFinal === VoxelType.Wall) api.debug?.addVoxelScanPointWall?.(wx, wy, wz);
+                    else if (vFinal === VoxelType.Rock) api.debug?.addVoxelScanPointRock?.(wx, wy, wz);
+                    else if (vFinal === VoxelType.Empty) api.debug?.addVoxelScanPointInside?.(wx, wy, wz);
+                    else api.debug?.addVoxelScanPointUninst?.(wx, wy, wz);
+                    _emitCount++;
+                    if ((_emitCount % 4096) === 0) { api.debug?.flushVoxelScanPoints?.(); await new Promise(r => requestAnimationFrame(() => r())); }
+                  }
+                }
+              }
+              api.debug?.flushVoxelScanPoints?.();
+            }
+          } catch {}
           Log.log('UI', 'Soft merged spaces (partitioned union)', { spaces: spaces.map(s=>s.id), dims: { x: nx, y: ny, z: nz } });
         }
       }

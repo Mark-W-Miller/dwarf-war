@@ -1,4 +1,4 @@
-import { makeDefaultBarrow, mergeInstructions, layoutBarrow } from '../barrow/schema.mjs';
+import { makeDefaultBarrow, mergeInstructions, layoutBarrow, worldAabbFromSpace } from '../barrow/schema.mjs';
 import { loadBarrow, saveBarrow, snapshot, cloneForSave, inflateAfterLoad } from '../barrow/store.mjs';
 import { buildSceneFromBarrow, disposeBuilt } from '../barrow/builder.mjs';
 import { VoxelType, decompressVox } from '../voxels/voxelize.mjs';
@@ -257,6 +257,179 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     window.addEventListener('dw:gizmos:disable', () => suppressGizmos(true));
     window.addEventListener('dw:gizmos:enable', () => suppressGizmos(false));
   } catch {}
+
+  // ——————————— Cavern Mode + Scry Ball ———————————
+  // Keep a reference to the scry ball and view state so we can restore War Room View
+  state._scry = { ball: null, prev: null, exitObs: null, prevWallOpacity: null, prevRockOpacity: null };
+
+  function disposeScryBall() {
+    try { state._scry.ball?.dispose?.(); } catch {}
+    state._scry.ball = null;
+  }
+
+  function findScryWorldPosForSpace(space) {
+    try {
+      const s = space; if (!s) return null;
+      const res = s.res || (state?.barrow?.meta?.voxelSize || 1);
+      if (!s.vox || !s.vox.size) {
+        // No voxels yet: use the geometric center
+        return new BABYLON.Vector3(s.origin?.x||0, s.origin?.y||0, s.origin?.z||0);
+      }
+      const vox = decompressVox(s.vox);
+      const nx = Math.max(1, vox.size?.x|0), ny = Math.max(1, vox.size?.y|0), nz = Math.max(1, vox.size?.z|0);
+      const nTot = nx*ny*nz;
+      const data = Array.isArray(vox.data) ? vox.data : [];
+      const cxr = (nx * res) / 2, cyr = (ny * res) / 2, czr = (nz * res) / 2; // center in local units
+      const idx = (x,y,z) => x + nx*(y + ny*z);
+      let bestEmpty = { i:-1, d2: Infinity, x:0, y:0, z:0 };
+      let bestSolid = { i:-1, d2: Infinity, x:0, y:0, z:0 };
+      for (let z = 0; z < nz; z++) {
+        for (let y = 0; y < ny; y++) {
+          for (let x = 0; x < nx; x++) {
+            const i = idx(x,y,z);
+            const v = data[i];
+            if (v == null) continue;
+            const lx = (x + 0.5) * res - cxr;
+            const ly = (y + 0.5) * res - cyr;
+            const lz = (z + 0.5) * res - czr;
+            const d2 = lx*lx + ly*ly + lz*lz;
+            if (v === VoxelType.Empty) {
+              if (d2 < bestEmpty.d2) bestEmpty = { i, d2, x, y, z };
+            } else if (v === VoxelType.Rock || v === VoxelType.Wall) {
+              if (d2 < bestSolid.d2) bestSolid = { i, d2, x, y, z };
+            }
+          }
+        }
+      }
+      const pick = (bestEmpty.i >= 0) ? bestEmpty : (bestSolid.i >= 0 ? bestSolid : null);
+      if (!pick) return new BABYLON.Vector3(s.origin?.x||0, s.origin?.y||0, s.origin?.z||0);
+      // Convert local offset to world
+      const local = new BABYLON.Vector3((pick.x + 0.5) * res - cxr, (pick.y + 0.5) * res - cyr, (pick.z + 0.5) * res - czr);
+      const worldAligned = !!(s.vox && s.vox.worldAligned);
+      let qMesh = BABYLON.Quaternion.Identity();
+      try {
+        if (!worldAligned) {
+          const rx = Number(s.rotation?.x ?? 0) || 0;
+          const ry = (s.rotation && typeof s.rotation.y === 'number') ? Number(s.rotation.y) : Number(s.rotY || 0) || 0;
+          const rz = Number(s.rotation?.z ?? 0) || 0;
+          qMesh = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz);
+        }
+      } catch {}
+      const rotM = (() => { try { return BABYLON.Matrix.Compose(new BABYLON.Vector3(1,1,1), qMesh, BABYLON.Vector3.Zero()); } catch { return BABYLON.Matrix.Identity(); } })();
+      const localAfterRot = BABYLON.Vector3.TransformCoordinates(local, rotM);
+      const origin = new BABYLON.Vector3(s.origin?.x||0, s.origin?.y||0, s.origin?.z||0);
+      return origin.add(localAfterRot);
+    } catch (e) { logErr('EH:findScryWorldPosForSpace', e); return null; }
+  }
+
+  function ensureScryBallAt(pos, diameter) {
+    try {
+      if (!pos) return null;
+      if (state._scry.ball && !state._scry.ball.isDisposed()) {
+        state._scry.ball.position.copyFrom(pos);
+        return state._scry.ball;
+      }
+      const dia = Math.max(0.1, Number(diameter) || 1);
+      const m = BABYLON.MeshBuilder.CreateSphere('scryBall', { diameter: dia, segments: 16 }, scene);
+      const mat = new BABYLON.StandardMaterial('scryBall:mat', scene);
+      mat.diffuseColor = new BABYLON.Color3(0.3, 0.6, 0.9);
+      mat.emissiveColor = new BABYLON.Color3(0.15, 0.35, 0.65);
+      mat.specularColor = new BABYLON.Color3(0,0,0);
+      mat.alpha = 0.35; // misty translucent
+      m.material = mat; m.isPickable = false; m.renderingGroupId = 3;
+      m.position.copyFrom(pos);
+      state._scry.ball = m;
+      return m;
+    } catch (e) { logErr('EH:ensureScryBallAt', e); return null; }
+  }
+
+  function enterCavernModeForSpace(spaceId) {
+    try {
+      const s = (state?.barrow?.spaces || []).find(x => x && x.id === spaceId);
+      if (!s) return;
+      state._scry.spaceId = s.id;
+      // Save War Room view
+      try {
+        state._scry.prev = {
+          target: camera.target.clone(),
+          radius: camera.radius,
+          upper: camera.upperRadiusLimit,
+          alpha: camera.alpha,
+          beta: camera.beta,
+          mode: state.mode,
+        };
+      } catch {}
+      // Place scry ball at center-most empty voxel (or solid fallback)
+      const pos = findScryWorldPosForSpace(s) || new BABYLON.Vector3(s.origin?.x||0, s.origin?.y||0, s.origin?.z||0);
+      const res = s.res || (state?.barrow?.meta?.voxelSize || 1);
+      ensureScryBallAt(pos, res * 0.8);
+      // Switch materials to cavern style (opaque + textured)
+      try {
+        state._scry.prevWallOpacity = localStorage.getItem('dw:ui:wallOpacity');
+        state._scry.prevRockOpacity = localStorage.getItem('dw:ui:rockOpacity');
+      } catch {}
+      try { localStorage.setItem('dw:viewMode', 'cavern'); } catch {}
+      try { localStorage.setItem('dw:ui:wallOpacity', '100'); } catch {}
+      try { localStorage.setItem('dw:ui:rockOpacity', '100'); } catch {}
+      try { rebuildScene(); } catch (e) { logErr('EH:rebuildScene:cavern', e); }
+      // Focus camera on scry ball, level with floor, much closer, no max constraint
+      try {
+        camera.target.copyFrom(pos);
+        const vx = (s.size?.x||1) * res, vy = (s.size?.y||1) * res, vz = (s.size?.z||1) * res;
+        const span = Math.max(vx, vy, vz);
+        // Close-in radius: quarter of span, clamped to 2..12 voxels approx
+        const rClose = Math.max(2*res, Math.min(12*res, span * 0.25));
+        camera.radius = rClose;
+        // Keep current yaw, ensure level with the floor
+        camera.beta = Math.max(0.12, Math.min(Math.PI - 0.12, Math.PI/2));
+        // Do not alter upperRadiusLimit; wheel acts as normal
+      } catch {}
+      try { setMode('cavern'); } catch {}
+      // Exit observer: leave cavern mode when camera position is outside the space AABB
+      try {
+        if (state._scry.exitObs) { engine.onBeginFrameObservable.remove(state._scry.exitObs); state._scry.exitObs = null; }
+        state._scry.exitObs = engine.onBeginFrameObservable.add(() => {
+          try {
+            if (state.mode !== 'cavern') return;
+            const id = state._scry.spaceId;
+            const sp = (state?.barrow?.spaces || []).find(x => x && x.id === id);
+            if (!sp) { exitCavernMode(); return; }
+            const bb = worldAabbFromSpace(sp, state?.barrow?.meta?.voxelSize || 1);
+            const p = camera.position;
+            const eps = 0.001;
+            const inside = (p.x > bb.min.x - eps && p.x < bb.max.x + eps && p.y > bb.min.y - eps && p.y < bb.max.y + eps && p.z > bb.min.z - eps && p.z < bb.max.z + eps);
+            if (!inside) exitCavernMode();
+          } catch {}
+        });
+      } catch {}
+    } catch (e) { logErr('EH:enterCavern', e); }
+  }
+
+  function exitCavernMode() {
+    try {
+      // Restore opacities and view mode
+      try { if (state._scry.prevWallOpacity != null) localStorage.setItem('dw:ui:wallOpacity', state._scry.prevWallOpacity); } catch {}
+      try { if (state._scry.prevRockOpacity != null) localStorage.setItem('dw:ui:rockOpacity', state._scry.prevRockOpacity); } catch {}
+      try { localStorage.setItem('dw:viewMode', 'war'); } catch {}
+      try { rebuildScene(); } catch (e) { logErr('EH:rebuildScene:war', e); }
+      // Restore camera, but preserve current viewing direction (alpha/beta)
+      try {
+        const currAlpha = camera.alpha, currBeta = camera.beta;
+        const p = state._scry.prev;
+        if (p) {
+          camera.target.copyFrom(p.target);
+          camera.radius = p.radius;
+          camera.upperRadiusLimit = (p.upper != null) ? p.upper : camera.upperRadiusLimit;
+          camera.alpha = currAlpha;
+          camera.beta = currBeta;
+        }
+      } catch {}
+      disposeScryBall();
+      try { setMode(state._scry?.prev?.mode || 'edit'); } catch {}
+      // Remove observer
+      try { if (state._scry.exitObs) { engine.onBeginFrameObservable.remove(state._scry.exitObs); state._scry.exitObs = null; } } catch {}
+    } catch (e) { logErr('EH:exitCavern', e); }
+  }
 
   // Manual grid resize to fit all spaces
   resizeGridBtn?.addEventListener('click', () => {
@@ -1061,9 +1234,8 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
           try { moveWidget.arrowMeshes.push(shaftMesh, tipMesh); } catch {}
         };
         moveWidget.root = root; moveWidget.mesh = root; moveWidget.spaceId = id; moveWidget.group = isGroup; moveWidget.groupIDs = sel.slice(); moveWidget.groupKey = groupKey;
-        mkArrow('x', new BABYLON.Color3(0.95, 0.2, 0.2));
+        // Only keep Y arrow (green) — remove X (red) and Z (blue)
         mkArrow('y', new BABYLON.Color3(0.2, 0.95, 0.2));
-        mkArrow('z', new BABYLON.Color3(0.2, 0.45, 0.95));
         // Ground-plane drag disc (XZ plane)
         try {
           const discR = Math.max(0.6, rad * 0.9 * gScale);
@@ -1194,7 +1366,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
         moveWidget.preDrag = true;
         moveWidget.downX = scene.pointerX; moveWidget.downY = scene.pointerY;
         const _nm = String(pick2.pickedMesh.name||'');
-        try { const m = _nm.match(/^moveGizmo:(x|y|z):/i); moveWidget.axis = m ? m[1].toLowerCase() : null; } catch { moveWidget.axis = null; }
+        try { const m = _nm.match(/^moveGizmo:(y):/i); moveWidget.axis = m ? m[1].toLowerCase() : null; } catch { moveWidget.axis = null; }
         moveWidget.mode = _nm.startsWith('moveGizmo:disc:') ? 'plane' : 'axis';
         dPick('preDrag:move', { x: moveWidget.downX, y: moveWidget.downY, mode: moveWidget.mode, axis: moveWidget.axis });
       }
@@ -1720,26 +1892,34 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       name = 'cavern:' + id;
     }
     dPick('selectId', { id, name });
-    if (ev && ev.shiftKey) {
-      if (state.selection.has(id)) state.selection.delete(id); else state.selection.add(id);
-    } else {
-      state.selection.clear();
-      state.selection.add(id);
-    }
-    Log.log('UI', 'Select space(s)', { selection: Array.from(state.selection) });
-    rebuildHalos();
-    try { scene.render(); requestAnimationFrame(() => { try { scene.render(); } catch {} }); } catch {}
-    ensureRotWidget(); ensureMoveWidget(); disposeLiveIntersections();
-    try { window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: Array.from(state.selection) } })); } catch {}
+    // Selection requires cmd-left-click (meta + left button)
+    try {
+      const isLeft = (ev && typeof ev.button === 'number') ? (ev.button === 0) : true;
+      const isCmd = !!(ev && ev.metaKey);
+      if (isLeft && isCmd) {
+        if (ev && ev.shiftKey) {
+          if (state.selection.has(id)) state.selection.delete(id); else state.selection.add(id);
+        } else {
+          state.selection.clear();
+          state.selection.add(id);
+        }
+        Log.log('UI', 'Select space(s)', { selection: Array.from(state.selection), via: 'cmd-left' });
+        rebuildHalos();
+        try { scene.render(); requestAnimationFrame(() => { try { scene.render(); } catch {} }); } catch {}
+        ensureRotWidget(); ensureMoveWidget(); disposeLiveIntersections();
+        try { window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: Array.from(state.selection) } })); } catch {}
+      }
+    } catch {}
 
     // Handle double-click/tap with adjustable threshold
     const now = performance.now();
     if (name === lastPickName && (now - lastPickTime) <= DOUBLE_CLICK_MS) {
       dPick('doubleClick', { name, id });
-      try { camApi.centerOnMesh(pick.pickedMesh); } catch (err) { Log.log('ERROR', 'Center on item failed', { error: String(err) }); }
-      // If double-clicking a space, open the Database tab and focus that space
+      // Double-click enters Cavern Mode for spaces
       if (name.startsWith('space:')) {
-        try { window.dispatchEvent(new CustomEvent('dw:showDbForSpace', { detail: { id } })); } catch {}
+        try { enterCavernModeForSpace(id); } catch {}
+      } else {
+        try { camApi.centerOnMesh(pick.pickedMesh); } catch (err) { Log.log('ERROR', 'Center on item failed', { error: String(err) }); }
       }
     }
     lastPickName = name;
