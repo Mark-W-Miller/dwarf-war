@@ -12,6 +12,12 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
   function logErr(ctx, e) {
     try { Log.log('ERROR', ctx, { error: String(e && e.message ? e.message : e), stack: e && e.stack ? String(e.stack) : undefined }); } catch {}
   }
+  function sLog(ev, data = {}) {
+    try { Log.log('SELECT', ev, data); } catch {}
+  }
+  function mLog(ev, data = {}) {
+    try { Log.log('MOVE', ev, data); } catch {}
+  }
 
   // ——— Controls and elements ———
   const toggleRunBtn = document.getElementById('toggleRun');
@@ -348,6 +354,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       const s = (state?.barrow?.spaces || []).find(x => x && x.id === spaceId);
       if (!s) return;
       state._scry.spaceId = s.id;
+      sLog('cm:enter', { id: s.id });
       // Save War Room view
       try {
         state._scry.prev = {
@@ -385,6 +392,10 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
         // Do not alter upperRadiusLimit; wheel acts as normal
       } catch {}
       try { setMode('cavern'); } catch {}
+      // Remove gizmos in Cavern Mode
+      try { disposeMoveWidget(); } catch {}
+      try { disposeRotWidget(); } catch {}
+      try { setGizmoHudVisible(false); } catch {}
       // Exit observer: leave cavern mode when camera position is outside the space AABB
       try {
         if (state._scry.exitObs) { engine.onBeginFrameObservable.remove(state._scry.exitObs); state._scry.exitObs = null; }
@@ -407,24 +418,34 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
 
   function exitCavernMode() {
     try {
+      sLog('cm:exit', {});
       // Restore opacities and view mode
       try { if (state._scry.prevWallOpacity != null) localStorage.setItem('dw:ui:wallOpacity', state._scry.prevWallOpacity); } catch {}
       try { if (state._scry.prevRockOpacity != null) localStorage.setItem('dw:ui:rockOpacity', state._scry.prevRockOpacity); } catch {}
       try { localStorage.setItem('dw:viewMode', 'war'); } catch {}
       try { rebuildScene(); } catch (e) { logErr('EH:rebuildScene:war', e); }
-      // Restore camera, but preserve current viewing direction (alpha/beta)
+      // Restore camera to the exact view when the space was double-clicked
       try {
-        const currAlpha = camera.alpha, currBeta = camera.beta;
         const p = state._scry.prev;
         if (p) {
           camera.target.copyFrom(p.target);
           camera.radius = p.radius;
           camera.upperRadiusLimit = (p.upper != null) ? p.upper : camera.upperRadiusLimit;
-          camera.alpha = currAlpha;
-          camera.beta = currBeta;
+          camera.alpha = (p.alpha != null) ? p.alpha : camera.alpha;
+          camera.beta = (p.beta != null) ? p.beta : camera.beta;
         }
       } catch {}
+      // Clear selection when returning to War Room
+      try {
+        state.selection.clear();
+        rebuildHalos();
+        try { disposeMoveWidget(); } catch {}
+        try { disposeRotWidget(); } catch {}
+        window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: [] } }));
+        Log.log('UI', 'Deselect all on WRM return', {});
+      } catch {}
       disposeScryBall();
+      try { state.lockedVoxPick = null; } catch {}
       try { setMode(state._scry?.prev?.mode || 'edit'); } catch {}
       // Remove observer
       try { if (state._scry.exitObs) { engine.onBeginFrameObservable.remove(state._scry.exitObs); state._scry.exitObs = null; } } catch {}
@@ -723,6 +744,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
   }
   function ensureRotWidget() {
       if (_gizmosSuppressed) { try { disposeRotWidget(); setGizmoHudVisible(false); } catch {} return; }
+      try { if (state.mode === 'cavern') { disposeRotWidget(); setGizmoHudVisible(false); return; } } catch {}
     try {
       try { Log.log('GIZMO', 'Ensure widget', { selection: Array.from(state.selection||[]) }); } catch {}
       // Support single or multi selection
@@ -1130,6 +1152,17 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
   function updateMoveDiscPlacement() {
     try {
       if (!moveWidget?.disc) return;
+      // Do not change the drag plane while dragging; keep disc on the locked plane
+      if (moveWidget.dragging) {
+        const ids = Array.from(state.selection || []);
+        if (!ids.length) return;
+        const center = moveWidget.group ? (moveWidget.groupCenter || new BABYLON.Vector3(0,0,0)) : ((state?.built?.spaces||[]).find(x => ids.includes(x.id))?.mesh?.position || new BABYLON.Vector3(0,0,0));
+        moveWidget.disc.position.x = center.x;
+        moveWidget.disc.position.z = center.z;
+        const yLocked = (moveWidget.dragPlaneY != null) ? moveWidget.dragPlaneY : moveWidget.planeY;
+        moveWidget.disc.position.y = yLocked;
+        return;
+      }
       const ids = Array.from(state.selection || []);
       if (!ids.length) return;
       const byId = new Map((state.barrow.spaces||[]).map(s => [s.id, s]));
@@ -1164,6 +1197,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
   }
   function ensureMoveWidget() {
       if (_gizmosSuppressed) { try { disposeMoveWidget(); } catch {} return; }
+      try { if (state.mode === 'cavern') { disposeMoveWidget(); return; } } catch {}
     try {
       const sel = Array.from(state.selection || []);
       const builtSpaces = (state?.built?.spaces || []);
@@ -1208,6 +1242,11 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
         center = new BABYLON.Vector3((min.x+max.x)/2, (min.y+max.y)/2, (min.z+max.z)/2);
         planeY = min.y;
       }
+      try {
+        const byId = new Map((state?.barrow?.spaces||[]).map(s => [s.id, s]));
+        const voxed = sel.map(id => ({ id, vox: !!byId.get(id)?.vox }));
+        mLog('widget:build', { isGroup, ids: sel, planeY, center: { x:center.x, y:center.y, z:center.z }, rad, voxed });
+      } catch {}
       if (!moveWidget.root || moveWidget.group !== isGroup || moveWidget.groupKey !== groupKey || (moveWidget.root.isDisposed && moveWidget.root.isDisposed())) {
         disposeMoveWidget();
         const scalePct = Number(localStorage.getItem('dw:ui:gizmoScale') || '100') || 100;
@@ -1278,6 +1317,104 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     if (_gizmosSuppressed) {
       try { if (rotWidget) { rotWidget.dragging = false; rotWidget.preDrag = false; rotWidget.axis = null; } } catch {}
       try { if (moveWidget) { moveWidget.dragging = false; moveWidget.preDrag = false; moveWidget.axis = null; } } catch {}
+      return;
+    }
+    // Edit mode: space selection; Cavern mode: voxel lock selection
+    if (state.mode === 'cavern') {
+      if (pi.type !== BABYLON.PointerEventTypes.POINTERDOWN) return;
+      if (rotWidget.dragging || moveWidget.dragging) return;
+      const ev = pi.event || window.event;
+      sLog('cm:pointerdown', { x: scene.pointerX, y: scene.pointerY, button: ev?.button, meta: !!ev?.metaKey, shift: !!ev?.shiftKey });
+      try {
+        const isLeft = (ev && typeof ev.button === 'number') ? (ev.button === 0) : true;
+        if (!isLeft) return;
+        // Resolve active space
+        const sid = state._scry?.spaceId || (Array.from(state.selection || [])[0] || null);
+        const s = (state?.barrow?.spaces || []).find(x => x && x.id === sid);
+        if (!s || !s.vox || !s.vox.size) return;
+        // Use current hover pick if available, else compute quickly (reuse DDA setup)
+        let pick = s.voxPick;
+        if (!pick) {
+          const vox = decompressVox(s.vox);
+          const nx = Math.max(1, vox.size?.x || 1);
+          const ny = Math.max(1, vox.size?.y || 1);
+          const nz = Math.max(1, vox.size?.z || 1);
+          const res = vox.res || s.res || (state?.barrow?.meta?.voxelSize || 1);
+          const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), camera);
+          const roW = ray.origin.clone(), rdW = ray.direction.clone();
+          const cx = s.origin?.x||0, cy = s.origin?.y||0, cz = s.origin?.z||0;
+          let q = BABYLON.Quaternion.Identity();
+          const worldAligned = !!(s.vox && s.vox.worldAligned);
+          try {
+            if (!worldAligned) {
+              const rx = Number(s.rotation?.x ?? 0) || 0;
+              const ry = (s.rotation && typeof s.rotation.y === 'number') ? Number(s.rotation.y) : Number(s.rotY || 0) || 0;
+              const rz = Number(s.rotation?.z ?? 0) || 0;
+              q = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz);
+            }
+          } catch {}
+          const qInv = BABYLON.Quaternion.Inverse(q);
+          const rotInv = (() => { try { return BABYLON.Matrix.Compose(new BABYLON.Vector3(1,1,1), qInv, BABYLON.Vector3.Zero()); } catch { return BABYLON.Matrix.Identity(); } })();
+          const roL = BABYLON.Vector3.TransformCoordinates(roW.subtract(new BABYLON.Vector3(cx, cy, cz)), rotInv);
+          const rdL = BABYLON.Vector3.TransformNormal(rdW, rotInv);
+          const minX = -(nx * res) / 2, maxX = +(nx * res) / 2;
+          const minY = -(ny * res) / 2, maxY = +(ny * res) / 2;
+          const minZ = -(nz * res) / 2, maxZ = +(nz * res) / 2;
+          const inv = (v) => (Math.abs(v) < 1e-12 ? Infinity : 1 / v);
+          const tx1 = (minX - roL.x) * inv(rdL.x), tx2 = (maxX - roL.x) * inv(rdL.x);
+          const ty1 = (minY - roL.y) * inv(rdL.y), ty2 = (maxY - roL.y) * inv(rdL.y);
+          const tz1 = (minZ - roL.z) * inv(rdL.z), tz2 = (maxZ - roL.z) * inv(rdL.z);
+          const tmin = Math.max(Math.min(tx1, tx2), Math.min(ty1, ty2), Math.min(tz1, tz2));
+          const tmax = Math.min(Math.max(tx1, tx2), Math.max(ty1, ty2), Math.max(tz1, tz2));
+          if (tmax >= Math.max(0, tmin)) {
+            const EPS = 1e-6; let t = Math.max(tmin, 0) + EPS;
+            const toIdx = (x, y, z) => ({
+              ix: Math.min(nx-1, Math.max(0, Math.floor((x - minX) / res))),
+              iy: Math.min(ny-1, Math.max(0, Math.floor((y - minY) / res))),
+              iz: Math.min(nz-1, Math.max(0, Math.floor((z - minZ) / res))),
+            });
+            let pos = new BABYLON.Vector3(roL.x + rdL.x * t, roL.y + rdL.y * t, roL.z + rdL.z * t);
+            let { ix, iy, iz } = toIdx(pos.x, pos.y, pos.z);
+            const stepX = (rdL.x > 0) ? 1 : (rdL.x < 0 ? -1 : 0);
+            const stepY = (rdL.y > 0) ? 1 : (rdL.y < 0 ? -1 : 0);
+            const stepZ = (rdL.z > 0) ? 1 : (rdL.z < 0 ? -1 : 0);
+            const nextBound = (i, step, min) => min + (i + (step > 0 ? 1 : 0)) * res;
+            let tMaxX = (stepX !== 0) ? (nextBound(ix, stepX, minX) - roL.x) / rdL.x : Infinity;
+            let tMaxY = (stepY !== 0) ? (nextBound(iy, stepY, minY) - roL.y) / rdL.y : Infinity;
+            let tMaxZ = (stepZ !== 0) ? (nextBound(iz, stepZ, minZ) - roL.z) / rdL.z : Infinity;
+            const tDeltaX = (stepX !== 0) ? Math.abs(res / rdL.x) : Infinity;
+            const tDeltaY = (stepY !== 0) ? Math.abs(res / rdL.y) : Infinity;
+            const tDeltaZ = (stepZ !== 0) ? Math.abs(res / rdL.z) : Infinity;
+            let hideTop = 0; try { hideTop = Math.max(0, Math.min(ny, Math.floor(Number(s.voxExposeTop || 0) || 0))); } catch {}
+            const yCut = ny - hideTop;
+            const data = Array.isArray(vox.data) ? vox.data : [];
+            let guard = 0, guardMax = (nx + ny + nz) * 3 + 10;
+            while (t <= tmax + EPS && ix >= 0 && iy >= 0 && iz >= 0 && ix < nx && iy < ny && iz < nz && guard++ < guardMax) {
+              if (iy < yCut) {
+                const flat = ix + nx * (iy + ny * iz);
+                const v = data[flat] ?? VoxelType.Uninstantiated;
+                if (v !== VoxelType.Uninstantiated && v !== VoxelType.Empty) {
+                  pick = { x: ix, y: iy, z: iz, v };
+                  break;
+                }
+              }
+              if (tMaxX <= tMaxY && tMaxX <= tMaxZ) { ix += stepX; t = tMaxX + EPS; tMaxX += tDeltaX; }
+              else if (tMaxY <= tMaxX && tMaxY <= tMaxZ) { iy += stepY; t = tMaxY + EPS; tMaxY += tDeltaY; }
+              else { iz += stepZ; t = tMaxZ + EPS; tMaxZ += tDeltaZ; }
+            }
+          }
+        }
+        if (!pick) return;
+        // Lock selection and persist
+        s.voxPick = pick;
+        state.lockedVoxPick = { id: s.id, x: pick.x, y: pick.y, z: pick.z, v: pick.v };
+        state.lastVoxPick = { ...state.lockedVoxPick };
+        try { window.dispatchEvent(new CustomEvent('dw:voxelPick', { detail: { id: s.id, i: pick.x, j: pick.y, k: pick.z, v: pick.v } })); } catch {}
+        try { rebuildHalos(); } catch {}
+        dPick('voxelPick:lock', { id: s.id, x: pick.x, y: pick.y, z: pick.z });
+        sLog('cm:lockVoxel', { id: s.id, x: pick.x, y: pick.y, z: pick.z });
+        ev.preventDefault(); ev.stopPropagation();
+      } catch {}
       return;
     }
     if (state.mode !== 'edit') return;
@@ -1359,7 +1496,11 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
         }
       }
       // Move widget start
-      const pick2 = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('moveGizmo:'));
+      // Prefer the ground-plane disc if under the cursor to ensure plane moves
+      let pick2 = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('moveGizmo:disc:'));
+      if (!pick2?.hit) {
+        pick2 = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('moveGizmo:'));
+      }
       if (pick2?.hit && pick2.pickedMesh && String(pick2.pickedMesh.name||'').startsWith('moveGizmo:')) {
         try { pi.event?.stopImmediatePropagation?.(); pi.event?.stopPropagation?.(); pi.event?.preventDefault?.(); pi.skipOnPointerObservable = true; } catch {}
         // Prepare possible drag
@@ -1369,6 +1510,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
         try { const m = _nm.match(/^moveGizmo:(y):/i); moveWidget.axis = m ? m[1].toLowerCase() : null; } catch { moveWidget.axis = null; }
         moveWidget.mode = _nm.startsWith('moveGizmo:disc:') ? 'plane' : 'axis';
         dPick('preDrag:move', { x: moveWidget.downX, y: moveWidget.downY, mode: moveWidget.mode, axis: moveWidget.axis });
+        mLog('press', { picked: _nm, mode: moveWidget.mode, axis: moveWidget.axis });
       }
     } else if (type === BABYLON.PointerEventTypes.POINTERUP) {
       if (rotWidget.dragging) {
@@ -1630,9 +1772,12 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
             if (n.lengthSquared() < 1e-4) n = BABYLON.Vector3.Cross(axis, new BABYLON.Vector3(1,0,0));
           }
           try { n.normalize(); } catch {}
+          mLog('drag:init', { isGroup, isPlane, axis: moveWidget.axis, planeY: moveWidget.planeY, dragPlaneY: moveWidget.dragPlaneY, n: { x: n.x, y: n.y, z: n.z } });
           if (isGroup) {
             const center = moveWidget.groupCenter || new BABYLON.Vector3(0,0,0);
-            const base0 = isPlane ? new BABYLON.Vector3(0, moveWidget.planeY || 0, 0) : center;
+            // Lock plane Y at drag start
+            if (isPlane && (moveWidget.dragPlaneY == null)) moveWidget.dragPlaneY = moveWidget.planeY || 0;
+            const base0 = isPlane ? new BABYLON.Vector3(0, (moveWidget.dragPlaneY != null ? moveWidget.dragPlaneY : (moveWidget.planeY || 0)), 0) : center;
             const p0 = pickPointOnPlane(n, base0) || base0.clone();
             moveWidget.axisStart = isPlane ? 0 : BABYLON.Vector3.Dot(p0, axis);
             moveWidget.startPoint = p0.clone();
@@ -1649,7 +1794,8 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
           } else {
             const mref = (state?.built?.spaces || []).find(x => x.id === selNow[0])?.mesh; if (!mref) return;
             const center = mref.position.clone();
-            const base0 = isPlane ? new BABYLON.Vector3(0, moveWidget.planeY || 0, 0) : center;
+            if (isPlane && (moveWidget.dragPlaneY == null)) moveWidget.dragPlaneY = moveWidget.planeY || 0;
+            const base0 = isPlane ? new BABYLON.Vector3(0, (moveWidget.dragPlaneY != null ? moveWidget.dragPlaneY : (moveWidget.planeY || 0)), 0) : center;
             const p0 = pickPointOnPlane(n, base0) || base0.clone();
             moveWidget.axisStart = isPlane ? 0 : BABYLON.Vector3.Dot(p0, axis);
             moveWidget.startPoint = p0.clone();
@@ -1659,6 +1805,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
             try { const canvas = engine.getRenderingCanvas(); camera.inputs?.attached?.pointers?.detachControl(canvas); const pe = pi.event; if (pe && pe.pointerId != null && canvas.setPointerCapture) canvas.setPointerCapture(pe.pointerId); Log.log('GIZMO', isPlane ? 'Plane Move start' : 'Move start', { id: moveWidget.spaceId, mode: moveWidget.mode, axis: moveWidget.axis, start: center }); } catch {}
           }
           dPick('dragStart:move', {});
+          try { mLog('drag:start', { mode: moveWidget.mode, axis: moveWidget.axis, startPoint: { x: moveWidget.startPoint.x, y: moveWidget.startPoint.y, z: moveWidget.startPoint.z }, startCenter: { x: moveWidget.startCenter.x, y: moveWidget.startCenter.y, z: moveWidget.startCenter.z }, axisStart: moveWidget.axisStart }); } catch {}
           // Hide built intersections during drag to avoid stale boxes
           try { for (const x of state?.built?.intersections || []) { try { state.hl?.removeMesh(x.mesh); } catch {}; x.mesh?.setEnabled(false); } } catch {}
         }
@@ -1672,7 +1819,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
         const axis = (moveWidget.axis === 'x') ? new BABYLON.Vector3(1,0,0) : (moveWidget.axis === 'y') ? new BABYLON.Vector3(0,1,0) : new BABYLON.Vector3(0,0,1);
         if (isGroup) {
           const n = moveWidget.planeNormal || new BABYLON.Vector3(0,1,0);
-          const basePt = isPlane ? new BABYLON.Vector3(0, moveWidget.planeY || 0, 0) : (moveWidget.startCenter || new BABYLON.Vector3(0,0,0));
+          const basePt = isPlane ? new BABYLON.Vector3(0, (moveWidget.dragPlaneY != null ? moveWidget.dragPlaneY : (moveWidget.planeY || 0)), 0) : (moveWidget.startCenter || new BABYLON.Vector3(0,0,0));
           const p = pickPointOnPlane(n, basePt); if (!p) return;
           let deltaScalar = 0; let deltaVec = null;
           if (isPlane) { deltaVec = p.subtract(moveWidget.startPoint || basePt); }
@@ -1709,7 +1856,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
           } catch {}
         } else {
           const n = moveWidget.planeNormal || new BABYLON.Vector3(0,1,0);
-          const basePt = isPlane ? new BABYLON.Vector3(0, moveWidget.planeY || 0, 0) : (moveWidget.startCenter || mesh.position || new BABYLON.Vector3(0,0,0));
+          const basePt = isPlane ? new BABYLON.Vector3(0, (moveWidget.dragPlaneY != null ? moveWidget.dragPlaneY : (moveWidget.planeY || 0)), 0) : (moveWidget.startCenter || mesh.position || new BABYLON.Vector3(0,0,0));
           const p = pickPointOnPlane(n, basePt); if (!p) return;
           let target;
           if (isPlane) {
@@ -1720,6 +1867,14 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
             const deltaScalar = s - (moveWidget.axisStart || 0);
             target = (moveWidget.startCenter || mesh.position).add(axis.scale(deltaScalar));
           }
+          try {
+            const now = performance.now();
+            moveWidget._lastLog = moveWidget._lastLog || 0;
+            if (now - moveWidget._lastLog > 100) {
+              moveWidget._lastLog = now;
+              mLog('drag:update', { isPlane, basePt: { x: basePt.x, y: basePt.y, z: basePt.z }, target: { x: target.x, y: target.y, z: target.z }, dragPlaneY: moveWidget.dragPlaneY });
+            }
+          } catch {}
           mesh.position.copyFrom(target);
           try { mesh.computeWorldMatrix(true); mesh.refreshBoundingInfo(); } catch {}
           try { if (moveWidget.root) moveWidget.root.position.copyFrom(target); } catch {}
@@ -1740,6 +1895,104 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       }
       }
   });
+
+  // Live voxel hover selection on mouse move
+  (function setupVoxelHover(){
+    let _lastMoveAt = 0;
+    scene.onPointerObservable.add((pi) => {
+      try {
+        if (pi.type !== BABYLON.PointerEventTypes.POINTERMOVE) return;
+        if (rotWidget.dragging || moveWidget.dragging) return;
+        // Active space: prefer current selection (single) else cavern focus (while in cavern)
+        let activeId = null;
+        const sel = Array.from(state.selection || []);
+        if (sel.length === 1) activeId = sel[0];
+        else if (state.mode === 'cavern' && state._scry?.spaceId) activeId = state._scry.spaceId;
+        if (!activeId) return;
+        const s = (state?.barrow?.spaces || []).find(x => x && x.id === activeId);
+        if (!s || !s.vox || !s.vox.size) return;
+        // If voxel selection is locked for this space, do not update on hover
+        if (state.lockedVoxPick && state.lockedVoxPick.id === s.id) return;
+        const now = performance.now ? performance.now() : Date.now();
+        if (now - _lastMoveAt < 25) return; // throttle ~40 Hz
+        _lastMoveAt = now;
+        // DDA pick identical to click path
+        const vox = decompressVox(s.vox);
+        const nx = Math.max(1, vox.size?.x || 1);
+        const ny = Math.max(1, vox.size?.y || 1);
+        const nz = Math.max(1, vox.size?.z || 1);
+        const res = vox.res || s.res || (state?.barrow?.meta?.voxelSize || 1);
+        const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), camera);
+        const roW = ray.origin.clone(), rdW = ray.direction.clone();
+        const cx = s.origin?.x||0, cy = s.origin?.y||0, cz = s.origin?.z||0;
+        let q = BABYLON.Quaternion.Identity();
+        const worldAligned = !!(s.vox && s.vox.worldAligned);
+        try {
+          if (!worldAligned) {
+            const rx = Number(s.rotation?.x ?? 0) || 0;
+            const ry = (s.rotation && typeof s.rotation.y === 'number') ? Number(s.rotation.y) : Number(s.rotY || 0) || 0;
+            const rz = Number(s.rotation?.z ?? 0) || 0;
+            q = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz);
+          }
+        } catch {}
+        const qInv = BABYLON.Quaternion.Inverse(q);
+        const rotInv = (() => { try { return BABYLON.Matrix.Compose(new BABYLON.Vector3(1,1,1), qInv, BABYLON.Vector3.Zero()); } catch { return BABYLON.Matrix.Identity(); } })();
+        const roL = BABYLON.Vector3.TransformCoordinates(roW.subtract(new BABYLON.Vector3(cx, cy, cz)), rotInv);
+        const rdL = BABYLON.Vector3.TransformNormal(rdW, rotInv);
+        const minX = -(nx * res) / 2, maxX = +(nx * res) / 2;
+        const minY = -(ny * res) / 2, maxY = +(ny * res) / 2;
+        const minZ = -(nz * res) / 2, maxZ = +(nz * res) / 2;
+        const inv = (v) => (Math.abs(v) < 1e-12 ? Infinity : 1 / v);
+        const tx1 = (minX - roL.x) * inv(rdL.x), tx2 = (maxX - roL.x) * inv(rdL.x);
+        const ty1 = (minY - roL.y) * inv(rdL.y), ty2 = (maxY - roL.y) * inv(rdL.y);
+        const tz1 = (minZ - roL.z) * inv(rdL.z), tz2 = (maxZ - roL.z) * inv(rdL.z);
+        const tmin = Math.max(Math.min(tx1, tx2), Math.min(ty1, ty2), Math.min(tz1, tz2));
+        const tmax = Math.min(Math.max(tx1, tx2), Math.max(ty1, ty2), Math.max(tz1, tz2));
+        if (!(tmax >= Math.max(0, tmin))) return;
+        const EPS = 1e-6; let t = Math.max(tmin, 0) + EPS;
+        const toIdx = (x, y, z) => ({
+          ix: Math.min(nx-1, Math.max(0, Math.floor((x - minX) / res))),
+          iy: Math.min(ny-1, Math.max(0, Math.floor((y - minY) / res))),
+          iz: Math.min(nz-1, Math.max(0, Math.floor((z - minZ) / res))),
+        });
+        let pos = new BABYLON.Vector3(roL.x + rdL.x * t, roL.y + rdL.y * t, roL.z + rdL.z * t);
+        let { ix, iy, iz } = toIdx(pos.x, pos.y, pos.z);
+        const stepX = (rdL.x > 0) ? 1 : (rdL.x < 0 ? -1 : 0);
+        const stepY = (rdL.y > 0) ? 1 : (rdL.y < 0 ? -1 : 0);
+        const stepZ = (rdL.z > 0) ? 1 : (rdL.z < 0 ? -1 : 0);
+        const nextBound = (i, step, min) => min + (i + (step > 0 ? 1 : 0)) * res;
+        let tMaxX = (stepX !== 0) ? (nextBound(ix, stepX, minX) - roL.x) / rdL.x : Infinity;
+        let tMaxY = (stepY !== 0) ? (nextBound(iy, stepY, minY) - roL.y) / rdL.y : Infinity;
+        let tMaxZ = (stepZ !== 0) ? (nextBound(iz, stepZ, minZ) - roL.z) / rdL.z : Infinity;
+        const tDeltaX = (stepX !== 0) ? Math.abs(res / rdL.x) : Infinity;
+        const tDeltaY = (stepY !== 0) ? Math.abs(res / rdL.y) : Infinity;
+        const tDeltaZ = (stepZ !== 0) ? Math.abs(res / rdL.z) : Infinity;
+        let hideTop = 0; try { hideTop = Math.max(0, Math.min(ny, Math.floor(Number(s.voxExposeTop || 0) || 0))); } catch {}
+        const yCut = ny - hideTop;
+        const data = Array.isArray(vox.data) ? vox.data : [];
+        let guard = 0, guardMax = (nx + ny + nz) * 3 + 10;
+        let changed = false;
+        while (t <= tmax + EPS && ix >= 0 && iy >= 0 && iz >= 0 && ix < nx && iy < ny && iz < nz && guard++ < guardMax) {
+          if (iy < yCut) {
+            const flat = ix + nx * (iy + ny * iz);
+            const v = data[flat] ?? VoxelType.Uninstantiated;
+            if (v !== VoxelType.Uninstantiated && v !== VoxelType.Empty) {
+              const prev = s.voxPick;
+              if (!prev || prev.x !== ix || prev.y !== iy || prev.z !== iz) changed = true;
+              s.voxPick = { x: ix, y: iy, z: iz, v };
+              break;
+            }
+          }
+          if (tMaxX <= tMaxY && tMaxX <= tMaxZ) { ix += stepX; t = tMaxX + EPS; tMaxX += tDeltaX; }
+          else if (tMaxY <= tMaxX && tMaxY <= tMaxZ) { iy += stepY; t = tMaxY + EPS; tMaxY += tDeltaY; }
+          else { iz += stepZ; t = tMaxZ + EPS; tMaxZ += tDeltaZ; }
+        }
+        if (changed) {
+          try { window.dispatchEvent(new CustomEvent('dw:voxelPick', { detail: { id: s.id, i: s.voxPick.x, j: s.voxPick.y, k: s.voxPick.z, v: s.voxPick.v } })); } catch {}
+        }
+      } catch {}
+    });
+  })();
 
   // Global pointerup failsafe (release outside canvas)
   window.addEventListener('pointerup', () => {
@@ -1782,6 +2035,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       }
       if (moveWidget.dragging) {
         moveWidget.dragging = false; moveWidget.preDrag = false;
+        try { moveWidget.dragPlaneY = null; } catch {}
         try { const canvas = engine.getRenderingCanvas(); camera.inputs?.attached?.pointers?.attachControl(canvas, true); } catch {}
         // Persist latest origin
         try {
@@ -1843,6 +2097,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     if (rotWidget.dragging || moveWidget.dragging) return; // do not interfere while dragging gizmo
     const ev = pi.event || window.event;
     dPick('pointerdown', { x: scene.pointerX, y: scene.pointerY });
+    sLog('edit:pointerdown', { x: scene.pointerX, y: scene.pointerY });
     let pick = scene.pick(
       scene.pointerX,
       scene.pointerY,
@@ -1858,6 +2113,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       }
     );
     dPick('primaryPick', { hit: !!pick?.hit, name: pick?.pickedMesh?.name || null, dist: pick?.distance ?? null });
+    sLog('edit:primaryPick', { hit: !!pick?.hit, name: pick?.pickedMesh?.name || null, dist: pick?.distance ?? null });
     // Fallback: robust ray/mesh intersection if Babylon pick misses
     if (!pick?.hit || !pick.pickedMesh) {
       try {
@@ -1873,12 +2129,34 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
         if (best) {
           pick = { hit: true, pickedMesh: best.mesh, distance: best.info.distance };
           dPick('fallbackPick', { id: best.id, name: best.mesh?.name || null, dist: best.info.distance });
+          sLog('edit:fallbackPick', { id: best.id, name: best.mesh?.name || null, dist: best.info.distance });
         } else {
           dPick('fallbackPickMiss', {});
+          sLog('edit:fallbackPickMiss', {});
         }
       } catch {}
     }
-    if (!pick?.hit || !pick.pickedMesh) return;
+    if (!pick?.hit || !pick.pickedMesh) {
+      // Cmd-left-click on empty space deselects all
+      try {
+        const isLeft = (ev && typeof ev.button === 'number') ? (ev.button === 0) : true;
+        const isCmd = !!(ev && ev.metaKey);
+        if (isLeft && isCmd) {
+          state.selection.clear();
+          sLog('edit:deselectAll', { via: 'cmd-left-empty' });
+          // Aggressive cleanup of any auxiliary gizmo/preview meshes to avoid artifacts
+          try { disposeLiveIntersections(); } catch {}
+          try { disposeMoveWidget(); } catch {}
+          try { disposeRotWidget(); } catch {}
+          try { disposeContactShadow(); } catch {}
+          rebuildHalos();
+          try { window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: [] } })); } catch {}
+          // One extra render to flush outline/highlight changes
+          try { scene.render(); requestAnimationFrame(() => { try { scene.render(); } catch {} }); } catch {}
+        }
+      } catch {}
+      return;
+    }
     const pickedName = pick.pickedMesh.name; // space:<id> or cavern:<id> or space:<id>:label
     let id = '';
     let name = pickedName;
@@ -1892,18 +2170,26 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       name = 'cavern:' + id;
     }
     dPick('selectId', { id, name });
+    sLog('edit:selectId', { id, name });
     // Selection requires cmd-left-click (meta + left button)
     try {
       const isLeft = (ev && typeof ev.button === 'number') ? (ev.button === 0) : true;
       const isCmd = !!(ev && ev.metaKey);
       if (isLeft && isCmd) {
-        if (ev && ev.shiftKey) {
-          if (state.selection.has(id)) state.selection.delete(id); else state.selection.add(id);
+        // Cmd-left on an already selected space toggles it off (deselect)
+        if (state.selection.has(id)) {
+          state.selection.delete(id);
+          sLog('edit:updateSelection', { selection: Array.from(state.selection), via: 'cmd-left:toggle-off', id });
+        } else if (ev && ev.shiftKey) {
+          // Cmd+Shift adds without clearing
+          state.selection.add(id);
+          sLog('edit:updateSelection', { selection: Array.from(state.selection), via: 'cmd-left+shift:add', id });
         } else {
+          // Cmd-left on a different target becomes single selection
           state.selection.clear();
           state.selection.add(id);
+          sLog('edit:updateSelection', { selection: Array.from(state.selection), via: 'cmd-left:single', id });
         }
-        Log.log('UI', 'Select space(s)', { selection: Array.from(state.selection), via: 'cmd-left' });
         rebuildHalos();
         try { scene.render(); requestAnimationFrame(() => { try { scene.render(); } catch {} }); } catch {}
         ensureRotWidget(); ensureMoveWidget(); disposeLiveIntersections();
@@ -1915,6 +2201,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     const now = performance.now();
     if (name === lastPickName && (now - lastPickTime) <= DOUBLE_CLICK_MS) {
       dPick('doubleClick', { name, id });
+      sLog('edit:doubleClick', { name, id });
       // Double-click enters Cavern Mode for spaces
       if (name.startsWith('space:')) {
         try { enterCavernModeForSpace(id); } catch {}
@@ -2018,6 +2305,11 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
   // ——————————— Keyboard: Delete non-voxelized selected spaces ———————————
   window.addEventListener('keydown', (e) => {
     try {
+      // Escape exits Cavern Mode immediately
+      if (e.key === 'Escape') {
+        if (state.mode === 'cavern') { e.preventDefault(); e.stopPropagation(); exitCavernMode(); return; }
+      }
+
       if (state.mode !== 'edit') return;
       const k = e.key;
       if (k !== 'Delete' && k !== 'Backspace') return;

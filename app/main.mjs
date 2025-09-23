@@ -109,6 +109,8 @@ const state = {
   hl: null, // highlight layer
   selObb: new Map(), // id -> OBB line mesh for selection box
   voxHl: new Map(), // id -> selected voxel highlight mesh
+  lastVoxPick: null, // { id, x,y,z,v }
+  lockedVoxPick: null, // { id, x,y,z,v } locked in Cavern Mode
 };
 
 // Global flag to block transforms during voxel operations (bake/merge/fill)
@@ -503,8 +505,24 @@ try {
   });
 } catch {}
 
-// Rebuild halos (selection visuals + voxel highlight) when a voxel is picked
-try { window.addEventListener('dw:voxelPick', () => { try { rebuildHalos(); } catch {} }); } catch {}
+// Rebuild halos (selection visuals + voxel highlight) when a voxel is picked, and remember last pick
+try {
+  window.addEventListener('dw:voxelPick', (e) => {
+    try { const d = e.detail || {}; Log.log('SELECT', 'event:voxelPick', d); } catch {}
+    try {
+      const d = e.detail || {};
+      state.lastVoxPick = { id: d.id, x: d.i, y: d.j, z: d.k, v: d.v };
+    } catch {}
+    try { rebuildHalos(); } catch {}
+  });
+} catch {}
+
+// Log selection change events for debugging
+try {
+  window.addEventListener('dw:selectionChange', (e) => {
+    try { Log.log('SELECT', 'event:selectionChange', { selection: (e?.detail?.selection || []) }); } catch {}
+  });
+} catch {}
 
 function rebuildHalos() {
   // clear old torus meshes if any
@@ -583,12 +601,14 @@ function rebuildHalos() {
     // Selected voxel highlight (if any)
     try {
       const s2 = (state.barrow.spaces||[]).find(x => x.id === id);
-      if (s2 && s2.vox && s2.vox.size && s2.voxPick) {
+      const lock = state.lockedVoxPick && state.lockedVoxPick.id === id ? state.lockedVoxPick : null;
+      const pickToUse = lock ? { x: lock.x, y: lock.y, z: lock.z } : (s2?.voxPick ? { x: s2.voxPick.x, y: s2.voxPick.y, z: s2.voxPick.z } : null);
+      if (s2 && s2.vox && s2.vox.size && pickToUse) {
         const nx = Math.max(1, s2.vox.size?.x || 1);
         const ny = Math.max(1, s2.vox.size?.y || 1);
         const nz = Math.max(1, s2.vox.size?.z || 1);
         const res = s2.vox.res || s2.res || (state.barrow?.meta?.voxelSize || 1);
-        const { x: ix, y: iy, z: iz } = s2.voxPick;
+        const { x: ix, y: iy, z: iz } = pickToUse;
         if (ix >= 0 && iy >= 0 && iz >= 0 && ix < nx && iy < ny && iz < nz) {
           // Respect expose-top slicing: hide highlight if layer is cut off
           let hideTop = 0; try { hideTop = Math.max(0, Math.min(ny, Math.floor(Number(s2.voxExposeTop || 0) || 0))); } catch {}
@@ -615,6 +635,43 @@ function rebuildHalos() {
       }
     } catch {}
   }
+  // Persisted voxel highlight (survives when nothing is selected)
+  try {
+    // Prefer locked pick if present
+    const fall = state.lockedVoxPick || state.lastVoxPick;
+    if (fall && (!state.selection || !state.selection.has(fall.id))) {
+      const s2 = (state.barrow.spaces||[]).find(x => x.id === fall.id);
+      if (s2 && s2.vox && s2.vox.size) {
+        const nx = Math.max(1, s2.vox.size?.x || 1);
+        const ny = Math.max(1, s2.vox.size?.y || 1);
+        const nz = Math.max(1, s2.vox.size?.z || 1);
+        const res = s2.vox.res || s2.res || (state.barrow?.meta?.voxelSize || 1);
+        const ix = fall.x|0, iy = fall.y|0, iz = fall.z|0;
+        if (ix >= 0 && iy >= 0 && iz >= 0 && ix < nx && iy < ny && iz < nz) {
+          let hideTop = 0; try { hideTop = Math.max(0, Math.min(ny, Math.floor(Number(s2.voxExposeTop || 0) || 0))); } catch {}
+          const yCut = ny - hideTop;
+          if (iy < yCut) {
+            const centerX = (nx * res) / 2, centerY = (ny * res) / 2, centerZ = (nz * res) / 2;
+            const px = (ix + 0.5) * res - centerX;
+            const py = (iy + 0.5) * res - centerY;
+            const pz = (iz + 0.5) * res - centerZ;
+            const cx = (s2.origin?.x||0) + px;
+            const cy = (s2.origin?.y||0) + py;
+            const cz = (s2.origin?.z||0) + pz;
+            const box = BABYLON.MeshBuilder.CreateBox(`sel:voxel:last:${last.id}`, { size: res * 1.05 }, scene);
+            const mat = new BABYLON.StandardMaterial(`sel:voxel:last:${last.id}:mat`, scene);
+            mat.diffuseColor = new BABYLON.Color3(1.0, 0.9, 0.2);
+            mat.emissiveColor = new BABYLON.Color3(0.95, 0.8, 0.1);
+            mat.alpha = 0.55; mat.specularColor = new BABYLON.Color3(0,0,0);
+            mat.backFaceCulling = false;
+            box.material = mat; box.isPickable = false; box.renderingGroupId = 2;
+            box.position.set(cx, cy, cz);
+            state.voxHl.set(last.id, box);
+          }
+        }
+      }
+    }
+  } catch {}
   // Draw selected space world-AABB in translucent red (single selection only)
   try {
     // Always dispose any previous debug AABB first

@@ -32,6 +32,22 @@ export function initSettingsTab(camApi, ui = {}) {
     try { Log.log('UI', 'Change setting', { key: 'panBase', value: Number(slider2.value) }); } catch {}
   });
 
+  // Dolly speed slider (wheel-at-max forward speed multiplier)
+  const rowDS = document.createElement('div'); rowDS.className = 'row';
+  const labelDS = document.createElement('label'); labelDS.textContent = 'Dolly Speed'; labelDS.style.display = 'flex'; labelDS.style.alignItems = 'center'; labelDS.style.gap = '8px';
+  const sliderDS = document.createElement('input'); sliderDS.type = 'range'; sliderDS.min = '25'; sliderDS.max = '400'; sliderDS.step = '5'; sliderDS.id = 'dollySpeed';
+  const valueDS = document.createElement('span'); valueDS.id = 'dollySpeedVal';
+  labelDS.appendChild(sliderDS); labelDS.appendChild(valueDS); rowDS.appendChild(labelDS); pane.appendChild(rowDS);
+  const DOLLY_KEY = 'dw:ui:dollySpeed';
+  let dStored = Number(localStorage.getItem(DOLLY_KEY) || '100') || 100; // percent
+  dStored = Math.max(25, Math.min(400, dStored));
+  sliderDS.value = String(dStored); valueDS.textContent = String(dStored) + '%';
+  sliderDS.addEventListener('input', () => {
+    valueDS.textContent = sliderDS.value + '%';
+    try { localStorage.setItem(DOLLY_KEY, sliderDS.value); } catch {}
+    try { Log.log('UI', 'Change setting', { key: 'dollySpeed', valuePct: Number(sliderDS.value) }); } catch {}
+  });
+
   // Label text size slider
   const row3 = document.createElement('div'); row3.className = 'row';
   const label3 = document.createElement('label'); label3.textContent = 'Label Text Size'; label3.style.display = 'flex'; label3.style.alignItems = 'center'; label3.style.gap = '8px';

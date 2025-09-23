@@ -100,8 +100,25 @@ export function initLogWindow() {
     function renderEntries() {
       const list = Log.getEntries();
       const filtered = list.filter(e => selected.size === 0 || selected.has(e.cls));
-      const lines = filtered.slice(-1000).map(e => { const t=new Date(e.time).toLocaleTimeString(); const d = e.data != null ? ` ${JSON.stringify(e.data, (k,v)=> (typeof v==='number'? parseFloat(Number(v).toPrecision(2)) : v))}` : ''; return `[${t}] [${e.cls}] ${e.msg}${d}`; });
-      entries.textContent = lines.join('\n'); entries.scrollTop = entries.scrollHeight;
+      const escape = (s) => String(s).replace(/[&<>]/g, c => c==='&'?'&amp;':c==='<'?'&lt;':'&gt;');
+      const replacer = (k, v) => (typeof v === 'number' ? parseFloat(Number(v).toPrecision(2)) : v);
+      const lines = filtered.slice(-1000).map(e => {
+        const t = new Date(e.time).toLocaleTimeString();
+        const cls = String(e.cls||'LOG');
+        const msg = String(e.msg||'');
+        const data = (e.data != null) ? JSON.stringify(e.data, replacer) : '';
+        const color = (cls === 'ERROR') ? '#ff4d4f' : (cls === 'WARN' ? '#ffb020' : '#e3edf3');
+        let extra = '';
+        try {
+          const stack = (e?.data && (e.data.stack || e.data.error || e.data.reason)) ? (e.data.stack || e.data.error || e.data.reason) : null;
+          if (stack) {
+            extra = `<div style="color:${color}; opacity:0.9; margin-left:8px; white-space:pre-wrap;">${escape(stack)}</div>`;
+          }
+        } catch {}
+        return `<div style="color:${color}">[${escape(t)}] [${escape(cls)}] ${escape(msg)}${data ? ' ' + escape(data) : ''}${extra}</div>`;
+      });
+      entries.innerHTML = lines.join('');
+      entries.scrollTop = entries.scrollHeight;
     }
     Log.on(() => { renderFilters(); renderEntries(); });
     copyBtn.addEventListener('click', async () => {

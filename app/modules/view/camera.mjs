@@ -33,6 +33,66 @@ export function initCamera(scene, canvas, Log) {
     if (Log) Log.log('UI', 'Apply pan base', { panBase: base, panningSensibility: camera.panningSensibility });
   }
 
+  // When zoomed to max magnification (radius at lower limit), use wheel to dolly forward instead of doing nothing
+  (function attachWheelDolly(){
+    let _lastCamWheelLog = 0;
+    let _dollyLatchUntil = 0; // time until which we keep dollying regardless of nearMin
+    function onWheel(e){
+      try {
+        const minR = camera.lowerRadiusLimit || 0;
+        const tol = Math.max(0.12, minR * 0.15); // generous tolerance near min
+        const nearMin = (camera.radius - minR) <= tol;
+        const zoomIn = (e && typeof e.deltaY === 'number') ? (e.deltaY < 0) : false;
+        const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+        // Throttled raw wheel trace
+        try {
+          if (Log && now - _lastCamWheelLog > 180) {
+            _lastCamWheelLog = now;
+            Log.log('CAMERA', 'wheel:raw', { deltaY: e?.deltaY ?? null, radius: camera.radius, lower: minR, tol, nearMin, zoomIn });
+          }
+        } catch {}
+        const latchActive = now < _dollyLatchUntil;
+        if (zoomIn && (nearMin || latchActive)) {
+          // Cancel any residual zoom inertia so it doesn't "fight" the dolly
+          try { camera.inertialRadiusOffset = 0; } catch {}
+          // Hard clamp radius to min so we remain in dolly mode across events
+          try {
+            if (camera.radius > minR) {
+              camera.radius = minR;
+              if (Log) Log.log('CAMERA', 'wheel:clamp', { radius: camera.radius, lower: minR });
+            }
+          } catch {}
+          // Compute a forward dolly step proportional to wheel delta and a base tied to scene scale
+          let speed = 1.0;
+          try {
+            const raw = Number(localStorage.getItem('dw:ui:dollySpeed')||'100');
+            if (isFinite(raw) && raw > 0) speed = (raw > 5) ? (raw / 100) : raw; // accept percent or multiplier
+          } catch {}
+          const mag = Math.max(1, Math.abs(e.deltaY || 0));
+          const base = Math.max(0.5, Math.max(0.25, camera.radius * 0.18));
+          const stepRaw = (mag * 0.0025) * base * speed;
+          const step = Math.min(100, Math.max(0.15, stepRaw * 4)); // 4x faster (doubled again)
+          const dir = camera.getForwardRay()?.direction || new BABYLON.Vector3(0,0,1);
+          const t0 = camera.target.clone ? camera.target.clone() : new BABYLON.Vector3(camera.target.x, camera.target.y, camera.target.z);
+          const t1 = t0.add(dir.scale(step));
+          camera.target = t1;
+          // Latch dolly mode for a short duration to keep movement continuous across events
+          _dollyLatchUntil = now + 320; // ms
+          try { if (Log) Log.log('CAMERA', 'wheel:dolly', { step, speed, base, from: { x: t0.x, y: t0.y, z: t0.z }, to: { x: t1.x, y: t1.y, z: t1.z }, latch: true }); } catch {}
+          // Block default zoom handler so we only dolly
+          try { e.preventDefault(); e.stopImmediatePropagation?.(); e.stopPropagation(); } catch {}
+        } else {
+          if (!zoomIn) {
+            // Leaving dolly mode on zoom-out
+            _dollyLatchUntil = 0;
+          }
+          try { if (Log) Log.log('CAMERA', 'wheel:pass', { reason: (!zoomIn ? 'notZoomIn' : 'notNearMin'), radius: camera.radius, lower: minR }); } catch {}
+        }
+      } catch {}
+    }
+    try { canvas.addEventListener('wheel', onWheel, { passive: false, capture: true }); } catch {}
+  })();
+
   function updatePanDynamics(){
     const panBase = getPanBase();
     const r = Math.max(1, camera.radius);
