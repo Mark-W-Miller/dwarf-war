@@ -5,7 +5,8 @@ import { Log } from './modules/util/log.mjs';
 import { initCamera } from './modules/view/camera.mjs';
 import { initGrids } from './modules/view/grids.mjs';
 import { renderDbView } from './modules/view/dbView.mjs';
-import { initLogTab } from './modules/view/logTab.mjs';
+// Floating log window (replaces tab)
+import { initLogWindow } from './modules/view/logWindow.mjs';
 import { initSettingsTab } from './modules/view/settings.mjs';
 import { initVoxelTab } from './modules/view/voxelTab.mjs';
 import { worldAabbFromSpace } from './modules/barrow/schema.mjs';
@@ -273,8 +274,8 @@ engine.runRenderLoop(() => {
 // Build tabs: Edit and Database, and move existing controls accordingly
 // Tabs setup handled in eventHandler.mjs
 // removed legacy Parse button wiring; Enter now handles parsing
-// ——————————— Log Tab ———————————
-initLogTab(document.querySelector('.panel-content'));
+// ——————————— Log Window ———————————
+try { document.getElementById('logOpen')?.addEventListener('click', () => { try { initLogWindow(); } catch {} }); } catch {}
 // Global error logging into Log tab
 try {
   window.addEventListener('error', (e) => {
