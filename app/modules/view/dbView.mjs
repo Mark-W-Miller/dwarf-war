@@ -84,6 +84,15 @@ export function renderDbView(barrow) {
       dRot.appendChild(kv('z', s2(s.rotation?.z||0), { path: `spaces.${idx}.rotation.z`, type: 'number' }));
       d.appendChild(dRot);
 
+      // Voxel map summary
+      const dVox = make('details'); dVox.dataset.section = 'voxel'; dVox.dataset.spaceId = s.id || String(idx); dVox.appendChild(make('summary', { text: 'Voxel Map' }));
+      const vx = s?.vox?.size?.x || 0, vy = s?.vox?.size?.y || 0, vz = s?.vox?.size?.z || 0;
+      const vres = s?.vox?.res || s?.res || (barrow?.meta?.voxelSize || 1);
+      dVox.appendChild(kv('dims (vox)', `${vx} × ${vy} × ${vz}`));
+      try { const vol = (vx|0) * (vy|0) * (vz|0); dVox.appendChild(kv('cells (count)', String(vol))); } catch {}
+      dVox.appendChild(kv('res (world/vox)', s2(vres)));
+      d.appendChild(dVox);
+
       dSpaces.appendChild(d);
     });
   }

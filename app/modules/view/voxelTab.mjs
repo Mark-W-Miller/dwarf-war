@@ -14,20 +14,47 @@ export function initVoxelTab(panelContent, api) {
   tabsBar.appendChild(tabBtn);
   const voxPane = document.createElement('div'); voxPane.id = 'tab-vox'; voxPane.className = 'tab-pane'; panelContent.appendChild(voxPane);
 
-  // Controls — whole-space ops first
+  // Controls — two-column grouped layout
+  const groups = document.createElement('div');
+  // Force two-column layout using CSS grid so groups are true columns
+  Object.assign(groups.style, {
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
+    gap: '12px',
+    alignItems: 'start'
+  });
+  voxPane.appendChild(groups);
+  const opsGroup = document.createElement('div');
+  Object.assign(opsGroup.style, { minWidth: '0', border: '1px solid #1e2a30', borderRadius: '8px', padding: '8px' });
+  const opsTitle = document.createElement('h3'); opsTitle.textContent = 'Voxel Operations'; opsTitle.style.marginTop = '0'; opsGroup.appendChild(opsTitle);
+  const opsCol = document.createElement('div'); Object.assign(opsCol.style, { display: 'flex', flexDirection: 'column', gap: '8px' }); opsGroup.appendChild(opsCol);
+  const dbgGroup = document.createElement('div');
+  Object.assign(dbgGroup.style, { minWidth: '0', border: '1px solid #1e2a30', borderRadius: '8px', padding: '8px' });
+  const dbgTitle = document.createElement('h3'); dbgTitle.textContent = 'Debug View Options'; dbgTitle.style.marginTop = '0'; dbgGroup.appendChild(dbgTitle);
+  const dbgCol = document.createElement('div'); Object.assign(dbgCol.style, { display: 'flex', flexDirection: 'column', gap: '8px' }); dbgGroup.appendChild(dbgCol);
+  groups.appendChild(opsGroup); groups.appendChild(dbgGroup);
+
+  // Controls — whole-space ops first (in operations group)
   const row1 = document.createElement('div'); row1.className = 'row';
   const labelT = document.createElement('label'); labelT.style.display = 'inline-flex'; labelT.style.alignItems = 'center'; labelT.style.gap = '6px';
   labelT.textContent = 'Wall Thickness';
   const tInput = document.createElement('input'); tInput.type = 'number'; tInput.min = '1'; tInput.step = '1'; tInput.value = '1'; tInput.style.width = '64px';
   labelT.appendChild(tInput); row1.appendChild(labelT);
   const bakeBtn = document.createElement('button'); bakeBtn.className = 'btn'; bakeBtn.textContent = 'Bake Voxels (Walls + Empty)'; row1.appendChild(bakeBtn);
-  voxPane.appendChild(row1);
+  opsCol.appendChild(row1);
 
   const row2 = document.createElement('div'); row2.className = 'row';
-  const mergeBtn = document.createElement('button'); mergeBtn.className = 'btn'; mergeBtn.textContent = 'Merge Overlapping Spaces'; row2.appendChild(mergeBtn);
+  const mergeBtn = document.createElement('button'); mergeBtn.className = 'btn'; mergeBtn.textContent = 'Hard Merge Spaces'; row2.appendChild(mergeBtn);
+  const softMergeBtn = document.createElement('button'); softMergeBtn.className = 'btn'; softMergeBtn.textContent = 'Soft Merge Spaces'; row2.appendChild(softMergeBtn);
   const fillBtn = document.createElement('button'); fillBtn.className = 'btn'; fillBtn.textContent = 'Fill Space Voxels = Rock'; row2.appendChild(fillBtn);
+  // Progress + Cancel cluster
+  const progWrap = document.createElement('div'); progWrap.style.display = 'none'; progWrap.style.alignItems = 'center'; progWrap.style.gap = '8px';
+  const progTrack = document.createElement('div'); progTrack.style.width = '160px'; progTrack.style.height = '8px'; progTrack.style.border = '1px solid #2b3a42'; progTrack.style.borderRadius = '6px'; progTrack.style.background = '#0f151a'; progTrack.style.overflow = 'hidden';
+  const progBar = document.createElement('div'); progBar.style.height = '100%'; progBar.style.width = '0%'; progBar.style.background = 'linear-gradient(90deg, #3aa6ff, #59d0ff)'; progBar.style.transition = 'width 120ms linear'; progTrack.appendChild(progBar);
+  const progPct = document.createElement('span'); progPct.style.fontSize = '11px'; progPct.style.color = '#a7bac3'; progPct.textContent = '0%';
+  progWrap.appendChild(progTrack); progWrap.appendChild(progPct); row2.appendChild(progWrap);
   const cancelBtn = document.createElement('button'); cancelBtn.className = 'btn warn'; cancelBtn.textContent = 'Cancel'; cancelBtn.disabled = true; row2.appendChild(cancelBtn);
-  voxPane.appendChild(row2);
+  opsCol.appendChild(row2);
 
   // Central tab activation is handled elsewhere; we just log
   tabBtn.addEventListener('click', () => { try { Log.log('UI', 'Activate tab', { tab: 'Voxel' }); } catch {} });
@@ -131,6 +158,12 @@ export function initVoxelTab(panelContent, api) {
   let _cancelMerge = { value: false };
   cancelBtn.addEventListener('click', () => { if (!cancelBtn.disabled) { _cancelMerge.value = true; try { Log.log('UI', 'Cancel voxel op', {}); } catch {} } });
 
+  // Progress helpers shared by merge flows
+  let _nyTotal = 0;
+  function _showProg() { progWrap.style.display = 'flex'; }
+  function _hideProg() { progWrap.style.display = 'none'; progBar.style.width = '0%'; progPct.textContent = '0%'; }
+  function _setProgFromLayer(y) { if (_nyTotal > 0) { const pct = Math.max(0, Math.min(100, Math.round(((y+1) * 100) / _nyTotal))); progBar.style.width = pct + '%'; progPct.textContent = pct + '%'; } }
+
   mergeBtn.addEventListener('click', async () => {
     const spaces = getSelectedSpaces(); if (!spaces.length) return;
     // Use the first selected space as the seed for overlap union
@@ -148,11 +181,10 @@ export function initVoxelTab(panelContent, api) {
       Log.log('DEBUG', 'mergeAsync:invoke', { seed: seed.id });
       const debugCfg = {
         chunk: 256,
-        // Keep start minimal
-        onStart: ({ nx, ny, nz }) => { try { Log.log('DEBUG', 'Union scan start', { ny }); } catch {} },
-        // Only log plane number (Y)
-        onLayer: (y) => { try { Log.log('DEBUG', 'Layer', { y }); } catch {} },
-        onEnd: () => { try { if (scanDotsOn) api.debug?.flushVoxelScanPoints?.(); Log.log('DEBUG', 'Union scan end', {}); } catch {} },
+        // Progress + terse logs
+        onStart: ({ nx, ny, nz }) => { try { Log.log('DEBUG', 'Union scan start', { ny }); } catch {}; _nyTotal = ny||0; _showProg(); _setProgFromLayer(-1); },
+        onLayer: (y) => { _setProgFromLayer(y); },
+        onEnd: () => { try { if (scanDotsOn) api.debug?.flushVoxelScanPoints?.(); Log.log('DEBUG', 'Union scan end', {}); } catch {}; _hideProg(); },
         showObb: (corners) => { try { api.debug?.showObbDebug?.(corners); } catch {} }
       };
       // If currently enabled, prepare base meshes
@@ -175,6 +207,98 @@ export function initVoxelTab(panelContent, api) {
     try { api.scheduleGridUpdate?.(); } catch {}
     try { if (!_cancelMerge.value) window.dispatchEvent(new CustomEvent('dw:transform', { detail: { kind: 'voxel-merge', sel: [seed.id], keepId: keepId||seed.id } })); } catch {}
     try { window.dispatchEvent(new CustomEvent('dw:gizmos:enable')); } catch {}
+    _hideProg();
+    cancelBtn.disabled = true;
+  });
+
+  // Soft merge: compute union like hard merge, but apply the union vox to the seed space and DO NOT remove other spaces
+  softMergeBtn.addEventListener('click', async () => {
+    const spaces = getSelectedSpaces(); if (!spaces.length) return;
+    const seed = spaces[0];
+    Log.log('UI', 'Voxel soft-merge', { sel: spaces.map(s => s?.id), seed: seed?.id });
+    try { window.dispatchEvent(new CustomEvent('dw:gizmos:disable')); } catch {}
+    let keepId = null;
+    try {
+      const res = seed.res || (api.state.barrow?.meta?.voxelSize || 1);
+      try { lastScanRes = res; } catch {}
+      _cancelMerge.value = false; cancelBtn.disabled = false; _nyTotal = 0; _showProg(); _setProgFromLayer(-1);
+      const debugCfg = { chunk: 256, onStart: ({ ny }) => { _nyTotal = ny||0; _setProgFromLayer(-1); }, onLayer: (y) => { _setProgFromLayer(y); }, onEnd: () => { _hideProg(); try { if (scanDotsOn) api.debug?.flushVoxelScanPoints?.(); } catch {} } };
+      if (scanDotsOn) try { api.debug?.startVoxelScanDebug?.(res); } catch {}
+      // Work on a deep clone so we don't delete spaces
+      const clone = (typeof structuredClone === 'function') ? structuredClone(api.state.barrow) : JSON.parse(JSON.stringify(api.state.barrow));
+      keepId = await mergeOverlappingSpacesAsync(clone, seed.id, { debug: debugCfg, cancel: () => _cancelMerge.value });
+      Log.log('DEBUG', 'softMerge:returned', { keepId });
+      if (!_cancelMerge.value && keepId) {
+        // Build per-space voxel maps from the union (world-aligned), with global Empty dominating and unique Wall ownership
+        const k = (clone.spaces||[]).find(s => s && s.id === keepId);
+        if (k && k.vox && k.vox.size) {
+          const nx = k.vox.size?.x|0, ny = k.vox.size?.y|0, nz = k.vox.size?.z|0;
+          const nTot = Math.max(0, nx*ny*nz);
+          const uRes = k.vox.res || res || 1;
+          const uOrigin = { x: (k.origin?.x||0), y: (k.origin?.y||0), z: (k.origin?.z||0) };
+          const uData = Array.isArray(k.vox.data) ? k.vox.data : (k.vox.data?.rle ? (k.vox.data.rle.slice ? (()=>{ /* naive RLE decode */ const out=[]; const a=k.vox.data.rle; for(let i=0;i<a.length;i+=2){ const v=a[i]; const n=a[i+1]||0; for(let j=0;j<n;j++) out.push(v);} return out; })() : []) : []);
+          // Pre-allocate per-space maps
+          const byId = new Map(spaces.map(s => [s.id, s]));
+          const maps = new Map(spaces.map(s => [s.id, new Array(nTot).fill(VoxelType.Uninstantiated)]));
+          // Precompute space centers for ownership (world origin)
+          const centers = spaces.map(s => ({ id: s.id, cx: s.origin?.x||0, cy: s.origin?.y||0, cz: s.origin?.z||0 }));
+          const idx = (x,y,z) => x + nx*(y + ny*z);
+          // Iterate cells
+          for (let z = 0; z < nz; z++) {
+            for (let y = 0; y < ny; y++) {
+              for (let x = 0; x < nx; x++) {
+                const i = idx(x,y,z);
+                const v = uData[i] ?? VoxelType.Uninstantiated;
+                if (v === VoxelType.Uninstantiated) continue; // outside → leave Uninstantiated for all
+                // Compute world center of this union cell
+                const wx = uOrigin.x + ((x + 0.5) - nx/2) * uRes;
+                const wy = uOrigin.y + ((y + 0.5) - ny/2) * uRes;
+                const wz = uOrigin.z + ((z + 0.5) - nz/2) * uRes;
+                if (v === VoxelType.Empty) {
+                  // Global Empty dominates: set Empty for all selected spaces
+                  for (const [sid, arr] of maps.entries()) arr[i] = VoxelType.Empty;
+                } else if (v === VoxelType.Wall) {
+                  // Assign unique owner by nearest space center
+                  let best = null, bestD2 = Infinity;
+                  for (const c of centers) {
+                    const dx = wx - c.cx, dy = wy - c.cy, dz = wz - c.cz;
+                    const d2 = dx*dx + dy*dy + dz*dz;
+                    if (d2 < bestD2) { bestD2 = d2; best = c.id; }
+                  }
+                  for (const [sid, arr] of maps.entries()) {
+                    arr[i] = (sid === best) ? VoxelType.Wall : VoxelType.Empty;
+                  }
+                } else {
+                  // If ever Rock appears in union (unlikely), treat like interior → set Empty for all
+                  for (const [sid, arr] of maps.entries()) arr[i] = VoxelType.Empty;
+                }
+              }
+            }
+          }
+          // Apply per-space maps in the normalized union frame
+          for (const s of spaces) {
+            try {
+              s.type = 'Carddon';
+              s.rotation = { x: 0, y: 0, z: 0 }; delete s.rotY;
+              s.size = { x: nx, y: ny, z: nz };
+              s.res = uRes;
+              s.origin = { x: uOrigin.x, y: uOrigin.y, z: uOrigin.z };
+              s.vox = { res: uRes, size: { x: nx, y: ny, z: nz }, data: maps.get(s.id), palette: VoxelType, bakedAt: Date.now(), source: 'soft-merge' };
+              s.voxelized = 1;
+            } catch {}
+          }
+          Log.log('UI', 'Soft merged spaces (partitioned union)', { spaces: spaces.map(s=>s.id), dims: { x: nx, y: ny, z: nz } });
+        }
+      }
+    } catch {}
+    // Persist and refresh
+    try { if (!_cancelMerge.value) { api.saveBarrow(api.state.barrow); api.snapshot(api.state.barrow); } } catch {}
+    try { api.renderDbView(api.state.barrow); } catch {}
+    try { api.rebuildScene?.(); } catch {}
+    try { api.scheduleGridUpdate?.(); } catch {}
+    try { if (!_cancelMerge.value) window.dispatchEvent(new CustomEvent('dw:transform', { detail: { kind: 'voxel-soft-merge', sel: spaces.map(s => s.id), seedId: seed.id, keepId } })); } catch {}
+    try { window.dispatchEvent(new CustomEvent('dw:gizmos:enable')); } catch {}
+    _hideProg();
     cancelBtn.disabled = true;
   });
 
@@ -238,7 +362,7 @@ export function initVoxelTab(panelContent, api) {
   });
   clearObbBtn.addEventListener('click', () => { try { api.debug?.clearObbDebug?.(); Log.log('DEBUG', 'Clear OBB (button)', {}); } catch {} });
   row3.appendChild(showObbBtn); row3.appendChild(clearObbBtn);
-  voxPane.appendChild(row3);
+  dbgCol.appendChild(row3);
 
   fillBtn.addEventListener('click', () => {
     const spaces = getSelectedSpaces(); if (!spaces.length) return;

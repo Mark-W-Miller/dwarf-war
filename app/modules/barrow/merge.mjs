@@ -494,7 +494,8 @@ export async function mergeOverlappingSpacesAsync(barrow, seedId, opts = {}) {
         if (debug && count % chunk === 0) { if (debug.flush) try { debug.flush(); } catch {}; if (await bailIfCanceled('occupancy-chunk')) return null; await nextFrame(); }
       }
     }
-    // UI logs the layer index; suppress per-layer internal logs to reduce noise
+    // Notify UI about layer progress regardless of prefill mode
+    try { if (debug && debug.onLayer) debug.onLayer(y, { inside: occY }); } catch {}
   }
   try { if (debug && debug.flush) debug.flush(); } catch (e) { errLog('mergeAsync:occupancy:flush', e); }
   try { if (debug && debug.onEnd) debug.onEnd(); } catch (e) { errLog('mergeAsync:occupancy:onEnd', e); }
