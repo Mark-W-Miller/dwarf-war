@@ -342,7 +342,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       mat.emissiveColor = new BABYLON.Color3(0.15, 0.35, 0.65);
       mat.specularColor = new BABYLON.Color3(0,0,0);
       mat.alpha = 0.35; // misty translucent
-      m.material = mat; m.isPickable = false; m.renderingGroupId = 3;
+      m.material = mat; m.isPickable = true; m.renderingGroupId = 3;
       m.position.copyFrom(pos);
       state._scry.ball = m;
       return m;
@@ -402,6 +402,8 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
 
   function exitCavernMode() {
     try {
+      // Exit scryball mode if active
+      try { exitScryMode(); } catch {}
       sLog('cm:exit', {});
       // Restore opacities and view mode
       try { if (state._scry.prevWallOpacity != null) localStorage.setItem('dw:ui:wallOpacity', state._scry.prevWallOpacity); } catch {}
@@ -435,6 +437,236 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       try { if (state._scry.exitObs) { engine.onBeginFrameObservable.remove(state._scry.exitObs); state._scry.exitObs = null; } } catch {}
     } catch (e) { logErr('EH:exitCavern', e); }
   }
+
+  // ——————————— Scryball Mode ———————————
+  function voxelValueAtWorld(space, wx, wy, wz) {
+    try {
+      if (!space || !space.vox) return VoxelType.Uninstantiated;
+      const vox = decompressVox(space.vox);
+      const nx = Math.max(1, vox.size?.x || 1);
+      const ny = Math.max(1, vox.size?.y || 1);
+      const nz = Math.max(1, vox.size?.z || 1);
+      const res = vox.res || space.res || (state?.barrow?.meta?.voxelSize || 1);
+      const cx = space.origin?.x||0, cy = space.origin?.y||0, cz = space.origin?.z||0;
+      let q = BABYLON.Quaternion.Identity();
+      const worldAligned = !!(space.vox && space.vox.worldAligned);
+      try {
+        if (!worldAligned) {
+          const rx = Number(space.rotation?.x ?? 0) || 0;
+          const ry = (space.rotation && typeof space.rotation.y === 'number') ? Number(space.rotation.y) : Number(space.rotY || 0) || 0;
+          const rz = Number(space.rotation?.z ?? 0) || 0;
+          q = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz);
+        }
+      } catch {}
+      const qInv = BABYLON.Quaternion.Inverse(q);
+      const rotInv = (() => { try { return BABYLON.Matrix.Compose(new BABYLON.Vector3(1,1,1), qInv, BABYLON.Vector3.Zero()); } catch { return BABYLON.Matrix.Identity(); } })();
+      const vLocal = BABYLON.Vector3.TransformCoordinates(new BABYLON.Vector3(wx - cx, wy - cy, wz - cz), rotInv);
+      const minX = -(nx * res) / 2, minY = -(ny * res) / 2, minZ = -(nz * res) / 2;
+      const ix = Math.floor((vLocal.x - minX) / res);
+      const iy = Math.floor((vLocal.y - minY) / res);
+      const iz = Math.floor((vLocal.z - minZ) / res);
+      if (ix < 0 || iy < 0 || iz < 0 || ix >= nx || iy >= ny || iz >= nz) return VoxelType.Uninstantiated;
+      const flat = ix + nx * (iy + ny * iz);
+      const data = Array.isArray(vox.data) ? vox.data : [];
+      return data[flat] ?? VoxelType.Uninstantiated;
+    } catch { return VoxelType.Uninstantiated; }
+  }
+
+  function enterScryMode() {
+    try {
+      if (state.mode !== 'cavern') return;
+      const ball = state._scry?.ball; if (!ball) return;
+      state._scry.scryMode = true;
+      Log.log('SCRY', 'enter', {});
+      // Disable camera keyboard controls so arrows don't tilt/rotate the camera
+      try {
+        state._scry._camKeys = {
+          up: (camera.keysUp || []).slice(),
+          down: (camera.keysDown || []).slice(),
+          left: (camera.keysLeft || []).slice(),
+          right: (camera.keysRight || []).slice()
+        };
+        camera.keysUp = [];
+        camera.keysDown = [];
+        camera.keysLeft = [];
+        camera.keysRight = [];
+      } catch {}
+      // Visual glow via highlight layer + outline
+      try { if (state.hl && state._scry?.ball) { state.hl.addMesh(state._scry.ball, new BABYLON.Color3(0.4, 0.85, 1.0)); } } catch {}
+      try {
+        if (state._scry?.ball) {
+          state._scry.ball.outlineColor = new BABYLON.Color3(0.35, 0.9, 1.0);
+          state._scry.ball.outlineWidth = 0.02;
+          state._scry.ball.renderOutline = true;
+        }
+      } catch {}
+      // Keep camera locked to the scry ball
+      try {
+        if (state._scry.scryObs) { engine.onBeginFrameObservable.remove(state._scry.scryObs); state._scry.scryObs = null; }
+        state._scry.scryObs = engine.onBeginFrameObservable.add(() => {
+          try {
+            if (state._scry?.ball) {
+              // Lock camera on scry ball
+              camera.target.copyFrom(state._scry.ball.position);
+              // Apply rotate + move per frame based on keyState
+              try {
+                const ks = state._scry.keyState || {};
+                const dt = (engine.getDeltaTime ? engine.getDeltaTime()/1000 : 1/60);
+                const s = (state?.barrow?.spaces || []).find(x => x && x.id === state._scry.spaceId);
+                if (s) {
+                  // Rotation
+                  if (ks.left || ks.right) {
+                    const degPerSec = ks.shift ? 120 : 60;
+                    const dirYaw = ks.left ? 1 : -1; // CCW for left
+                    const delta = (degPerSec * Math.PI / 180) * dirYaw * dt;
+                    camera.alpha = (camera.alpha + delta) % (Math.PI * 2);
+                    if (camera.alpha < 0) camera.alpha += Math.PI * 2;
+                  }
+                  // Movement
+                  const moveSign = (ks.up ? 1 : 0) + (ks.down ? -1 : 0);
+                  if (moveSign !== 0) {
+                    const ball2 = state._scry.ball;
+                    const pos = ball2.position.clone();
+                    const fwd = camera.getForwardRay()?.direction.clone() || new BABYLON.Vector3(0,0,1);
+                    fwd.y = 0; try { fwd.normalize(); } catch {}
+                    const dir = fwd.scale(moveSign);
+                    const res = s.res || (state?.barrow?.meta?.voxelSize || 1);
+                    // Speed multiplier from settings (percent or multiplier)
+                    let scryMult = 1.0; try { const raw = Number(localStorage.getItem('dw:ui:scrySpeed') || '100'); if (isFinite(raw) && raw > 0) scryMult = (raw > 5) ? (raw/100) : raw; } catch {}
+                    const base = Math.max(0.1, res * 0.9) * 2 * (ks.shift ? 2.0 : 1.0) * scryMult; // baseline scaled by setting
+                    const dist = base * Math.max(0.016, dt) * 6; // tuned multiplier for responsiveness
+                    const seg = Math.max(0.08, res * 0.25);
+                    const radius = Math.max(0.15, (res * 0.8) / 2);
+                    const nSteps = Math.max(1, Math.ceil(dist / seg));
+                    const inc = dir.scale(dist / nSteps);
+                    function canOccupy(px, py, pz) {
+                      const offsets = [ {x:0,z:0}, {x:radius*0.5,z:0}, {x:-radius*0.5,z:0}, {x:0,z:radius*0.5}, {x:0,z:-radius*0.5} ];
+                      for (const o of offsets) {
+                        // Block if ANY space has solid voxel at this world position
+                        const hit = (() => { try {
+                          const spaces = Array.isArray(state?.barrow?.spaces) ? state.barrow.spaces : [];
+                          for (const sp of spaces) { if (!sp || !sp.vox) continue; const v = voxelValueAtWorld(sp, px + o.x, py, pz + o.z); if (v === VoxelType.Rock || v === VoxelType.Wall) return true; }
+                          return false;
+                        } catch { return false; } })();
+                        if (hit) return false;
+                      }
+                      return true;
+                    }
+                    let next = pos.clone(); let blocked = false;
+                    for (let i = 0; i < nSteps; i++) {
+                      const cand = next.add(inc);
+                      if (canOccupy(cand.x, cand.y, cand.z)) { next.copyFrom(cand); }
+                      else { blocked = true; break; }
+                    }
+                    if (!next.equals(pos)) { ball2.position.copyFrom(next); camera.target.copyFrom(next); }
+                    if (blocked) { try { Log.log('COLLIDE', 'scry:block', { from: pos, to: next }); } catch {} }
+                  }
+                }
+              } catch {}
+              // Constrain camera position by walls/rock in the active space
+              const s = (state?.barrow?.spaces || []).find(x => x && x.id === state._scry.spaceId);
+              if (s && s.vox) {
+                const t = camera.target;
+                const cp = camera.position.clone();
+                const v = cp.subtract(t);
+                const dist = v.length();
+                if (dist > 1e-3) {
+                  v.scaleInPlace(1 / dist); // v = dir from target to camera
+                  const res = s.res || (state?.barrow?.meta?.voxelSize || 1);
+                  const step = Math.max(0.15, res * 0.25);
+                  let maxFree = dist;
+                  let hit = false;
+                  for (let d = step; d <= dist; d += step) {
+                    const p = new BABYLON.Vector3(t.x + v.x * d, t.y + v.y * d, t.z + v.z * d);
+                    // Clamp if any space has solid at this sample point
+                    let hitAny = false; try { const spaces = Array.isArray(state?.barrow?.spaces) ? state.barrow.spaces : []; for (const sp of spaces) { if (!sp || !sp.vox) continue; const vv = voxelValueAtWorld(sp, p.x, p.y, p.z); if (vv === VoxelType.Rock || vv === VoxelType.Wall) { hitAny = true; break; } } } catch {}
+                    if (hitAny) {
+                      hit = true; maxFree = Math.max(step * 0.5, d - step * 0.6); break;
+                    }
+                  }
+                  if (hit && maxFree < dist - 1e-3) {
+                    camera.inertialRadiusOffset = 0;
+                    camera.radius = Math.max(0.5, maxFree);
+                    // Throttled collision log
+                    try {
+                      const now = performance.now ? performance.now() : Date.now();
+                      state._scry._collLogT = state._scry._collLogT || 0;
+                      if (now - state._scry._collLogT > 180) {
+                        state._scry._collLogT = now;
+                        Log.log('COLLIDE', 'cam:clamp', { desired: dist, clamped: camera.radius, step });
+                      }
+                    } catch {}
+                  }
+                }
+              }
+            }
+          } catch {}
+        });
+      } catch {}
+      // Track keys for simultaneous rotate + move; handled per-frame in scryObs
+      state._scry.keyState = { up:false, down:false, left:false, right:false, shift:false };
+      try { if (state._scry.scryKeys) window.removeEventListener('keydown', state._scry.scryKeys); } catch {}
+      try { if (state._scry.scryKeysUp) window.removeEventListener('keyup', state._scry.scryKeysUp); } catch {}
+      state._scry.scryKeys = (e) => {
+        if (!state._scry?.scryMode) return;
+        const k = e.key;
+        if (k === 'ArrowUp' || k === 'ArrowDown' || k === 'ArrowLeft' || k === 'ArrowRight' || k === 'Shift') {
+          e.preventDefault(); e.stopPropagation();
+          if (k === 'ArrowUp') state._scry.keyState.up = true;
+          if (k === 'ArrowDown') state._scry.keyState.down = true;
+          if (k === 'ArrowLeft') state._scry.keyState.left = true;
+          if (k === 'ArrowRight') state._scry.keyState.right = true;
+          if (k === 'Shift') state._scry.keyState.shift = true;
+        }
+      };
+      state._scry.scryKeysUp = (e) => {
+        if (!state._scry?.scryMode) return;
+        const k = e.key;
+        if (k === 'ArrowUp') state._scry.keyState.up = false;
+        if (k === 'ArrowDown') state._scry.keyState.down = false;
+        if (k === 'ArrowLeft') state._scry.keyState.left = false;
+        if (k === 'ArrowRight') state._scry.keyState.right = false;
+        if (k === 'Shift') state._scry.keyState.shift = false;
+      };
+      window.addEventListener('keydown', state._scry.scryKeys, { passive:false });
+      window.addEventListener('keyup', state._scry.scryKeysUp, { passive:false });
+    } catch (e) { logErr('EH:enterScry', e); }
+  }
+
+  function exitScryMode() {
+    try {
+      if (!state._scry?.scryMode) return;
+      state._scry.scryMode = false;
+      try { if (state._scry.scryObs) { engine.onBeginFrameObservable.remove(state._scry.scryObs); state._scry.scryObs = null; } } catch {}
+      try { if (state._scry.scryKeys) { window.removeEventListener('keydown', state._scry.scryKeys); state._scry.scryKeys = null; } } catch {}
+      // Restore camera keyboard controls
+      try {
+        if (state._scry._camKeys) {
+          camera.keysUp = state._scry._camKeys.up || camera.keysUp;
+          camera.keysDown = state._scry._camKeys.down || camera.keysDown;
+          camera.keysLeft = state._scry._camKeys.left || camera.keysLeft;
+          camera.keysRight = state._scry._camKeys.right || camera.keysRight;
+          state._scry._camKeys = null;
+        }
+      } catch {}
+      // Remove glow
+      try { if (state.hl && state._scry?.ball) state.hl.removeMesh(state._scry.ball); } catch {}
+      try { if (state._scry?.ball) state._scry.ball.renderOutline = false; } catch {}
+      Log.log('SCRY', 'exit', {});
+    } catch (e) { logErr('EH:exitScry', e); }
+  }
+
+  // Double-click on scry ball enters scry mode
+  try {
+    scene.onPointerObservable.add((pi) => {
+      try {
+        if (pi.type !== BABYLON.PointerEventTypes.POINTERDOUBLETAP) return;
+        if (state.mode !== 'cavern') return;
+        const pick = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name === 'scryBall');
+        if (pick?.hit && pick.pickedMesh && pick.pickedMesh.name === 'scryBall') enterScryMode();
+      } catch {}
+    });
+  } catch {}
 
   // Manual grid resize to fit all spaces
   resizeGridBtn?.addEventListener('click', () => {
@@ -1309,6 +1541,16 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       if (rotWidget.dragging || moveWidget.dragging) return;
       const ev = pi.event || window.event;
       sLog('cm:pointerdown', { x: scene.pointerX, y: scene.pointerY, button: ev?.button, meta: !!ev?.metaKey, shift: !!ev?.shiftKey });
+      // Detect double-click on scry ball using the same threshold as edit double-click
+      try {
+        const pickBall = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name === 'scryBall');
+        if (pickBall?.hit && pickBall.pickedMesh) {
+          const now = performance.now();
+          const last = state._scry?.lastClickTime || 0;
+          if ((now - last) <= DOUBLE_CLICK_MS) { enterScryMode(); state._scry.lastClickTime = 0; return; }
+          state._scry.lastClickTime = now; return;
+        }
+      } catch {}
       try {
         const isLeft = (ev && typeof ev.button === 'number') ? (ev.button === 0) : true;
         if (!isLeft) return;
@@ -2291,6 +2533,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     try {
       // Escape exits Cavern Mode immediately
       if (e.key === 'Escape') {
+        if (state._scry?.scryMode) { e.preventDefault(); e.stopPropagation(); exitScryMode(); return; }
         if (state.mode === 'cavern') { e.preventDefault(); e.stopPropagation(); exitCavernMode(); return; }
       }
 
@@ -2341,6 +2584,39 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     if (!panel || !collapsePanelBtn) return;
     panel.classList.toggle('collapsed', !!collapsed);
     collapsePanelBtn.textContent = collapsed ? '⟩' : '⟨⟩';
+    try {
+      if (collapsed) {
+        // Slide panel off the right edge, leaving only the collapse control visible as a tab
+        const rect = panel.getBoundingClientRect();
+        const w = rect.width || 320;
+        const tab = 36; // visible tab width for the collapse control
+        panel.style.right = `${-(Math.max(40, w) - tab)}px`;
+        panel.style.pointerEvents = 'none';
+        // Keep the collapse button clickable and not hugging the browser scrollbar
+        const topPx = Math.max(8, rect.top);
+        collapsePanelBtn.style.position = 'fixed';
+        collapsePanelBtn.style.right = '12px';
+        collapsePanelBtn.style.top = `${topPx + 8}px`;
+        collapsePanelBtn.style.zIndex = '2001';
+        collapsePanelBtn.style.pointerEvents = 'auto';
+        // Enlarge hit area
+        collapsePanelBtn.style.padding = '8px 10px';
+        collapsePanelBtn.style.borderRadius = '8px';
+        collapsePanelBtn.title = 'Expand Panel';
+      } else {
+        // Restore panel position and button layout
+        panel.style.right = '';
+        panel.style.pointerEvents = '';
+        collapsePanelBtn.style.position = '';
+        collapsePanelBtn.style.right = '';
+        collapsePanelBtn.style.top = '';
+        collapsePanelBtn.style.zIndex = '';
+        collapsePanelBtn.style.pointerEvents = '';
+        collapsePanelBtn.style.padding = '';
+        collapsePanelBtn.style.borderRadius = '';
+        collapsePanelBtn.title = 'Collapse/Expand';
+      }
+    } catch {}
   }
   applyPanelCollapsed(localStorage.getItem(PANEL_STATE_KEY) === '1');
   collapsePanelBtn?.addEventListener('click', () => {

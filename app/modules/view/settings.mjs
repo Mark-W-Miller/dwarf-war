@@ -48,6 +48,22 @@ export function initSettingsTab(camApi, ui = {}) {
     try { Log.log('UI', 'Change setting', { key: 'dollySpeed', valuePct: Number(sliderDS.value) }); } catch {}
   });
 
+  // Scryball speed slider (arrow-key drive speed multiplier in Cavern/SBM)
+  const rowSB = document.createElement('div'); rowSB.className = 'row';
+  const labelSB = document.createElement('label'); labelSB.textContent = 'Scryball Speed'; labelSB.style.display = 'flex'; labelSB.style.alignItems = 'center'; labelSB.style.gap = '8px';
+  const sliderSB = document.createElement('input'); sliderSB.type = 'range'; sliderSB.min = '25'; sliderSB.max = '400'; sliderSB.step = '5'; sliderSB.id = 'scrySpeed';
+  const valueSB = document.createElement('span'); valueSB.id = 'scrySpeedVal';
+  labelSB.appendChild(sliderSB); labelSB.appendChild(valueSB); rowSB.appendChild(labelSB); pane.appendChild(rowSB);
+  const SCRY_KEY = 'dw:ui:scrySpeed';
+  let sStored = Number(localStorage.getItem(SCRY_KEY) || '100') || 100;
+  sStored = Math.max(25, Math.min(400, sStored));
+  sliderSB.value = String(sStored); valueSB.textContent = String(sStored) + '%';
+  sliderSB.addEventListener('input', () => {
+    valueSB.textContent = sliderSB.value + '%';
+    try { localStorage.setItem(SCRY_KEY, sliderSB.value); } catch {}
+    try { Log.log('UI', 'Change setting', { key: 'scrySpeed', valuePct: Number(sliderSB.value) }); } catch {}
+  });
+
   // Label text size slider
   const row3 = document.createElement('div'); row3.className = 'row';
   const label3 = document.createElement('label'); label3.textContent = 'Label Text Size'; label3.style.display = 'flex'; label3.style.alignItems = 'center'; label3.style.gap = '8px';

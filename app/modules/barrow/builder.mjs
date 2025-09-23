@@ -150,19 +150,28 @@ export function buildSceneFromBarrow(scene, barrow) {
         // Cavern view: opaque textured cubes
         let cavernView = false; try { cavernView = (localStorage.getItem('dw:viewMode') === 'cavern'); } catch {}
         if (cavernView) {
-          const size = 128;
+          const size = 256;
           const dt = new BABYLON.DynamicTexture(`space:${s.id}:vox:wall:tx`, { width: size, height: size }, scene, false);
           const ctx = dt.getContext(); ctx.clearRect(0,0,size,size);
-          // Speckled light stone
-          ctx.fillStyle = '#c8cbd1'; ctx.fillRect(0,0,size,size);
-          for (let i = 0; i < 350; i++) {
-            const x = Math.random()*size, y = Math.random()*size, r = Math.random()*3+1;
-            const g = 190 + (Math.random()*40|0); const b = 200 + (Math.random()*30|0);
-            ctx.fillStyle = `rgb(${g},${g},${b})`;
-            ctx.fillRect(x, y, r, r);
+          // Light brick pattern over mortar background
+          const mortar = '#efeae2';
+          const brick = '#e2d2bf';
+          const brick2 = '#dcc9b2'; // subtle variation
+          ctx.fillStyle = mortar; ctx.fillRect(0,0,size,size);
+          const bw = 40, bh = 18, gap = 2; // brick size and mortar gap
+          for (let row = 0, y = 0; y < size + bh; row++, y += (bh + gap)) {
+            const offset = (row % 2 === 0) ? 0 : Math.floor(bw / 2);
+            for (let x = -offset; x < size + bw; x += bw) {
+              const bx = x + gap, by = y + gap; const ww = bw - gap*2, hh = bh - gap*2;
+              ctx.fillStyle = (Math.random() < 0.5) ? brick : brick2;
+              ctx.fillRect(bx, by, ww, hh);
+              // light bevel/shadow
+              ctx.fillStyle = 'rgba(255,255,255,0.06)'; ctx.fillRect(bx, by, ww, 2);
+              ctx.fillStyle = 'rgba(0,0,0,0.06)'; ctx.fillRect(bx, by+hh-2, ww, 2);
+            }
           }
           dt.update(false);
-          wallMat.diffuseTexture = dt; wallMat.emissiveColor = new BABYLON.Color3(0.2, 0.22, 0.25);
+          wallMat.diffuseTexture = dt; wallMat.emissiveColor = new BABYLON.Color3(0.22, 0.22, 0.2);
           wallMat.specularColor = new BABYLON.Color3(0,0,0); wallMat.backFaceCulling = false;
           wallMat.alpha = 1.0;
         } else {
@@ -185,16 +194,24 @@ export function buildSceneFromBarrow(scene, barrow) {
           const sizeR = 128;
           const dtR = new BABYLON.DynamicTexture(`space:${s.id}:vox:rock:tx`, { width: sizeR, height: sizeR }, scene, false);
           const ctxR = dtR.getContext(); ctxR.clearRect(0,0,sizeR,sizeR);
-          // Darker speckled rock
-          ctxR.fillStyle = '#3a3f46'; ctxR.fillRect(0,0,sizeR,sizeR);
-          for (let i = 0; i < 420; i++) {
-            const x = Math.random()*sizeR, y = Math.random()*sizeR, r = Math.random()*3+1;
-            const c = 60 + (Math.random()*30|0); const c2 = 70 + (Math.random()*25|0);
-            ctxR.fillStyle = `rgb(${c},${c2},${c})`;
+          // Much darker rock base with white speckles
+          ctxR.fillStyle = '#15181c'; ctxR.fillRect(0,0,sizeR,sizeR);
+          // Subtle dark noise layers
+          for (let i = 0; i < 240; i++) {
+            const x = Math.random()*sizeR, y = Math.random()*sizeR, r = Math.random()*4+1;
+            const g = 20 + (Math.random()*20|0);
+            ctxR.fillStyle = `rgba(${g},${g},${g},0.15)`;
+            ctxR.fillRect(x, y, r, r);
+          }
+          // Bright white speckles
+          for (let i = 0; i < 520; i++) {
+            const x = Math.random()*sizeR, y = Math.random()*sizeR, r = Math.random()*2+0.8;
+            const w = 225 + (Math.random()*30|0);
+            ctxR.fillStyle = `rgb(${w},${w},${w})`;
             ctxR.fillRect(x, y, r, r);
           }
           dtR.update(false);
-          rockMat.diffuseTexture = dtR; rockMat.emissiveColor = new BABYLON.Color3(0.1, 0.12, 0.14);
+          rockMat.diffuseTexture = dtR; rockMat.emissiveColor = new BABYLON.Color3(0.06, 0.07, 0.08);
           rockMat.specularColor = new BABYLON.Color3(0,0,0); rockMat.backFaceCulling = false;
           rockMat.alpha = 1.0;
         } else {

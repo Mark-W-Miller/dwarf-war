@@ -559,8 +559,8 @@ function rebuildHalos() {
       for (const part of (state?.built?.voxParts || [])) {
         const nm = String(part?.name || '');
         if (nm.startsWith(`space:${id}:`)) {
-          state.hl.addMesh(part, subtleBlue);
-          // Add outline for better visibility at grazing angles
+          // Avoid adding voxel thin-instance bases to HighlightLayer to prevent rare full-screen triangle artifacts
+          // Use outline only for subtle emphasis
           try { part.outlineColor = subtleBlue; part.renderOutline = true; part.outlineWidth = 0.02; } catch {}
         }
       }
@@ -709,6 +709,15 @@ function rebuildHalos() {
   // Always glow intersections in yellow
   try {
     for (const x of state?.built?.intersections || []) if (x?.mesh) state.hl.addMesh(x.mesh, yellow);
+  } catch {}
+
+  // If in Scryball Mode, keep the scry ball glowing
+  try {
+    if (state?._scry?.scryMode && state?._scry?.ball) {
+      const color = new BABYLON.Color3(0.4, 0.85, 1.0);
+      state.hl.addMesh(state._scry.ball, color);
+      try { state._scry.ball.outlineColor = color; state._scry.ball.outlineWidth = 0.02; state._scry.ball.renderOutline = true; } catch {}
+    }
   } catch {}
 }
 
