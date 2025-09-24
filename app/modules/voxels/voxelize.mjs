@@ -292,6 +292,21 @@ export function fillAllVoxels(vox, value) {
   return vox;
 }
 
+// Overwrite only instantiated voxels (leave Uninstantiated outside region intact)
+export function fillInstantiatedVoxels(vox, value) {
+  if (!vox) return vox;
+  const dv = decompressVox(vox);
+  if (!Array.isArray(dv.data)) return vox;
+  for (let i = 0; i < dv.data.length; i++) {
+    if (dv.data[i] !== VoxelType.Uninstantiated) dv.data[i] = value;
+  }
+  try { if (value === VoxelType.Rock) dv.hasRock = true; } catch {}
+  if (dv !== vox) {
+    try { vox.data = dv.data; vox.hasRock = dv.hasRock; } catch {}
+  }
+  return vox;
+}
+
 // ——————————— Simple RLE compression for voxel arrays ———————————
 // Encodes an array of small integers as [value, runLength, ...]
 export function encodeVoxRLE(arr) {

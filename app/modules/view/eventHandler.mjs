@@ -631,6 +631,81 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     } catch (e) { logErr('EH:doVoxelPick', e); }
   }
 
+  // Helper: compute first solid voxel hit under current pointer for space (without side effects)
+  // Returns { hit:true, t, ix, iy, iz, v } or null
+  function voxelHitAtPointerForSpace(s) {
+    try {
+      if (!s || !s.vox || !s.vox.size) return null;
+      const vox = decompressVox(s.vox);
+      const nx = Math.max(1, vox.size?.x || 1);
+      const ny = Math.max(1, vox.size?.y || 1);
+      const nz = Math.max(1, vox.size?.z || 1);
+      const res = vox.res || s.res || (state?.barrow?.meta?.voxelSize || 1);
+      const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), camera);
+      const roW = ray.origin.clone(), rdW = ray.direction.clone();
+      const cx = s.origin?.x||0, cy = s.origin?.y||0, cz = s.origin?.z||0;
+      let q = BABYLON.Quaternion.Identity();
+      const worldAligned = !!(s.vox && s.vox.worldAligned);
+      try {
+        if (!worldAligned) {
+          const rx = Number(s.rotation?.x ?? 0) || 0;
+          const ry = (s.rotation && typeof s.rotation.y === 'number') ? Number(s.rotation.y) : Number(s.rotY || 0) || 0;
+          const rz = Number(s.rotation?.z ?? 0) || 0;
+          q = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz);
+        }
+      } catch {}
+      const qInv = BABYLON.Quaternion.Inverse(q);
+      const rotInv = (() => { try { return BABYLON.Matrix.Compose(new BABYLON.Vector3(1,1,1), qInv, BABYLON.Vector3.Zero()); } catch { return BABYLON.Matrix.Identity(); } })();
+      const roL = BABYLON.Vector3.TransformCoordinates(roW.subtract(new BABYLON.Vector3(cx, cy, cz)), rotInv);
+      const rdL = BABYLON.Vector3.TransformNormal(rdW, rotInv);
+      const minX = -(nx * res) / 2, maxX = +(nx * res) / 2;
+      const minY = -(ny * res) / 2, maxY = +(ny * res) / 2;
+      const minZ = -(nz * res) / 2, maxZ = +(nz * res) / 2;
+      const inv = (v) => (Math.abs(v) < 1e-12 ? Infinity : 1 / v);
+      const tx1 = (minX - roL.x) * inv(rdL.x), tx2 = (maxX - roL.x) * inv(rdL.x);
+      const ty1 = (minY - roL.y) * inv(rdL.y), ty2 = (maxY - roL.y) * inv(rdL.y);
+      const tz1 = (minZ - roL.z) * inv(rdL.z), tz2 = (maxZ - roL.z) * inv(rdL.z);
+      const tmin = Math.max(Math.min(tx1, tx2), Math.min(ty1, ty2), Math.min(tz1, tz2));
+      const tmax = Math.min(Math.max(tx1, tx2), Math.max(ty1, ty2), Math.max(tz1, tz2));
+      if (!(tmax >= Math.max(0, tmin))) return null;
+      const EPS = 1e-6; let t = Math.max(tmin, 0) + EPS;
+      const toIdx = (x, y, z) => ({
+        ix: Math.min(nx-1, Math.max(0, Math.floor((x - minX) / res))),
+        iy: Math.min(ny-1, Math.max(0, Math.floor((y - minY) / res))),
+        iz: Math.min(nz-1, Math.max(0, Math.floor((z - minZ) / res))),
+      });
+      let pos = new BABYLON.Vector3(roL.x + rdL.x * t, roL.y + rdL.y * t, roL.z + rdL.z * t);
+      let { ix, iy, iz } = toIdx(pos.x, pos.y, pos.z);
+      const stepX = (rdL.x > 0) ? 1 : (rdL.x < 0 ? -1 : 0);
+      const stepY = (rdL.y > 0) ? 1 : (rdL.y < 0 ? -1 : 0);
+      const stepZ = (rdL.z > 0) ? 1 : (rdL.z < 0 ? -1 : 0);
+      const nextBound = (i, step, min) => min + (i + (step > 0 ? 1 : 0)) * res;
+      let tMaxX = (stepX !== 0) ? (nextBound(ix, stepX, minX) - roL.x) / rdL.x : Infinity;
+      let tMaxY = (stepY !== 0) ? (nextBound(iy, stepY, minY) - roL.y) / rdL.y : Infinity;
+      let tMaxZ = (stepZ !== 0) ? (nextBound(iz, stepZ, minZ) - roL.z) / rdL.z : Infinity;
+      const tDeltaX = (stepX !== 0) ? Math.abs(res / rdL.x) : Infinity;
+      const tDeltaY = (stepY !== 0) ? Math.abs(res / rdL.y) : Infinity;
+      const tDeltaZ = (stepZ !== 0) ? Math.abs(res / rdL.z) : Infinity;
+      let hideTop = 0; try { hideTop = Math.max(0, Math.min(ny, Math.floor(Number(s.voxExposeTop || 0) || 0))); } catch {}
+      const yCut = ny - hideTop;
+      const data = Array.isArray(vox.data) ? vox.data : [];
+      let guard = 0, guardMax = (nx + ny + nz) * 3 + 10;
+      while (t <= tmax + EPS && ix >= 0 && iy >= 0 && iz >= 0 && ix < nx && iy < ny && iz < nz && guard++ < guardMax) {
+        if (iy < yCut) {
+          const flat = ix + nx * (iy + ny * iz);
+          const v = data[flat] ?? VoxelType.Uninstantiated;
+          if (v !== VoxelType.Uninstantiated && v !== VoxelType.Empty) {
+            return { hit: true, t, ix, iy, iz, v };
+          }
+        }
+        if (tMaxX <= tMaxY && tMaxX <= tMaxZ) { ix += stepX; t = tMaxX + EPS; tMaxX += tDeltaX; }
+        else if (tMaxY <= tMaxX && tMaxY <= tMaxZ) { iy += stepY; t = tMaxY + EPS; tMaxY += tDeltaY; }
+        else { iz += stepZ; t = tMaxZ + EPS; tMaxZ += tDeltaZ; }
+      }
+      return null;
+    } catch { return null; }
+  }
+
   function enterScryMode() {
     try {
       if (state.mode !== 'cavern') return;
@@ -2559,6 +2634,10 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     const ev = pi.event || window.event;
     dPick('pointerdown', { x: scene.pointerX, y: scene.pointerY });
     sLog('edit:pointerdown', { x: scene.pointerX, y: scene.pointerY });
+    // Normalize button/modifiers once up front
+    const isLeft = (ev && typeof ev.button === 'number') ? (ev.button === 0) : true;
+    const isCmd = !!(ev && ev.metaKey);
+    const isShift = !!(ev && ev.shiftKey);
     let pick = scene.pick(
       scene.pointerX,
       scene.pointerY,
@@ -2598,25 +2677,38 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       } catch {}
     }
     if (!pick?.hit || !pick.pickedMesh) {
-      // Cmd-left-click on empty space deselects all
-      try {
-        const isLeft = (ev && typeof ev.button === 'number') ? (ev.button === 0) : true;
-        const isCmd = !!(ev && ev.metaKey);
-        if (isLeft && isCmd) {
-          state.selection.clear();
-          sLog('edit:deselectAll', { via: 'cmd-left-empty' });
-          // Aggressive cleanup of any auxiliary gizmo/preview meshes to avoid artifacts
-          try { disposeLiveIntersections(); } catch {}
-          try { disposeMoveWidget(); } catch {}
-          try { disposeRotWidget(); } catch {}
-          try { disposeContactShadow(); } catch {}
-          rebuildHalos();
-          try { window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: [] } })); } catch {}
-          // One extra render to flush outline/highlight changes
-          try { scene.render(); requestAnimationFrame(() => { try { scene.render(); } catch {} }); } catch {}
-        }
-      } catch {}
-      return;
+      // No mesh pick — attempt voxel-level pick only when Cmd is held; otherwise ignore
+      if (isCmd) {
+        try {
+          let best = { t: Infinity, id: null };
+          for (const sp of (state?.barrow?.spaces || [])) {
+            if (!sp || !sp.vox || !sp.vox.size) continue;
+            const hit = voxelHitAtPointerForSpace(sp);
+            if (hit && isFinite(hit.t) && hit.t < best.t) best = { t: hit.t, id: sp.id };
+          }
+          if (best.id) {
+            id = best.id; name = 'space:' + id; // proceed as if mesh pick hit
+          } else {
+            // Cmd-left-click on empty space deselects all
+            try {
+              if (isLeft) {
+                state.selection.clear();
+                sLog('edit:deselectAll', { via: 'cmd-left-empty' });
+                try { disposeLiveIntersections(); } catch {}
+                try { disposeMoveWidget(); } catch {}
+                try { disposeRotWidget(); } catch {}
+                try { disposeContactShadow(); } catch {}
+                rebuildHalos();
+                try { window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: [] } })); } catch {}
+                try { scene.render(); requestAnimationFrame(() => { try { scene.render(); } catch {} }); } catch {}
+              }
+            } catch {}
+            return;
+          }
+        } catch { return; }
+      } else {
+        return;
+      }
     }
     const pickedName = pick.pickedMesh.name; // space:<id> or cavern:<id> or space:<id>:label
     let id = '';
@@ -2630,28 +2722,86 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       id = pickedName.slice('cavern:'.length);
       name = 'cavern:' + id;
     }
+    // Prefer voxel hit id only when Cmd is held (voxel-precise selection); otherwise keep base mesh pick
+    let cmdVoxelFound = false;
+    if (isCmd) {
+      try {
+        let best = { t: Infinity, id: null };
+        for (const sp of (state?.barrow?.spaces || [])) {
+          if (!sp || !sp.vox || !sp.vox.size) continue;
+          const hit = voxelHitAtPointerForSpace(sp);
+          if (hit && isFinite(hit.t) && hit.t < best.t) best = { t: hit.t, id: sp.id };
+        }
+        if (best.id) { id = best.id; name = 'space:' + id; cmdVoxelFound = true; }
+      } catch {}
+    }
     dPick('selectId', { id, name });
-    // Always compute voxel pick for the clicked space, regardless of selection modifiers
-    try {
-      const s = (state?.barrow?.spaces || []).find(x => x && x.id === id);
-      if (s && s.vox && s.vox.size) doVoxelPickAtPointer(s);
-    } catch {}
+    // Only compute voxel pick (and emit dw:voxelPick) for Cmd-click; plain left click should not pick voxels
+    if (isCmd) {
+      try {
+        const s = (state?.barrow?.spaces || []).find(x => x && x.id === id);
+        if (s && s.vox && s.vox.size) doVoxelPickAtPointer(s);
+      } catch {}
+    }
     sLog('edit:selectId', { id, name });
-    // Selection requires cmd-left-click (meta + left button)
+    // If voxel hit exists on plain left click (no Cmd), handle voxel selection (do not select space)
+    if (isLeft && !isCmd) {
+      let vBest = null;
+      try {
+        // Find nearest voxel hit among all spaces
+        for (const sp of (state?.barrow?.spaces || [])) {
+          if (!sp || !sp.vox || !sp.vox.size) continue;
+          const hit = voxelHitAtPointerForSpace(sp);
+          if (hit && isFinite(hit.t) && (vBest == null || hit.t < vBest.t)) vBest = { ...hit, id: sp.id };
+        }
+      } catch {}
+      if (vBest) {
+        try {
+          // Apply voxel selection semantics: shift adds, otherwise replace
+          const k = `${vBest.id}:${vBest.ix},${vBest.iy},${vBest.iz}`;
+          state.voxSel = Array.isArray(state.voxSel) ? state.voxSel : [];
+          if (isShift) {
+            if (!state.voxSel.some(p => p && `${p.id}:${p.x},${p.y},${p.z}` === k)) state.voxSel.push({ id: vBest.id, x: vBest.ix, y: vBest.iy, z: vBest.iz, v: vBest.v });
+          } else {
+            state.voxSel = [{ id: vBest.id, x: vBest.ix, y: vBest.iy, z: vBest.iz, v: vBest.v }];
+          }
+          // Do not alter space selection; just redraw halos to show picks
+          rebuildHalos();
+          try { scene.render(); requestAnimationFrame(() => { try { scene.render(); } catch {} }); } catch {}
+        } catch {}
+        return; // handled voxel selection
+      }
+    }
+
+    // Selection rules (space selection)
+    // Updated semantics:
+    // - Cmd+Left: select this space (clear others)
+    // - Shift+Cmd+Left: add this space to selection (multi-select)
+    // - Plain Left: does NOT change space selection (voxel picks still allowed above)
     try {
-      const isLeft = (ev && typeof ev.button === 'number') ? (ev.button === 0) : true;
-      const isCmd = !!(ev && ev.metaKey);
-      if (isLeft && isCmd) {
-        // Cmd-left on an already selected space toggles it off (deselect)
-        if (state.selection.has(id)) {
-          state.selection.delete(id);
-          sLog('edit:updateSelection', { selection: Array.from(state.selection), via: 'cmd-left:toggle-off', id });
-        } else if (ev && ev.shiftKey) {
-          // Cmd+Shift adds without clearing
+      // isLeft/isCmd/isShift computed above
+      if (!isLeft) { /* only act on left button */ }
+      else if (!isCmd) {
+        // Plain left-click: do not modify space selection
+        return;
+      } else {
+        // Cmd held: prefer selecting the nearest voxel-backed space under the pointer if available
+        try {
+          let best = { t: Infinity, id: null };
+          for (const sp of (state?.barrow?.spaces || [])) {
+            if (!sp || !sp.vox || !sp.vox.size) continue;
+            const hit = voxelHitAtPointerForSpace(sp);
+            if (hit && isFinite(hit.t) && hit.t < best.t) best = { t: hit.t, id: sp.id };
+          }
+          if (best.id) { id = best.id; name = 'space:' + id; }
+        } catch {}
+
+        if (isShift) {
+          // Shift+Cmd: multi-select (add-only)
           state.selection.add(id);
-          sLog('edit:updateSelection', { selection: Array.from(state.selection), via: 'cmd-left+shift:add', id });
+          sLog('edit:updateSelection', { selection: Array.from(state.selection), via: 'shift-cmd-left:add', id });
         } else {
-          // Cmd-left on a different target becomes single selection
+          // Cmd only: single-select (clear others)
           state.selection.clear();
           state.selection.add(id);
           sLog('edit:updateSelection', { selection: Array.from(state.selection), via: 'cmd-left:single', id });

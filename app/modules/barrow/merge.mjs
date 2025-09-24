@@ -277,7 +277,7 @@ export function mergeOverlappingSpaces(barrow, seedId) {
   }
   // Build voxel data using precedence rules across overlapping spaces:
   // - If no space contributes at a cell -> Uninstantiated
-  // - In overlap: Empty dominates, else Wall dominates Rock, else Rock
+  // - In overlap: Rock dominates, else Wall, else Empty
   const data = new Array(nTot); for (let i = 0; i < nTot; i++) data[i] = VoxelType.Uninstantiated;
   function sampleVal(s, wx, wy, wz) {
     // Return Uninstantiated when outside or no vox
@@ -307,9 +307,9 @@ export function mergeOverlappingSpaces(barrow, seedId) {
           const s = byId.get(id); if (!s) continue;
           const v = sampleVal(s, wx, wy, wz);
           if (v === VoxelType.Uninstantiated) continue;
-          if (v === VoxelType.Empty) { out = VoxelType.Empty; break; }
-          if (v === VoxelType.Wall) { if (out !== VoxelType.Empty) out = VoxelType.Wall; continue; }
-          if (v === VoxelType.Rock) { if (out === VoxelType.Uninstantiated) out = VoxelType.Rock; continue; }
+          if (v === VoxelType.Rock) { out = VoxelType.Rock; break; }
+          if (v === VoxelType.Wall) { if (out !== VoxelType.Rock) out = VoxelType.Wall; continue; }
+          if (v === VoxelType.Empty) { if (out === VoxelType.Uninstantiated) out = VoxelType.Empty; continue; }
         }
         data[idx(x,y,z)] = out;
       }
@@ -551,7 +551,7 @@ export async function mergeOverlappingSpacesAsync(barrow, seedId, opts = {}) {
   // Proceed to build voxel map even for single-seed case
 
   if (await bailIfCanceled('pre-build')) return null;
-  // Build data map with precedence rules (Empty > Wall > Rock)
+  // Build data map with precedence rules (Rock > Wall > Empty)
   const data = new Array(nTot); for (let i = 0; i < nTot; i++) data[i] = VoxelType.Uninstantiated;
   function sampleValMerge(s, wx, wy, wz) {
     if (!s || !s.vox || !s.vox.size || !s.vox.data) return VoxelType.Uninstantiated;
@@ -581,9 +581,9 @@ export async function mergeOverlappingSpacesAsync(barrow, seedId, opts = {}) {
           const s = byId.get(id); if (!s) continue;
           const v = sampleValMerge(s, wx, wy, wz);
           if (v === VoxelType.Uninstantiated) continue;
-          if (v === VoxelType.Empty) { out = VoxelType.Empty; break; }
-          if (v === VoxelType.Wall) { if (out !== VoxelType.Empty) out = VoxelType.Wall; continue; }
-          if (v === VoxelType.Rock) { if (out === VoxelType.Uninstantiated) out = VoxelType.Rock; continue; }
+          if (v === VoxelType.Rock) { out = VoxelType.Rock; break; }
+          if (v === VoxelType.Wall) { if (out !== VoxelType.Rock) out = VoxelType.Wall; continue; }
+          if (v === VoxelType.Empty) { if (out === VoxelType.Uninstantiated) out = VoxelType.Empty; continue; }
         }
         data[idx(x,y,z)] = out;
       }

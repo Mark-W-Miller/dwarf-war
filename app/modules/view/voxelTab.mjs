@@ -1,4 +1,4 @@
-import { VoxelType, bakeHollowContainer, fillAllVoxels } from '../voxels/voxelize.mjs';
+import { VoxelType, bakeHollowContainer, fillAllVoxels, fillInstantiatedVoxels } from '../voxels/voxelize.mjs';
 import { mergeOverlappingSpaces, mergeOverlappingSpacesAsync } from '../barrow/merge.mjs';
 import { Log } from '../util/log.mjs';
 
@@ -471,7 +471,9 @@ export function initVoxelTab(panelContent, api) {
           s.vox = { res, size: { x: nx, y: ny, z: nz }, data, palette: VoxelType, bakedAt: Date.now(), source: 'fill-rock', worldAligned: true };
           s.voxelized = 1;
         } else {
-          fillAllVoxels(s.vox, VoxelType.Rock);
+          // Fill only instantiated cells so shapes (e.g., ovoid) remain intact (outside stays Uninstantiated)
+          try { s.vox.worldAligned = true; } catch {}
+          fillInstantiatedVoxels(s.vox, VoxelType.Rock);
         }
         // Ensure exposed top layers are visible (avoid hiding everything)
         try { s.voxExposeTop = 0; } catch {}
