@@ -80,8 +80,20 @@ export function initVoxelTab(panelContent, api) {
       const span = document.createElement('span'); span.textContent = value;
       row.appendChild(b); row.appendChild(span); selContent.appendChild(row);
     };
-    if (spaces.length === 0) { selContent.appendChild(document.createTextNode('No selection.')); return; }
-    if (spaces.length > 1) { selContent.appendChild(document.createTextNode(`${spaces.length} spaces selected.`)); return; }
+    const vName = (val) => { try { return Object.keys(VoxelType).find(k => VoxelType[k] === val) || String(val); } catch { return String(val); } };
+    const renderLastPick = () => {
+      try {
+        const lp = api?.state?.lastVoxPick;
+        if (!lp || lp.id == null) return;
+        const msg = `space ${lp.id}: (${lp.x|0}, ${lp.y|0}, ${lp.z|0}) = ${vName(lp.v)}`;
+        const row = document.createElement('div'); row.className = 'row';
+        const b = document.createElement('b'); b.textContent = 'Last Voxel Pick:'; b.style.minWidth = '120px';
+        const span = document.createElement('span'); span.textContent = msg;
+        row.appendChild(b); row.appendChild(span); selContent.appendChild(row);
+      } catch {}
+    };
+    if (spaces.length === 0) { selContent.appendChild(document.createTextNode('No selection.')); renderLastPick(); return; }
+    if (spaces.length > 1) { selContent.appendChild(document.createTextNode(`${spaces.length} spaces selected.`)); renderLastPick(); return; }
     const s = spaces[0];
     makeRow('id', s.id);
     makeRow('type', s.type);
@@ -117,7 +129,6 @@ export function initVoxelTab(panelContent, api) {
       const pickInfoRow = document.createElement('div'); pickInfoRow.className = 'row';
       const pickLabel = document.createElement('b'); pickLabel.textContent = 'Voxel Pick:'; pickLabel.style.minWidth = '120px';
       const pickSpan = document.createElement('span');
-      const vName = (val) => { try { return Object.keys(VoxelType).find(k => VoxelType[k] === val) || String(val); } catch { return String(val); } };
       const renderPick = () => {
         const p = s.voxPick; // { x,y,z,v }
         if (p && typeof p.x === 'number' && typeof p.y === 'number' && typeof p.z === 'number') {

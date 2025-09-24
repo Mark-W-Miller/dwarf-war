@@ -1636,20 +1636,21 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
         }
       } catch (e) { logErr('EH:cm:pickBall', e); }
       // Always attempt a voxel pick for the space under the pointer (does not depend on selection)
+      let _pointerSpaceId = null;
       try {
-        let spacePick = scene.pick(scene.pointerX, scene.pointerY, (m) => m && typeof m.name === 'string' && m.name.startsWith('space:'));
+        const spacePick = scene.pick(scene.pointerX, scene.pointerY, (m) => m && typeof m.name === 'string' && m.name.startsWith('space:'));
         if (spacePick?.hit && spacePick.pickedMesh) {
           const pickedName = String(spacePick.pickedMesh.name||'');
-          const id = pickedName.slice('space:'.length).split(':')[0];
-          const s = (state?.barrow?.spaces || []).find(x => x && x.id === id);
+          _pointerSpaceId = pickedName.slice('space:'.length).split(':')[0];
+          const s = (state?.barrow?.spaces || []).find(x => x && x.id === _pointerSpaceId);
           if (s && s.vox && s.vox.size) doVoxelPickAtPointer(s);
         }
       } catch (e) { logErr('EH:cm:voxelPickUnderPointer', e); }
       try {
         const isLeft = (ev && typeof ev.button === 'number') ? (ev.button === 0) : true;
         if (!isLeft) return;
-        // Resolve active space
-        const sid = state._scry?.spaceId || (Array.from(state.selection || [])[0] || null);
+        // Resolve active space: prefer the space under the pointer, then scry focus, then selection
+        const sid = _pointerSpaceId || state._scry?.spaceId || (Array.from(state.selection || [])[0] || null);
         const s = (state?.barrow?.spaces || []).find(x => x && x.id === sid);
         if (!s || !s.vox || !s.vox.size) return;
         // Use current hover pick if available, else compute quickly (reuse DDA setup)
@@ -2225,14 +2226,30 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
         // Gate hover-based voxel picking (default off)
         try { if (localStorage.getItem('dw:ui:hoverVoxel') !== '1') return; } catch {}
         if (rotWidget.dragging || moveWidget.dragging) return;
-        // Active space: prefer current selection (single) else cavern focus (while in cavern)
-        let activeId = null;
+        // Active space: prefer current selection (single), else space under pointer, else cavern focus
+        let s = null;
         const sel = Array.from(state.selection || []);
-        if (sel.length === 1) activeId = sel[0];
-        else if (state.mode === 'cavern' && state._scry?.spaceId) activeId = state._scry.spaceId;
-        if (!activeId) return;
-        const s = (state?.barrow?.spaces || []).find(x => x && x.id === activeId);
-        if (!s || !s.vox || !s.vox.size) return;
+        if (sel.length === 1) {
+          s = (state?.barrow?.spaces || []).find(x => x && x.id === sel[0]);
+        }
+        // If nothing selected, try the space under the pointer
+        if (!s) {
+          try {
+            const sp = scene.pick(scene.pointerX, scene.pointerY, (m) => m && typeof m.name === 'string' && m.name.startsWith('space:'));
+            if (sp?.hit && sp.pickedMesh) {
+              const pickedName = String(sp.pickedMesh.name||'');
+              const id = pickedName.slice('space:'.length).split(':')[0];
+              s = (state?.barrow?.spaces || []).find(x => x && x.id === id) || null;
+            }
+          } catch {}
+        }
+        // Cavern focus fallback (while in cavern)
+        if (!s && state.mode === 'cavern' && state._scry?.spaceId) {
+          s = (state?.barrow?.spaces || []).find(x => x && x.id === state._scry.spaceId) || null;
+        }
+        if (!s) return;
+        // Only proceed if voxelized
+        if (!s.vox || !s.vox.size) return;
         // If voxel selection is locked for this space, do not update on hover
         if (state.lockedVoxPick && state.lockedVoxPick.id === s.id) return;
         const now = performance.now ? performance.now() : Date.now();
