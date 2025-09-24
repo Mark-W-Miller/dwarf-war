@@ -8,12 +8,8 @@ export const VoxelType = { Uninstantiated: 0, Empty: 1, Rock: 2, Wall: 3 };
 // Bake a hollow container: shell = Wall (thickness t voxels), interior = Empty
 // Space size fields are in voxels already; res is voxel size in world units.
 export function bakeHollowContainer(space, opts = {}) {
-  // Cavern: ovoid shell with rough walls, empty interior
-  try {
-    if (String(space?.type || '') === 'Cavern') {
-      return bakeCavernOvoid(space, opts);
-    }
-  } catch {}
+  // Optional ovoid bake when explicitly requested
+  try { if (opts && opts.ovoid) return bakeCavernOvoid(space, opts); } catch {}
   // World-aligned voxelization of a rotated box: inside test uses inverse rotation.
   const t = Math.max(1, Math.floor(opts.wallThickness || 1));
   const sx = Math.max(1, Math.floor(space?.size?.x || 1));

@@ -218,10 +218,30 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
         y: clamp(sizeYEl.value),
         z: clamp(sizeZEl.value)
       };
+      // Persist to current selection for the axes we auto-updated
+      try {
+        const sel = Array.from(state.selection || []);
+        if (sel.length > 0) {
+          if (axis !== 'x') applySizeField('x', sizeXEl.value);
+          if (axis !== 'y') applySizeField('y', sizeYEl.value);
+          if (axis !== 'z') applySizeField('z', sizeZEl.value);
+        }
+      } catch {}
     }
     sizeXEl.addEventListener('input', () => handle('x'));
     sizeYEl.addEventListener('input', () => handle('y'));
     sizeZEl.addEventListener('input', () => handle('z'));
+    // Keep baseline in sync when external code updates fields after selection/transform
+    function syncLast(){
+      last = {
+        x: clamp(sizeXEl.value),
+        y: clamp(sizeYEl.value),
+        z: clamp(sizeZEl.value)
+      };
+    }
+    try { window.addEventListener('dw:selectionChange', syncLast); } catch {}
+    try { window.addEventListener('dw:dbEdit', syncLast); } catch {}
+    try { window.addEventListener('dw:transform', syncLast); } catch {}
   })();
 
   // ——————————— Debug helpers ———————————
@@ -661,13 +681,14 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
                     camera.alpha = (camera.alpha + delta) % (Math.PI * 2);
                     if (camera.alpha < 0) camera.alpha += Math.PI * 2;
                   }
-                  // Movement (Shift+Up/Down = vertical Y move; Up/Down = horizontal forward/back)
+                  // Movement (Meta+Up/Down = vertical Y, Up/Down = ground-plane forward/back)
                   const moveSign = (ks.up ? 1 : 0) + (ks.down ? -1 : 0);
                   if (moveSign !== 0) {
                     const ball2 = state._scry.ball;
                     const pos = ball2.position.clone();
+                    const isVert = !!ks.meta;
                     let dir;
-                    if (ks.shift) {
+                    if (isVert) {
                       dir = new BABYLON.Vector3(0, moveSign, 0);
                     } else {
                       const fwd = camera.getForwardRay()?.direction.clone() || new BABYLON.Vector3(0,0,1);
@@ -675,23 +696,17 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
                       dir = fwd.scale(moveSign);
                     }
                     const res = s.res || (state?.barrow?.meta?.voxelSize || 1);
-                    // Speed multiplier from settings (percent or multiplier)
                     let scryMult = 1.0; try { const raw = Number(localStorage.getItem('dw:ui:scrySpeed') || '100'); if (isFinite(raw) && raw > 0) scryMult = (raw > 5) ? (raw/100) : raw; } catch {}
-                    const base = Math.max(0.1, res * 0.9) * 2 * (ks.shift ? 2.0 : 1.0) * scryMult; // baseline scaled by setting
-                    const dist = base * Math.max(0.016, dt) * 6; // tuned multiplier for responsiveness
-                    const seg = Math.max(0.08, res * 0.25);
+                    const base = (isVert ? Math.max(0.06, res * 0.6) : Math.max(0.1, res * 0.9) * 2) * (ks.shift ? 2.0 : 1.0) * scryMult;
+                    const dist = base * Math.max(0.016, dt) * (isVert ? 3 : 6);
+                    const seg  = Math.max(isVert ? 0.04 : 0.08, res * (isVert ? 0.15 : 0.25));
                     const radius = Math.max(0.15, (res * 0.8) / 2);
                     const nSteps = Math.max(1, Math.ceil(dist / seg));
                     const inc = dir.scale(dist / nSteps);
                     function canOccupy(px, py, pz) {
                       const offsets = [ {x:0,z:0}, {x:radius*0.5,z:0}, {x:-radius*0.5,z:0}, {x:0,z:radius*0.5}, {x:0,z:-radius*0.5} ];
                       for (const o of offsets) {
-                        // Block if ANY space has solid voxel at this world position
-                        const hit = (() => { try {
-                          const spaces = Array.isArray(state?.barrow?.spaces) ? state.barrow.spaces : [];
-                          for (const sp of spaces) { if (!sp || !sp.vox) continue; const v = voxelValueAtWorld(sp, px + o.x, py, pz + o.z); if (v === VoxelType.Rock || v === VoxelType.Wall) return true; }
-                          return false;
-                        } catch { return false; } })();
+                        const hit = (() => { try { const spaces = Array.isArray(state?.barrow?.spaces) ? state.barrow.spaces : []; for (const sp of spaces) { if (!sp || !sp.vox) continue; const v = voxelValueAtWorld(sp, px + o.x, py, pz + o.z); if (v === VoxelType.Rock || v === VoxelType.Wall) return true; } return false; } catch { return false; } })();
                         if (hit) return false;
                       }
                       return true;
@@ -703,7 +718,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
                       else { blocked = true; break; }
                     }
                     if (!next.equals(pos)) { ball2.position.copyFrom(next); camera.target.copyFrom(next); }
-                    if (blocked) { try { Log.log('COLLIDE', 'scry:block', { from: pos, to: next }); } catch {} }
+                    if (blocked) { try { Log.log('COLLIDE', 'scry:block', { from: pos, to: next, vert: isVert }); } catch {} }
                   }
                 }
               } catch {}
@@ -748,19 +763,20 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
         });
       } catch {}
       // Track keys for simultaneous rotate + move; handled per-frame in scryObs
-      state._scry.keyState = { up:false, down:false, left:false, right:false, shift:false };
+      state._scry.keyState = { up:false, down:false, left:false, right:false, shift:false, meta:false };
       try { if (state._scry.scryKeys) window.removeEventListener('keydown', state._scry.scryKeys); } catch {}
       try { if (state._scry.scryKeysUp) window.removeEventListener('keyup', state._scry.scryKeysUp); } catch {}
       state._scry.scryKeys = (e) => {
         if (!state._scry?.scryMode) return;
         const k = e.key;
-        if (k === 'ArrowUp' || k === 'ArrowDown' || k === 'ArrowLeft' || k === 'ArrowRight' || k === 'Shift') {
+        if (k === 'ArrowUp' || k === 'ArrowDown' || k === 'ArrowLeft' || k === 'ArrowRight' || k === 'Shift' || k === 'Meta') {
           e.preventDefault(); e.stopPropagation();
           if (k === 'ArrowUp') state._scry.keyState.up = true;
           if (k === 'ArrowDown') state._scry.keyState.down = true;
           if (k === 'ArrowLeft') state._scry.keyState.left = true;
           if (k === 'ArrowRight') state._scry.keyState.right = true;
           if (k === 'Shift') state._scry.keyState.shift = true;
+          if (k === 'Meta') state._scry.keyState.meta = true;
         }
       };
       state._scry.scryKeysUp = (e) => {
@@ -771,9 +787,16 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
         if (k === 'ArrowLeft') state._scry.keyState.left = false;
         if (k === 'ArrowRight') state._scry.keyState.right = false;
         if (k === 'Shift') state._scry.keyState.shift = false;
+        if (k === 'Meta') { state._scry.keyState.meta = false; state._scry.keyState.up = false; state._scry.keyState.down = false; }
       };
       window.addEventListener('keydown', state._scry.scryKeys, { passive:false });
       window.addEventListener('keyup', state._scry.scryKeysUp, { passive:false });
+      // Safety: clear modifier/key state on window blur to avoid sticky movement
+      try {
+        if (state._scry._onBlur) window.removeEventListener('blur', state._scry._onBlur);
+        state._scry._onBlur = () => { try { state._scry.keyState = { up:false, down:false, left:false, right:false, shift:false, meta:false }; } catch {} };
+        window.addEventListener('blur', state._scry._onBlur);
+      } catch {}
     } catch (e) { logErr('EH:enterScry', e); }
   }
 

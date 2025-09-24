@@ -41,6 +41,7 @@ export function initVoxelTab(panelContent, api) {
   const tInput = document.createElement('input'); tInput.type = 'number'; tInput.min = '1'; tInput.step = '1'; tInput.value = '1'; tInput.style.width = '64px';
   labelT.appendChild(tInput); row1.appendChild(labelT);
   const bakeBtn = document.createElement('button'); bakeBtn.className = 'btn'; bakeBtn.textContent = 'Bake Voxels (Walls + Empty)'; row1.appendChild(bakeBtn);
+  const ovoidBtn = document.createElement('button'); ovoidBtn.className = 'btn'; ovoidBtn.textContent = 'Ovoid'; row1.appendChild(ovoidBtn);
   opsCol.appendChild(row1);
 
   const row2 = document.createElement('div'); row2.className = 'row';
@@ -193,6 +194,26 @@ export function initVoxelTab(panelContent, api) {
     try { api.rebuildScene?.(); } catch {}
     try { api.scheduleGridUpdate?.(); } catch {}
     try { window.dispatchEvent(new CustomEvent('dw:transform', { detail: { kind: 'voxel-bake', sel: spaces.map(s => s.id), wallThickness: t } })); } catch {}
+    try { window.dispatchEvent(new CustomEvent('dw:gizmos:enable')); } catch {}
+  });
+
+  // Ovoid bake: explicitly bake ovoid shell regardless of space type
+  ovoidBtn.addEventListener('click', async () => {
+    const spaces = getSelectedSpaces(); if (!spaces.length) return;
+    try { window.dispatchEvent(new CustomEvent('dw:gizmos:disable')); } catch {}
+    const t = Math.max(1, Math.floor(Number(tInput.value || '1')));
+    Log.log('UI', 'Voxel bake (Ovoid)', { sel: spaces.map(s => s?.id), wallThickness: t });
+    for (const s of spaces) {
+      try {
+        const vox = bakeHollowContainer(s, { wallThickness: t, ovoid: true });
+        s.voxelized = 1; s.vox = vox;
+      } catch {}
+    }
+    try { api.saveBarrow(api.state.barrow); api.snapshot(api.state.barrow); } catch {}
+    try { api.renderDbView(api.state.barrow); } catch {}
+    try { api.rebuildScene?.(); } catch {}
+    try { api.scheduleGridUpdate?.(); } catch {}
+    try { window.dispatchEvent(new CustomEvent('dw:transform', { detail: { kind: 'voxel-bake-ovoid', sel: spaces.map(s => s.id), wallThickness: t } })); } catch {}
     try { window.dispatchEvent(new CustomEvent('dw:gizmos:enable')); } catch {}
   });
 
