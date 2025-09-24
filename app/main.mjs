@@ -113,6 +113,20 @@ const state = {
   lockedVoxPick: null, // { id, x,y,z,v } locked in Cavern Mode
 };
 
+// Ensure view mode and material opacities are sane on startup (avoid stale cavern settings)
+try {
+  // Force War Room view on boot unless explicitly in cavern
+  const vm = localStorage.getItem('dw:viewMode');
+  if (vm !== 'cavern') localStorage.setItem('dw:viewMode', 'war');
+  // Initialize wall/rock opacity if missing or invalid
+  const clamp01 = (n, dflt) => {
+    const v = Number(n);
+    return isFinite(v) && v >= 0 && v <= 100 ? String(v) : String(dflt);
+  };
+  localStorage.setItem('dw:ui:wallOpacity', clamp01(localStorage.getItem('dw:ui:wallOpacity'), 60));
+  localStorage.setItem('dw:ui:rockOpacity', clamp01(localStorage.getItem('dw:ui:rockOpacity'), 85));
+} catch {}
+
 // Global flag to block transforms during voxel operations (bake/merge/fill)
 let _voxOpActive = false;
 try {
@@ -385,10 +399,11 @@ function applyTextScale() {
 
 // Apply voxel wall opacity to current scene based on settings
 function applyVoxelOpacity() {
+  // Apply with a small floor to avoid fully invisible voxels in WR
   let alphaWall = 0.6;
   let alphaRock = 0.85;
-  try { alphaWall = Math.max(0.0, Math.min(1.0, (Number(localStorage.getItem('dw:ui:wallOpacity') || '60') || 60) / 100)); } catch {}
-  try { alphaRock = Math.max(0.0, Math.min(1.0, (Number(localStorage.getItem('dw:ui:rockOpacity') || '85') || 85) / 100)); } catch {}
+  try { alphaWall = Math.max(0.05, Math.min(1.0, (Number(localStorage.getItem('dw:ui:wallOpacity') || '60') || 60) / 100)); } catch {}
+  try { alphaRock = Math.max(0.05, Math.min(1.0, (Number(localStorage.getItem('dw:ui:rockOpacity') || '85') || 85) / 100)); } catch {}
   try {
     for (const part of state?.built?.voxParts || []) {
       try {

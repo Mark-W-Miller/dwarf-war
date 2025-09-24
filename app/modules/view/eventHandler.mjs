@@ -454,10 +454,17 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       try { exitScryMode(); } catch {}
       sLog('cm:exit', {});
       // Restore opacities and view mode
-      try { if (state._scry.prevWallOpacity != null) localStorage.setItem('dw:ui:wallOpacity', state._scry.prevWallOpacity); } catch {}
-      try { if (state._scry.prevRockOpacity != null) localStorage.setItem('dw:ui:rockOpacity', state._scry.prevRockOpacity); } catch {}
+      try {
+        const defWall = '60', defRock = '85';
+        const prevWall = (state._scry.prevWallOpacity != null) ? state._scry.prevWallOpacity : defWall;
+        const prevRock = (state._scry.prevRockOpacity != null) ? state._scry.prevRockOpacity : defRock;
+        localStorage.setItem('dw:ui:wallOpacity', prevWall);
+        localStorage.setItem('dw:ui:rockOpacity', prevRock);
+      } catch {}
       try { localStorage.setItem('dw:viewMode', 'war'); } catch {}
       try { rebuildScene(); } catch (e) { logErr('EH:rebuildScene:war', e); }
+      // Clear saved prevs to avoid leaking across sessions
+      try { state._scry.prevWallOpacity = null; state._scry.prevRockOpacity = null; } catch {}
       // Restore camera to the exact view when the space was double-clicked
       try {
         const p = state._scry.prev;

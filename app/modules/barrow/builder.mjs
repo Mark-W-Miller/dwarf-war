@@ -312,7 +312,7 @@ export function buildSceneFromBarrow(scene, barrow) {
         // Optional slicing: hide top N voxel layers (expose interior from top down)
         let hideTop = 0;
         try { hideTop = Math.max(0, Math.min(ny, Math.floor(Number(s.voxExposeTop || 0) || 0))); } catch { hideTop = 0; }
-        const yCut = ny - hideTop; // show y in [0, yCut-1]
+        const yCut = Math.max(1, ny - hideTop); // ensure at least one layer shows in WR view
         // Rotation: inherited from parent mesh; per-instance rotation stays identity
         const worldAligned = !!(s.vox && s.vox.worldAligned);
         let qMesh = BABYLON.Quaternion.Identity();

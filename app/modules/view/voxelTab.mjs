@@ -93,7 +93,38 @@ export function initVoxelTab(panelContent, api) {
       } catch {}
     };
     if (spaces.length === 0) { selContent.appendChild(document.createTextNode('No selection.')); renderLastPick(); return; }
-    if (spaces.length > 1) { selContent.appendChild(document.createTextNode(`${spaces.length} spaces selected.`)); renderLastPick(); return; }
+    if (spaces.length > 1) {
+      // Group selection: if 2+ have voxels, show a group expose control that applies a relative delta to all
+      const voxed = spaces.filter(s => s && s.vox && s.vox.size);
+      selContent.appendChild(document.createTextNode(`${spaces.length} spaces selected.`));
+      if (voxed.length >= 2) {
+        const vTitleG = document.createElement('h3'); vTitleG.textContent = 'Voxel Map (Group)'; selContent.appendChild(vTitleG);
+        const rows = document.createElement('div'); rows.className = 'row'; rows.style.alignItems = 'center'; rows.style.gap = '8px';
+        const label = document.createElement('b'); label.textContent = 'Expose (top layers):'; label.style.minWidth = '120px';
+        // Compute base averages and per-space bases
+        const bases = voxed.map(s => ({ s, vy: Math.max(0, s.vox?.size?.y|0), e: Math.max(0, Math.min((s.vox?.size?.y|0), Number(s.voxExposeTop||0))) }));
+        const baseAvg = Math.round(bases.reduce((a,b)=>a+(b.e||0),0) / Math.max(1, bases.length));
+        const maxY = Math.max(0, bases.reduce((m,b)=>Math.max(m, b.vy), 0));
+        const range = document.createElement('input'); range.type = 'range'; range.min = '0'; range.max = String(maxY); range.step = '1'; range.value = String(baseAvg); range.style.flex = '1';
+        const num = document.createElement('input'); num.type = 'number'; num.min = '0'; num.max = String(maxY); num.step = '1'; num.value = String(baseAvg); num.style.width = '72px';
+        const reset = document.createElement('button'); reset.className = 'btn'; reset.textContent = 'Reset All';
+        rows.appendChild(label); rows.appendChild(range); rows.appendChild(num); rows.appendChild(reset); selContent.appendChild(rows);
+
+        let timer = null; const schedule = () => { if (timer) clearTimeout(timer); timer = setTimeout(() => { try { api.rebuildScene?.(); } catch {}; timer = null; }, 60); };
+        const applyGroup = (targetVal) => {
+          const v = Math.max(0, Math.min(maxY, Math.floor(Number(targetVal)||0)));
+          range.value = String(v); num.value = String(v);
+          const delta = v - baseAvg;
+          for (const b of bases) { try { b.s.voxExposeTop = Math.max(0, Math.min(b.vy, (b.e + delta)|0)); } catch {} }
+          schedule();
+        };
+        range.addEventListener('input', () => applyGroup(range.value));
+        num.addEventListener('input', () => applyGroup(num.value));
+        reset.addEventListener('click', () => { applyGroup(0); });
+      }
+      renderLastPick();
+      return;
+    }
     const s = spaces[0];
     makeRow('id', s.id);
     makeRow('type', s.type);
