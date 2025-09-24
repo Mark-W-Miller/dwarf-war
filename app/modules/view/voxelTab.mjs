@@ -246,93 +246,85 @@ export function initVoxelTab(panelContent, api) {
       keepId = await mergeOverlappingSpacesAsync(clone, seed.id, { debug: debugCfg, cancel: () => _cancelMerge.value });
       Log.log('DEBUG', 'softMerge:returned', { keepId });
       if (!_cancelMerge.value && keepId) {
-        // Build per-space voxel maps from the union (world-aligned), with global Empty dominating and unique Wall ownership
         const k = (clone.spaces||[]).find(s => s && s.id === keepId);
         if (k && k.vox && k.vox.size) {
+          // Apply ONLY intersection changes across all selected spaces (symmetric); outside intersection preserve each space
           const nx = k.vox.size?.x|0, ny = k.vox.size?.y|0, nz = k.vox.size?.z|0;
-          const nTot = Math.max(0, nx*ny*nz);
           const uRes = k.vox.res || res || 1;
           const uOrigin = { x: (k.origin?.x||0), y: (k.origin?.y||0), z: (k.origin?.z||0) };
-          const uData = Array.isArray(k.vox.data) ? k.vox.data : (k.vox.data?.rle ? (k.vox.data.rle.slice ? (()=>{ /* naive RLE decode */ const out=[]; const a=k.vox.data.rle; for(let i=0;i<a.length;i+=2){ const v=a[i]; const n=a[i+1]||0; for(let j=0;j<n;j++) out.push(v);} return out; })() : []) : []);
-          // Pre-allocate per-space maps
-          const byId = new Map(spaces.map(s => [s.id, s]));
-          const maps = new Map(spaces.map(s => [s.id, new Array(nTot).fill(VoxelType.Uninstantiated)]));
-          // Precompute space centers for ownership (world origin)
-          const centers = spaces.map(s => ({ id: s.id, cx: s.origin?.x||0, cy: s.origin?.y||0, cz: s.origin?.z||0 }));
-          const idx = (x,y,z) => x + nx*(y + ny*z);
-          // Iterate cells
-          let _dotCount = 0;
+          const idxU = (x,y,z) => x + nx*(y + ny*z);
+          const sampleVal = (sp, wx, wy, wz) => {
+            try {
+              if (!sp || !sp.vox || !sp.vox.size || !sp.vox.data) return VoxelType.Uninstantiated;
+              const vox = sp.vox; const sx = vox.size?.x||0, sy = vox.size?.y||0, sz = vox.size?.z||0;
+              const sres = vox.res || sp.res || (api.state.barrow?.meta?.voxelSize || 1);
+              const cx = sp.origin?.x||0, cy = sp.origin?.y||0, cz = sp.origin?.z||0;
+              const worldAligned = !!(sp.vox && sp.vox.worldAligned);
+              let qInv = BABYLON.Quaternion.Identity();
+              if (!worldAligned) {
+                const rx = Number(sp.rotation?.x||0), ry = (typeof sp.rotation?.y==='number')?Number(sp.rotation.y):Number(sp.rotY||0)||0, rz = Number(sp.rotation?.z||0);
+                const q = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz); qInv = BABYLON.Quaternion.Inverse(q);
+              }
+              const rotInv = BABYLON.Matrix.Compose(new BABYLON.Vector3(1,1,1), qInv, BABYLON.Vector3.Zero());
+              const vLocal = BABYLON.Vector3.TransformCoordinates(new BABYLON.Vector3(wx - cx, wy - cy, wz - cz), rotInv);
+              const minX = -(sx * sres) / 2, minY = -(sy * sres) / 2, minZ = -(sz * sres) / 2;
+              const ix = Math.floor((vLocal.x - minX) / sres);
+              const iy = Math.floor((vLocal.y - minY) / sres);
+              const iz = Math.floor((vLocal.z - minZ) / sres);
+              if (ix < 0 || iy < 0 || iz < 0 || ix >= sx || iy >= sy || iz >= sz) return VoxelType.Uninstantiated;
+              return sp.vox.data[ix + sx*(iy + sy*iz)] ?? VoxelType.Uninstantiated;
+            } catch { return VoxelType.Uninstantiated; }
+          };
+          const writeVal = (sp, wx, wy, wz, vNew) => {
+            try {
+              if (!sp || !sp.vox || !sp.vox.size || !sp.vox.data) return false;
+              const vox = sp.vox; const sx = vox.size?.x||0, sy = vox.size?.y||0, sz = vox.size?.z||0;
+              const sres = vox.res || sp.res || (api.state.barrow?.meta?.voxelSize || 1);
+              const cx = sp.origin?.x||0, cy = sp.origin?.y||0, cz = sp.origin?.z||0;
+              const worldAligned = !!(sp.vox && sp.vox.worldAligned);
+              let qInv = BABYLON.Quaternion.Identity();
+              if (!worldAligned) {
+                const rx = Number(sp.rotation?.x||0), ry = (typeof sp.rotation?.y==='number')?Number(sp.rotation.y):Number(sp.rotY||0)||0, rz = Number(sp.rotation?.z||0);
+                const q = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz); qInv = BABYLON.Quaternion.Inverse(q);
+              }
+              const rotInv = BABYLON.Matrix.Compose(new BABYLON.Vector3(1,1,1), qInv, BABYLON.Vector3.Zero());
+              const vLocal = BABYLON.Vector3.TransformCoordinates(new BABYLON.Vector3(wx - cx, wy - cy, wz - cz), rotInv);
+              const minX = -(sx * sres) / 2, minY = -(sy * sres) / 2, minZ = -(sz * sres) / 2;
+              const ix = Math.floor((vLocal.x - minX) / sres);
+              const iy = Math.floor((vLocal.y - minY) / sres);
+              const iz = Math.floor((vLocal.z - minZ) / sres);
+              if (ix < 0 || iy < 0 || iz < 0 || ix >= sx || iy >= sy || iz >= sz) return false;
+              sp.vox.data[ix + sx*(iy + sy*iz)] = vNew; return true;
+            } catch { return false; }
+          };
           for (let z = 0; z < nz; z++) {
             for (let y = 0; y < ny; y++) {
               for (let x = 0; x < nx; x++) {
-                const i = idx(x,y,z);
-                const v = uData[i] ?? VoxelType.Uninstantiated;
-                if (v === VoxelType.Uninstantiated) continue; // outside → leave Uninstantiated for all
-                // Compute world center of this union cell
                 const wx = uOrigin.x + ((x + 0.5) - nx/2) * uRes;
                 const wy = uOrigin.y + ((y + 0.5) - ny/2) * uRes;
                 const wz = uOrigin.z + ((z + 0.5) - nz/2) * uRes;
-                // (Defer debug dots until after per-space maps are built; dots must reflect final decision per space)
-                if (scanDotsOn) { _dotCount++; if ((_dotCount % 4096) === 0) { try { api.debug?.flushVoxelScanPoints?.(); } catch {}; await new Promise(r => requestAnimationFrame(() => r())); } }
-                if (v === VoxelType.Empty) {
-                  // Global Empty dominates: set Empty for all selected spaces
-                  for (const [sid, arr] of maps.entries()) arr[i] = VoxelType.Empty;
-                } else if (v === VoxelType.Wall) {
-                  // Assign unique owner by nearest space center
-                  let best = null, bestD2 = Infinity;
-                  for (const c of centers) {
-                    const dx = wx - c.cx, dy = wy - c.cy, dz = wz - c.cz;
-                    const d2 = dx*dx + dy*dy + dz*dz;
-                    if (d2 < bestD2) { bestD2 = d2; best = c.id; }
+                // Evaluate contributions
+                let count = 0; let hasEmpty = false, hasWall = false, hasRock = false;
+                const vals = new Map();
+                for (const sp of spaces) {
+                  const v = sampleVal(sp, wx, wy, wz);
+                  vals.set(sp, v);
+                  if (v !== VoxelType.Uninstantiated) {
+                    count++;
+                    if (v === VoxelType.Empty) hasEmpty = true; else if (v === VoxelType.Wall) hasWall = true; else if (v === VoxelType.Rock) hasRock = true;
                   }
-                  for (const [sid, arr] of maps.entries()) {
-                    arr[i] = (sid === best) ? VoxelType.Wall : VoxelType.Empty;
+                }
+                if (count >= 2) {
+                  const vOut = hasEmpty ? VoxelType.Empty : (hasWall ? VoxelType.Wall : (hasRock ? VoxelType.Rock : VoxelType.Uninstantiated));
+                  for (const sp of spaces) {
+                    const vPrev = vals.get(sp);
+                    if (vPrev !== VoxelType.Uninstantiated) writeVal(sp, wx, wy, wz, vOut);
                   }
-                } else {
-                  // If ever Rock appears in union (unlikely), treat like interior → set Empty for all
-                  for (const [sid, arr] of maps.entries()) arr[i] = VoxelType.Empty;
                 }
               }
             }
           }
-          // Apply per-space maps in the normalized union frame
-          for (const s of spaces) {
-            try {
-              s.type = 'Carddon';
-              s.rotation = { x: 0, y: 0, z: 0 }; delete s.rotY;
-              s.size = { x: nx, y: ny, z: nz };
-              s.res = uRes;
-              s.origin = { x: uOrigin.x, y: uOrigin.y, z: uOrigin.z };
-              s.vox = { res: uRes, size: { x: nx, y: ny, z: nz }, data: maps.get(s.id), palette: VoxelType, bakedAt: Date.now(), source: 'soft-merge' };
-              s.voxelized = 1;
-            } catch {}
-          }
-          // Emit debug dots for FINAL decisions for the seed space only (to avoid mixed overlays)
-          try {
-            if (scanDotsOn) {
-              const seedMap = maps.get(seed.id) || [];
-              let _emitCount = 0;
-              for (let z = 0; z < nz; z++) {
-                for (let y = 0; y < ny; y++) {
-                  for (let x = 0; x < nx; x++) {
-                    const i = idx(x,y,z);
-                    const vFinal = seedMap[i] ?? VoxelType.Uninstantiated;
-                    const wx = uOrigin.x + ((x + 0.5) - nx/2) * uRes;
-                    const wy = uOrigin.y + ((y + 0.5) - ny/2) * uRes;
-                    const wz = uOrigin.z + ((z + 0.5) - nz/2) * uRes;
-                    if (vFinal === VoxelType.Wall) api.debug?.addVoxelScanPointWall?.(wx, wy, wz);
-                    else if (vFinal === VoxelType.Rock) api.debug?.addVoxelScanPointRock?.(wx, wy, wz);
-                    else if (vFinal === VoxelType.Empty) api.debug?.addVoxelScanPointInside?.(wx, wy, wz);
-                    else api.debug?.addVoxelScanPointUninst?.(wx, wy, wz);
-                    _emitCount++;
-                    if ((_emitCount % 4096) === 0) { api.debug?.flushVoxelScanPoints?.(); await new Promise(r => requestAnimationFrame(() => r())); }
-                  }
-                }
-              }
-              api.debug?.flushVoxelScanPoints?.();
-            }
-          } catch {}
-          Log.log('UI', 'Soft merged spaces (partitioned union)', { spaces: spaces.map(s=>s.id), dims: { x: nx, y: ny, z: nz } });
+          Log.log('UI', 'Soft merged intersection across spaces', { ids: spaces.map(s=>s.id), dims: { x: nx, y: ny, z: nz } });
         }
       }
     } catch {}
@@ -415,8 +407,20 @@ export function initVoxelTab(panelContent, api) {
     Log.log('UI', 'Voxel fill', { sel: spaces.map(s => s?.id), value: 'Rock' });
     for (const s of spaces) {
       try {
-        if (!s.vox) continue;
-        fillAllVoxels(s.vox, VoxelType.Rock);
+        if (!s.vox || !s.vox.size) {
+          // Create a full solid voxel map for this space and fill it with Rock
+          const res = s.res || (api.state.barrow?.meta?.voxelSize || 1);
+          const nx = Math.max(1, (s.size?.x|0) || 1);
+          const ny = Math.max(1, (s.size?.y|0) || 1);
+          const nz = Math.max(1, (s.size?.z|0) || 1);
+          const nTot = nx * ny * nz;
+          const data = new Array(nTot);
+          for (let i = 0; i < nTot; i++) data[i] = VoxelType.Rock;
+          s.vox = { res, size: { x: nx, y: ny, z: nz }, data, palette: VoxelType, bakedAt: Date.now(), source: 'fill-rock', worldAligned: true };
+          s.voxelized = 1;
+        } else {
+          fillAllVoxels(s.vox, VoxelType.Rock);
+        }
         // Ensure exposed top layers are visible (avoid hiding everything)
         try { s.voxExposeTop = 0; } catch {}
       } catch {}

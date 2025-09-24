@@ -842,7 +842,15 @@ function moveSelection(dx=0, dy=0, dz=0) {
     const s = bySpace.get(id);
     if (s) {
       const p = s.origin || { x:0,y:0,z:0 };
-      s.origin = { x: (p.x||0)+dx, y: (p.y||0)+dy, z: (p.z||0)+dz };
+      let nx = (p.x||0)+dx, ny = (p.y||0)+dy, nz = (p.z||0)+dz;
+      try {
+        if (s.vox && s.vox.size) {
+          const res = s.vox?.res || s.res || (state.barrow?.meta?.voxelSize || 1);
+          const snap = (v) => { const r = Math.max(1e-6, Number(res)||0); return Math.round(v / r) * r; };
+          nx = snap(nx); ny = snap(ny); nz = snap(nz);
+        }
+      } catch {}
+      s.origin = { x: nx, y: ny, z: nz };
       continue;
     }
     const c = byCav.get(id);

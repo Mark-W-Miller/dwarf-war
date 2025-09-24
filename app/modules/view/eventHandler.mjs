@@ -40,6 +40,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
   const sizeXEl = document.getElementById('sizeX');
   const sizeYEl = document.getElementById('sizeY');
   const sizeZEl = document.getElementById('sizeZ');
+  const sizeLockEl = document.getElementById('sizeLock');
   const showNamesCb = document.getElementById('showNames');
   const gridGroundCb = document.getElementById('gridGround');
   const gridXYCb = document.getElementById('gridXY');
@@ -175,6 +176,53 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
   axisArrowsCb?.addEventListener('change', applyTogglesFromUI);
   // Apply once on init
   applyTogglesFromUI();
+
+  // ——————————— Proportional size linking ———————————
+  (function setupProportionalSize(){
+    if (!sizeXEl || !sizeYEl || !sizeZEl) return;
+    // Persist setting
+    try { if (sizeLockEl) sizeLockEl.checked = readBool('dw:ui:sizeProp', false); } catch {}
+    sizeLockEl?.addEventListener('change', () => { writeBool('dw:ui:sizeProp', !!sizeLockEl.checked); });
+    // Track last values to compute scale factors
+    let last = {
+      x: Number(sizeXEl.value||'0')||0,
+      y: Number(sizeYEl.value||'0')||0,
+      z: Number(sizeZEl.value||'0')||0
+    };
+    let reentrant = false;
+    function clamp(v){ v = Math.round(Number(v)||0); return Math.max(1, v); }
+    function handle(axis){
+      if (reentrant) return;
+      const locked = !!sizeLockEl?.checked;
+      const cur = {
+        x: clamp(sizeXEl.value),
+        y: clamp(sizeYEl.value),
+        z: clamp(sizeZEl.value)
+      };
+      if (!locked) { last = cur; return; }
+      let base = last[axis] || 1;
+      if (!isFinite(base) || base <= 0) base = 1;
+      const nowVal = cur[axis];
+      const scale = nowVal / base;
+      if (!isFinite(scale) || scale <= 0) { last = cur; return; }
+      const nx = clamp(last.x * scale);
+      const ny = clamp(last.y * scale);
+      const nz = clamp(last.z * scale);
+      reentrant = true;
+      if (axis !== 'x') sizeXEl.value = String(nx);
+      if (axis !== 'y') sizeYEl.value = String(ny);
+      if (axis !== 'z') sizeZEl.value = String(nz);
+      reentrant = false;
+      last = {
+        x: clamp(sizeXEl.value),
+        y: clamp(sizeYEl.value),
+        z: clamp(sizeZEl.value)
+      };
+    }
+    sizeXEl.addEventListener('input', () => handle('x'));
+    sizeYEl.addEventListener('input', () => handle('y'));
+    sizeZEl.addEventListener('input', () => handle('z'));
+  })();
 
   // ——————————— Debug helpers ———————————
   function pickDebugOn() { try { return localStorage.getItem('dw:debug:picking') === '1'; } catch (e) { logErr('EH:pickDebugOn', e); return false; } }
@@ -760,6 +808,17 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
 
   // ——————————— Reset/Export/Import ———————————
   resetBtn?.addEventListener('click', () => {
+    // Clear gizmos, selection, voxel picks, and debug before rebuilding
+    try { disposeMoveWidget(); } catch {}
+    try { disposeRotWidget(); } catch {}
+    try { state.selection.clear(); } catch {}
+    try { state.lockedVoxPick = null; state.lastVoxPick = null; } catch {}
+    try { rebuildHalos(); } catch {}
+    try { window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: [] } })); } catch {}
+    try { window.dispatchEvent(new CustomEvent('dw:debug:clearAll')); } catch {}
+    // Exit cavern/scry modes if active
+    try { if (state.mode === 'cavern') { try { exitScryMode(); } catch {} try { exitCavernMode(); } catch {} } } catch {}
+
     disposeBuilt(state.built);
     state.barrow = makeDefaultBarrow();
     layoutBarrow(state.barrow);
@@ -2145,10 +2204,26 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
           let deltaScalar = 0; let deltaVec = null;
           if (isPlane) { deltaVec = p.subtract(moveWidget.startPoint || basePt); }
           else { const s = BABYLON.Vector3.Dot(p, axis); deltaScalar = s - (moveWidget.axisStart || 0); }
+          // Helper: snap to voxel grid (per space)
+          const snapVal = (v, res) => {
+            const r = Math.max(1e-6, Number(res) || 0);
+            return Math.round(v / r) * r;
+          };
           for (const id2 of moveWidget.groupIDs || []) {
             const entry = (state?.built?.spaces || []).find(x => x.id === id2); if (!entry?.mesh) continue;
             const startPos = moveWidget.startById?.get?.(id2); if (!startPos) continue;
             const targetPos = isPlane ? startPos.add(deltaVec) : startPos.add(axis.scale(deltaScalar));
+            // Snap if the space is voxelized
+            try {
+              const sp2 = (state?.barrow?.spaces || []).find(x => x && x.id === id2);
+              const hasVox = !!(sp2 && sp2.vox && sp2.vox.size);
+              if (hasVox) {
+                const resV = sp2.vox?.res || sp2.res || (state?.barrow?.meta?.voxelSize || 1);
+                targetPos.x = snapVal(targetPos.x, resV);
+                targetPos.y = snapVal(targetPos.y, resV);
+                targetPos.z = snapVal(targetPos.z, resV);
+              }
+            } catch {}
             const m2 = entry.mesh; m2.position.copyFrom(targetPos);
             try { m2.computeWorldMatrix(true); m2.refreshBoundingInfo(); } catch {}
           }
@@ -2188,6 +2263,18 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
             const deltaScalar = s - (moveWidget.axisStart || 0);
             target = (moveWidget.startCenter || mesh.position).add(axis.scale(deltaScalar));
           }
+          // Snap to voxel grid if this space is voxelized
+          try {
+            const sp = (state?.barrow?.spaces || []).find(x => x && x.id === moveWidget.spaceId);
+            const hasVox = !!(sp && sp.vox && sp.vox.size);
+            if (hasVox) {
+              const resV = sp.vox?.res || sp.res || (state?.barrow?.meta?.voxelSize || 1);
+              const snapVal = (v, r) => { r = Math.max(1e-6, Number(r)||0); return Math.round(v / r) * r; };
+              target.x = snapVal(target.x, resV);
+              target.y = snapVal(target.y, resV);
+              target.z = snapVal(target.z, resV);
+            }
+          } catch {}
           try {
             const now = performance.now();
             moveWidget._lastLog = moveWidget._lastLog || 0;

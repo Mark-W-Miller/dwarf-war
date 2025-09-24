@@ -275,31 +275,78 @@ export function mergeOverlappingSpaces(barrow, seedId) {
     for (let i = 0; i < nTot; i++) occ[i] = 0;
     fillOcc(true);
   }
-  // Build voxel data with walls on the surface (6-neighborhood)
-  const data = new Array(nTot);
-  for (let i = 0; i < nTot; i++) data[i] = VoxelType.Uninstantiated;
-  const dirs = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];
+  // Build voxel data using precedence rules across overlapping spaces:
+  // - If no space contributes at a cell -> Uninstantiated
+  // - In overlap: Empty dominates, else Wall dominates Rock, else Rock
+  const data = new Array(nTot); for (let i = 0; i < nTot; i++) data[i] = VoxelType.Uninstantiated;
+  function sampleVal(s, wx, wy, wz) {
+    // Return Uninstantiated when outside or no vox
+    if (!s || !s.vox || !s.vox.size || !s.vox.data) return VoxelType.Uninstantiated;
+    const vox = decompressVox(s.vox);
+    const sx = vox.size?.x||0, sy = vox.size?.y||0, sz = vox.size?.z||0;
+    if (sx <= 0 || sy <= 0 || sz <= 0) return VoxelType.Uninstantiated;
+    const sres = vox.res || s.res || res;
+    const halfX = (sx * sres) / 2, halfY = (sy * sres) / 2, halfZ = (sz * sres) / 2;
+    const { lx, ly, lz } = toLoc(s, wx, wy, wz);
+    const ix = Math.floor((lx + halfX) / sres);
+    const iy = Math.floor((ly + halfY) / sres);
+    const iz = Math.floor((lz + halfZ) / sres);
+    if (ix < 0 || iy < 0 || iz < 0 || ix >= sx || iy >= sy || iz >= sz) return VoxelType.Uninstantiated;
+    const v = vox.data[ix + sx*(iy + sy*iz)];
+    return (v == null ? VoxelType.Uninstantiated : v);
+  }
   for (let z = 0; z < nz; z++) {
     for (let y = 0; y < ny; y++) {
       for (let x = 0; x < nx; x++) {
         if (!occ[idx(x,y,z)]) continue;
-        let surface = false;
-        for (const [dx,dy,dz] of dirs) {
-          const nx1 = x + dx, ny1 = y + dy, nz1 = z + dz;
-          if (nx1 < 0 || ny1 < 0 || nz1 < 0 || nx1 >= nx || ny1 >= ny || nz1 >= nz) { surface = true; break; }
-          if (!occ[idx(nx1,ny1,nz1)]) { surface = true; break; }
+        const wx = min.x + (x + 0.5) * res;
+        const wy = min.y + (y + 0.5) * res;
+        const wz = min.z + (z + 0.5) * res;
+        let out = VoxelType.Uninstantiated;
+        for (const id of picked) {
+          const s = byId.get(id); if (!s) continue;
+          const v = sampleVal(s, wx, wy, wz);
+          if (v === VoxelType.Uninstantiated) continue;
+          if (v === VoxelType.Empty) { out = VoxelType.Empty; break; }
+          if (v === VoxelType.Wall) { if (out !== VoxelType.Empty) out = VoxelType.Wall; continue; }
+          if (v === VoxelType.Rock) { if (out === VoxelType.Uninstantiated) out = VoxelType.Rock; continue; }
         }
-        data[idx(x,y,z)] = surface ? VoxelType.Wall : VoxelType.Empty;
+        data[idx(x,y,z)] = out;
       }
     }
   }
-  // Update keeper as Carddon, reset rotation, use voxel grid size and res
+  // Tighten to solids (Wall/Rock) to compute a compact BB and origin
+  let minX = Infinity, minY = Infinity, minZ = Infinity;
+  let maxX = -1, maxY = -1, maxZ = -1;
+  const solid = (v) => (v === VoxelType.Wall || v === VoxelType.Rock);
+  for (let z = 0; z < nz; z++) for (let y = 0; y < ny; y++) for (let x = 0; x < nx; x++) {
+    const v = data[idx(x,y,z)]; if (!solid(v)) continue;
+    if (x < minX) minX = x; if (y < minY) minY = y; if (z < minZ) minZ = z;
+    if (x > maxX) maxX = x; if (y > maxY) maxY = y; if (z > maxZ) maxZ = z;
+  }
+  let tSize = { x: nx, y: ny, z: nz };
+  let tOrigin = { x: min.x + nx*res/2, y: min.y + ny*res/2, z: min.z + nz*res/2 };
+  let tData = data;
+  if (isFinite(minX) && maxX >= minX) {
+    const tx = (maxX - minX + 1), ty = (maxY - minY + 1), tz = (maxZ - minZ + 1);
+    const tIdx = (x,y,z) => x + tx*(y + ty*z);
+    const out = new Array(tx*ty*tz);
+    for (let z = minZ; z <= maxZ; z++) for (let y = minY; y <= maxY; y++) for (let x = minX; x <= maxX; x++) {
+      out[tIdx(x-minX, y-minY, z-minZ)] = data[idx(x,y,z)];
+    }
+    tData = out; tSize = { x: tx, y: ty, z: tz };
+    const cxShift = ((minX + maxX + 1)/2 - nx/2) * res;
+    const cyShift = ((minY + maxY + 1)/2 - ny/2) * res;
+    const czShift = ((minZ + maxZ + 1)/2 - nz/2) * res;
+    tOrigin = { x: tOrigin.x + cxShift, y: tOrigin.y + cyShift, z: tOrigin.z + czShift };
+  }
+  // Update keeper as Carddon, reset rotation, apply compact vox and origin
   keep.type = 'Carddon';
   keep.rotation = { x: 0, y: 0, z: 0 }; delete keep.rotY;
-  keep.size = { x: nx, y: ny, z: nz };
+  keep.size = { ...tSize };
   keep.res = res;
-  keep.origin = { x: min.x + nx*res/2, y: min.y + ny*res/2, z: min.z + nz*res/2 };
-  keep.vox = { res, size: { x: nx, y: ny, z: nz }, data, palette: VoxelType, bakedAt: Date.now(), source: keep.id };
+  keep.origin = { ...tOrigin };
+  keep.vox = { res, size: { ...tSize }, data: tData, palette: VoxelType, bakedAt: Date.now(), source: keep.id, worldAligned: true };
   keep.voxelized = 1;
 
   // Remove the rest from barrow.spaces
@@ -504,27 +551,72 @@ export async function mergeOverlappingSpacesAsync(barrow, seedId, opts = {}) {
   // Proceed to build voxel map even for single-seed case
 
   if (await bailIfCanceled('pre-build')) return null;
-  // Build data maps
+  // Build data map with precedence rules (Empty > Wall > Rock)
   const data = new Array(nTot); for (let i = 0; i < nTot; i++) data[i] = VoxelType.Uninstantiated;
-  const dirs = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];
+  function sampleValMerge(s, wx, wy, wz) {
+    if (!s || !s.vox || !s.vox.size || !s.vox.data) return VoxelType.Uninstantiated;
+    const vox = decompressVox(s.vox);
+    const sx = vox.size?.x||0, sy = vox.size?.y||0, sz = vox.size?.z||0;
+    if (sx <= 0 || sy <= 0 || sz <= 0) return VoxelType.Uninstantiated;
+    const sres = vox.res || s.res || res;
+    const halfX = (sx * sres) / 2, halfY = (sy * sres) / 2, halfZ = (sz * sres) / 2;
+    const { lx, ly, lz } = toLoc(s, wx, wy, wz);
+    const ix = Math.floor((lx + halfX) / sres);
+    const iy = Math.floor((ly + halfY) / sres);
+    const iz = Math.floor((lz + halfZ) / sres);
+    if (ix < 0 || iy < 0 || iz < 0 || ix >= sx || iy >= sy || iz >= sz) return VoxelType.Uninstantiated;
+    const v = vox.data[ix + sx*(iy + sy*iz)];
+    return (v == null ? VoxelType.Uninstantiated : v);
+  }
   for (let z = 0; z < nz; z++) {
     for (let y = 0; y < ny; y++) {
       for (let x = 0; x < nx; x++) {
         if (cancel()) return null;
         if (!occ[idx(x,y,z)]) continue;
-        let surface = false;
-        for (const [dx,dy,dz] of dirs) {
-          const nx1 = x + dx, ny1 = y + dy, nz1 = z + dz;
-          if (nx1 < 0 || ny1 < 0 || nz1 < 0 || nx1 >= nx || ny1 >= ny || nz1 >= nz) { surface = true; break; }
-          if (!occ[idx(nx1,ny1,nz1)]) { surface = true; break; }
+        const wx = min.x + (x + 0.5) * res;
+        const wy = min.y + (y + 0.5) * res;
+        const wz = min.z + (z + 0.5) * res;
+        let out = VoxelType.Uninstantiated;
+        for (const id of picked) {
+          const s = byId.get(id); if (!s) continue;
+          const v = sampleValMerge(s, wx, wy, wz);
+          if (v === VoxelType.Uninstantiated) continue;
+          if (v === VoxelType.Empty) { out = VoxelType.Empty; break; }
+          if (v === VoxelType.Wall) { if (out !== VoxelType.Empty) out = VoxelType.Wall; continue; }
+          if (v === VoxelType.Rock) { if (out === VoxelType.Uninstantiated) out = VoxelType.Rock; continue; }
         }
-        data[idx(x,y,z)] = surface ? VoxelType.Wall : VoxelType.Empty;
+        data[idx(x,y,z)] = out;
       }
     }
   }
+  // Tighten to solids (Wall/Rock) for compact BB/origin
+  let minX = Infinity, minY = Infinity, minZ = Infinity;
+  let maxX = -1, maxY = -1, maxZ = -1;
+  const solid = (v) => (v === VoxelType.Wall || v === VoxelType.Rock);
+  for (let z = 0; z < nz; z++) for (let y = 0; y < ny; y++) for (let x = 0; x < nx; x++) {
+    const v = data[idx(x,y,z)]; if (!solid(v)) continue;
+    if (x < minX) minX = x; if (y < minY) minY = y; if (z < minZ) minZ = z;
+    if (x > maxX) maxX = x; if (y > maxY) maxY = y; if (z > maxZ) maxZ = z;
+  }
+  let tSize = { x: nx, y: ny, z: nz };
+  let tOrigin = { x: min.x + nx*res/2, y: min.y + ny*res/2, z: min.z + nz*res/2 };
+  let tData = data;
+  if (isFinite(minX) && maxX >= minX) {
+    const tx = (maxX - minX + 1), ty = (maxY - minY + 1), tz = (maxZ - minZ + 1);
+    const tIdx = (x,y,z) => x + tx*(y + ty*z);
+    const out = new Array(tx*ty*tz);
+    for (let z = minZ; z <= maxZ; z++) for (let y = minY; y <= maxY; y++) for (let x = minX; x <= maxX; x++) {
+      out[tIdx(x-minX, y-minY, z-minZ)] = data[idx(x,y,z)];
+    }
+    tData = out; tSize = { x: tx, y: ty, z: tz };
+    const cxShift = ((minX + maxX + 1)/2 - nx/2) * res;
+    const cyShift = ((minY + maxY + 1)/2 - ny/2) * res;
+    const czShift = ((minZ + maxZ + 1)/2 - nz/2) * res;
+    tOrigin = { x: tOrigin.x + cxShift, y: tOrigin.y + cyShift, z: tOrigin.z + czShift };
+  }
   keep.type = 'Carddon'; keep.rotation = { x: 0, y: 0, z: 0 }; delete keep.rotY;
-  keep.size = { x: nx, y: ny, z: nz }; keep.res = res; keep.origin = { x: min.x + nx*res/2, y: min.y + ny*res/2, z: min.z + nz*res/2 };
-  keep.vox = { res, size: { x: nx, y: ny, z: nz }, data, palette: VoxelType, bakedAt: Date.now(), source: keep.id };
+  keep.size = { ...tSize }; keep.res = res; keep.origin = { ...tOrigin };
+  keep.vox = { res, size: { ...tSize }, data: tData, palette: VoxelType, bakedAt: Date.now(), source: keep.id, worldAligned: true };
   keep.voxelized = 1;
   barrow.spaces = spaces.filter(s => !picked.has(s.id) || s.id === keepId);
   vLog('mergeAsync:done', { keepId, size: keep.size, res });
