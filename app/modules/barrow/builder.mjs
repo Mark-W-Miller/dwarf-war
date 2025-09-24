@@ -142,11 +142,13 @@ export function buildSceneFromBarrow(scene, barrow) {
         const sx = res * shrink, sy = res * shrink, sz = res * shrink;
 
         // Base meshes for walls and rock
-        const wallBase = BABYLON.MeshBuilder.CreateBox(`space:${s.id}:vox:wall`, { size: 1 }, scene);
+        const wallBase = BABYLON.MeshBuilder.CreateBox(`space:${s.id}:vox:wall`, { size: 1, updatable: false }, scene);
         wallBase.isPickable = false; // DDA handles picking; keep base offscreen (identity rotation)
         const HIDE_OFF = 100000; // base is offset in local space; instances compensate
         try { wallBase.parent = mesh; wallBase.position.set(HIDE_OFF, HIDE_OFF, HIDE_OFF); wallBase.rotationQuaternion = BABYLON.Quaternion.Identity(); } catch {}
         const wallMat = new BABYLON.StandardMaterial(`space:${s.id}:vox:wall:mat`, scene);
+        // Rotated variant for ±X faces (declared here for outer scope)
+        let wallMatRot = null;
         // Cavern view: opaque textured cubes
         let cavernView = false; try { cavernView = (localStorage.getItem('dw:viewMode') === 'cavern'); } catch {}
         if (cavernView) {
@@ -158,21 +160,40 @@ export function buildSceneFromBarrow(scene, barrow) {
           const brick = '#e2d2bf';
           const brick2 = '#dcc9b2'; // subtle variation
           ctx.fillStyle = mortar; ctx.fillRect(0,0,size,size);
-          const bw = 40, bh = 18, gap = 2; // brick size and mortar gap
+          // Larger bricks: allow scaling via localStorage (dw:ui:brickScale), default 3.0x
+          let bScale = 3.0;
+          try {
+            const sVal = Number(localStorage.getItem('dw:ui:brickScale') || '3.0') || 3.0;
+            bScale = Math.max(0.5, Math.min(6.0, sVal));
+          } catch {}
+          const bwBase = 40, bhBase = 18, gapBase = 2;
+          const bw = Math.max(8, Math.round(bwBase * bScale));
+          const bh = Math.max(8, Math.round(bhBase * bScale));
+          const gap = Math.max(2, Math.round(gapBase * bScale));
+          const bevel = Math.max(2, Math.round(2 * bScale));
           for (let row = 0, y = 0; y < size + bh; row++, y += (bh + gap)) {
             const offset = (row % 2 === 0) ? 0 : Math.floor(bw / 2);
             for (let x = -offset; x < size + bw; x += bw) {
               const bx = x + gap, by = y + gap; const ww = bw - gap*2, hh = bh - gap*2;
               ctx.fillStyle = (Math.random() < 0.5) ? brick : brick2;
               ctx.fillRect(bx, by, ww, hh);
-              // light bevel/shadow
-              ctx.fillStyle = 'rgba(255,255,255,0.06)'; ctx.fillRect(bx, by, ww, 2);
-              ctx.fillStyle = 'rgba(0,0,0,0.06)'; ctx.fillRect(bx, by+hh-2, ww, 2);
+              // light bevel/shadow scaled with brick size
+              ctx.fillStyle = 'rgba(255,255,255,0.06)'; ctx.fillRect(bx, by, ww, bevel);
+              ctx.fillStyle = 'rgba(0,0,0,0.06)'; ctx.fillRect(bx, by+hh-bevel, ww, bevel);
             }
           }
           dt.update(false);
           wallMat.diffuseTexture = dt; wallMat.emissiveColor = new BABYLON.Color3(0.22, 0.22, 0.2);
           wallMat.specularColor = new BABYLON.Color3(0,0,0); wallMat.backFaceCulling = false;
+          // Ensure brick pattern orientation and visibility on both sides
+          try {
+            wallMat.diffuseTexture.wrapU = BABYLON.Texture.WRAP_ADDRESSMODE;
+            wallMat.diffuseTexture.wrapV = BABYLON.Texture.WRAP_ADDRESSMODE;
+            // Z-facing faces rotation (default 0°). If these look 90° off, set dw:ui:brickRotZDeg to 90 or -90.
+            let rotZDeg = 0;
+            try { const v = Number(localStorage.getItem('dw:ui:brickRotZDeg') || '0') || 0; rotZDeg = Math.max(-180, Math.min(180, v)); } catch {}
+            wallMat.diffuseTexture.wAng = (rotZDeg * Math.PI) / 180;
+          } catch {}
           wallMat.alpha = 1.0;
         } else {
           wallMat.diffuseColor = new BABYLON.Color3(0.78, 0.78, 0.80);
@@ -183,7 +204,64 @@ export function buildSceneFromBarrow(scene, barrow) {
             wallMat.alpha = Math.max(0.0, Math.min(1.0, pct / 100));
           } catch { wallMat.alpha = 0.6; }
         }
-        wallBase.material = wallMat;
+        // Per-face materials: rotate ±Z faces (default 90°), leave ±X faces unrotated
+        if (cavernView) {
+          wallMatRot = new BABYLON.StandardMaterial(`space:${s.id}:vox:wall:matRot`, scene);
+          // Create an independent dynamic texture for X faces so rotation does not affect Z faces
+          const sizeX = 256;
+          const dtX = new BABYLON.DynamicTexture(`space:${s.id}:vox:wall:txX`, { width: sizeX, height: sizeX }, scene, false);
+          const ctxX = dtX.getContext(); ctxX.clearRect(0,0,sizeX,sizeX);
+          // Rebuild the same brick pattern
+          try {
+            ctxX.fillStyle = '#efeae2'; ctxX.fillRect(0,0,sizeX,sizeX);
+            const bwBase2 = 40, bhBase2 = 18, gapBase2 = 2;
+            let bScale2 = 3.0; try { const sVal2 = Number(localStorage.getItem('dw:ui:brickScale') || '3.0') || 3.0; bScale2 = Math.max(0.5, Math.min(6.0, sVal2)); } catch {}
+            const bw2 = Math.max(8, Math.round(bwBase2 * bScale2));
+            const bh2 = Math.max(8, Math.round(bhBase2 * bScale2));
+            const gap2 = Math.max(2, Math.round(gapBase2 * bScale2));
+            const bevel2 = Math.max(2, Math.round(2 * bScale2));
+            for (let row = 0, y = 0; y < sizeX + bh2; row++, y += (bh2 + gap2)) {
+              const offset = (row % 2 === 0) ? 0 : Math.floor(bw2 / 2);
+              for (let x = -offset; x < sizeX + bw2; x += bw2) {
+                const bx = x + gap2, by = y + gap2; const ww = bw2 - gap2*2, hh = bh2 - gap2*2;
+                ctxX.fillStyle = (Math.random() < 0.5) ? '#e2d2bf' : '#dcc9b2';
+                ctxX.fillRect(bx, by, ww, hh);
+                ctxX.fillStyle = 'rgba(255,255,255,0.06)'; ctxX.fillRect(bx, by, ww, bevel2);
+                ctxX.fillStyle = 'rgba(0,0,0,0.06)'; ctxX.fillRect(bx, by+hh-bevel2, ww, bevel2);
+              }
+            }
+          } catch {}
+          dtX.update(false);
+          wallMatRot.diffuseTexture = dtX;
+          wallMatRot.emissiveColor = wallMat.emissiveColor.clone();
+          wallMatRot.specularColor = wallMat.specularColor.clone();
+          wallMatRot.backFaceCulling = false; wallMatRot.alpha = 1.0;
+          try {
+            wallMatRot.diffuseTexture.wrapU = BABYLON.Texture.WRAP_ADDRESSMODE;
+            wallMatRot.diffuseTexture.wrapV = BABYLON.Texture.WRAP_ADDRESSMODE;
+            let rotXDeg = 90; try { const v = Number(localStorage.getItem('dw:ui:brickRotXDeg') || '90') || 90; rotXDeg = Math.max(-180, Math.min(180, v)); } catch {}
+            wallMatRot.diffuseTexture.wAng = (rotXDeg * Math.PI) / 180;
+          } catch {}
+
+          const multi = new BABYLON.MultiMaterial(`space:${s.id}:vox:wall:multi`, scene);
+          // Order: 0=+Z,1=-Z,2=+X,3=-X,4=+Y,5=-Y
+          multi.subMaterials.push(wallMat);     // +Z (rotZDeg, default 90)
+          multi.subMaterials.push(wallMat);     // -Z
+          multi.subMaterials.push(wallMatRot);  // +X (rotXDeg, default 0)
+          multi.subMaterials.push(wallMatRot);  // -X
+          multi.subMaterials.push(wallMat);     // +Y
+          multi.subMaterials.push(wallMat);     // -Y
+          wallBase.material = multi;
+          try {
+            wallBase.subMeshes = [];
+            const totalVerts = wallBase.getTotalVertices();
+            const indices = wallBase.getIndices();
+            const idxPerFace = Math.floor(indices.length / 6) || 6;
+            for (let fi = 0; fi < 6; fi++) new BABYLON.SubMesh(fi, 0, totalVerts, fi*idxPerFace, idxPerFace, wallBase);
+          } catch {}
+        } else {
+          wallBase.material = wallMat;
+        }
         built.voxParts.push(wallBase);
 
         const rockBase = BABYLON.MeshBuilder.CreateBox(`space:${s.id}:vox:rock`, { size: 1 }, scene);
