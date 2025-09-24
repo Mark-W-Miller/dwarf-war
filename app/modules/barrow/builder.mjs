@@ -196,16 +196,43 @@ export function buildSceneFromBarrow(scene, barrow) {
           } catch {}
           wallMat.alpha = 1.0;
         } else {
-          wallMat.diffuseColor = new BABYLON.Color3(0.78, 0.78, 0.80);
-          wallMat.emissiveColor = new BABYLON.Color3(0.22, 0.22, 0.24);
-          wallMat.specularColor = new BABYLON.Color3(0,0,0);
+          // WR view: also use textured bricks for consistency; honor WR opacity settings
+          const size = 256;
+          const dt = new BABYLON.DynamicTexture(`space:${s.id}:vox:wall:tx`, { width: size, height: size }, scene, false);
+          const ctx = dt.getContext(); ctx.clearRect(0,0,size,size);
+          const mortar = '#efeae2';
+          const brick = '#e2d2bf';
+          const brick2 = '#dcc9b2';
+          ctx.fillStyle = mortar; ctx.fillRect(0,0,size,size);
+          let bScale = 3.0; try { const sVal = Number(localStorage.getItem('dw:ui:brickScale') || '3.0') || 3.0; bScale = Math.max(0.5, Math.min(6.0, sVal)); } catch {}
+          const bwBase = 40, bhBase = 18, gapBase = 2;
+          const bw = Math.max(8, Math.round(bwBase * bScale));
+          const bh = Math.max(8, Math.round(bhBase * bScale));
+          const gap = Math.max(2, Math.round(gapBase * bScale));
+          const bevel = Math.max(2, Math.round(2 * bScale));
+          for (let row = 0, y = 0; y < size + bh; row++, y += (bh + gap)) {
+            const offset = (row % 2 === 0) ? 0 : Math.floor(bw / 2);
+            for (let x = -offset; x < size + bw; x += bw) {
+              const bx = x + gap, by = y + gap; const ww = bw - gap*2, hh = bh - gap*2;
+              ctx.fillStyle = (Math.random() < 0.5) ? brick : brick2;
+              ctx.fillRect(bx, by, ww, hh);
+              ctx.fillStyle = 'rgba(255,255,255,0.06)'; ctx.fillRect(bx, by, ww, bevel);
+              ctx.fillStyle = 'rgba(0,0,0,0.06)'; ctx.fillRect(bx, by+hh-bevel, ww, bevel);
+            }
+          }
+          dt.update(false);
+          wallMat.diffuseTexture = dt; wallMat.emissiveColor = new BABYLON.Color3(0.18, 0.18, 0.2);
+          wallMat.specularColor = new BABYLON.Color3(0,0,0); wallMat.backFaceCulling = false;
           try {
-            const pct = Math.max(0, Math.min(100, Number(localStorage.getItem('dw:ui:wallOpacity') || '60') || 60));
-            wallMat.alpha = Math.max(0.0, Math.min(1.0, pct / 100));
-          } catch { wallMat.alpha = 0.6; }
+            wallMat.diffuseTexture.wrapU = BABYLON.Texture.WRAP_ADDRESSMODE;
+            wallMat.diffuseTexture.wrapV = BABYLON.Texture.WRAP_ADDRESSMODE;
+            let rotZDeg = 0; try { const v = Number(localStorage.getItem('dw:ui:brickRotZDeg') || '0') || 0; rotZDeg = Math.max(-180, Math.min(180, v)); } catch {}
+            wallMat.diffuseTexture.wAng = (rotZDeg * Math.PI) / 180;
+          } catch {}
+          try { const pct = Math.max(0, Math.min(100, Number(localStorage.getItem('dw:ui:wallOpacity') || '60') || 60)); wallMat.alpha = Math.max(0.0, Math.min(1.0, pct / 100)); } catch { wallMat.alpha = 0.6; }
         }
-        // Per-face materials: rotate ±Z faces (default 90°), leave ±X faces unrotated
-        if (cavernView) {
+        // Per-face materials: rotate ±Z faces (use wallMat), ±X faces use rotated texture (wallMatRot)
+        if (cavernView || !cavernView) {
           wallMatRot = new BABYLON.StandardMaterial(`space:${s.id}:vox:wall:matRot`, scene);
           // Create an independent dynamic texture for X faces so rotation does not affect Z faces
           const sizeX = 256;
@@ -296,6 +323,7 @@ export function buildSceneFromBarrow(scene, barrow) {
           rockMat.diffuseColor = new BABYLON.Color3(0.22, 0.22, 0.24);
           rockMat.emissiveColor = new BABYLON.Color3(0.08, 0.08, 0.10);
           rockMat.specularColor = new BABYLON.Color3(0,0,0);
+          rockMat.backFaceCulling = false; // consistent with cavern for visibility
           try {
             const pctR = Math.max(0, Math.min(100, Number(localStorage.getItem('dw:ui:rockOpacity') || '85') || 85));
             rockMat.alpha = Math.max(0.0, Math.min(1.0, pctR / 100));

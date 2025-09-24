@@ -661,14 +661,19 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
                     camera.alpha = (camera.alpha + delta) % (Math.PI * 2);
                     if (camera.alpha < 0) camera.alpha += Math.PI * 2;
                   }
-                  // Movement
+                  // Movement (Shift+Up/Down = vertical Y move; Up/Down = horizontal forward/back)
                   const moveSign = (ks.up ? 1 : 0) + (ks.down ? -1 : 0);
                   if (moveSign !== 0) {
                     const ball2 = state._scry.ball;
                     const pos = ball2.position.clone();
-                    const fwd = camera.getForwardRay()?.direction.clone() || new BABYLON.Vector3(0,0,1);
-                    fwd.y = 0; try { fwd.normalize(); } catch {}
-                    const dir = fwd.scale(moveSign);
+                    let dir;
+                    if (ks.shift) {
+                      dir = new BABYLON.Vector3(0, moveSign, 0);
+                    } else {
+                      const fwd = camera.getForwardRay()?.direction.clone() || new BABYLON.Vector3(0,0,1);
+                      fwd.y = 0; try { fwd.normalize(); } catch {}
+                      dir = fwd.scale(moveSign);
+                    }
                     const res = s.res || (state?.barrow?.meta?.voxelSize || 1);
                     // Speed multiplier from settings (percent or multiplier)
                     let scryMult = 1.0; try { const raw = Number(localStorage.getItem('dw:ui:scrySpeed') || '100'); if (isFinite(raw) && raw > 0) scryMult = (raw > 5) ? (raw/100) : raw; } catch {}

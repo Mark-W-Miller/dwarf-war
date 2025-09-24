@@ -408,10 +408,20 @@ function applyVoxelOpacity() {
     for (const part of state?.built?.voxParts || []) {
       try {
         const nm = String(part?.name || '');
-        if (part.material) {
-          if (nm.includes(':vox:wall')) part.material.alpha = alphaWall;
-          else if (nm.includes(':vox:rock')) part.material.alpha = alphaRock;
-        }
+        const m = part.material;
+        if (!m) continue;
+        const isWall = nm.includes(':vox:wall');
+        const isRock = nm.includes(':vox:rock');
+        if (!isWall && !isRock) continue;
+        // Handle MultiMaterial (wall) and StandardMaterial
+        const targetAlpha = isWall ? alphaWall : alphaRock;
+        try {
+          if (m.subMaterials && Array.isArray(m.subMaterials)) {
+            for (const sm of m.subMaterials) { try { if (sm) sm.alpha = targetAlpha; } catch {} }
+          } else {
+            m.alpha = targetAlpha;
+          }
+        } catch {}
       } catch {}
     }
   } catch {}
