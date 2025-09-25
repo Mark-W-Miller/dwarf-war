@@ -2811,6 +2811,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       const canvas = engine.getRenderingCanvas();
       try { canvas.addEventListener('contextmenu', (e) => e.preventDefault()); } catch {}
       let _rcPanGuard = null; // { saved: number }
+      let _rcDecision = null; // 'rotate' | 'pan' | null
       function onPointerDownCapture(e){
         try {
           const emulateRC = (e.button === 0 && !!e.ctrlKey && !e.metaKey); // ctrl-left as right-click (mac)
@@ -2820,20 +2821,22 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
           // Cmd+Right → pan; plain Right → rotate
           camera.panningMouseButton = isCmd ? 2 : 1;
           const decision = (camera.panningMouseButton === 2) ? 'pan' : 'rotate';
+          _rcDecision = decision;
           try { Log.log('CAMERA', 'rc:map', { button: e.button, cmd: !!e.metaKey, ctrl: !!e.ctrlKey, alt: !!e.altKey, emulateRC, rcLike, panningMouseButton: camera.panningMouseButton, decision }); } catch {}
           try { inputLog('pointer', 'rc:decision', { combo: comboName(e.button || (emulateRC?0:undefined), modsOf(e)), emulateRC, decision }); } catch {}
-          // Update camera target to selection or last voxel pick so rotation/pan centers on subject
+          // Targeting policy to avoid visible jumps:
+          // - Shift+RC: recenter to last voxel (or selection center) and rotate
+          // - Plain RC: do NOT recenter (rotate around current target)
+          // - Cmd+RC (pan): do NOT recenter (preserve current framing)
           const isShift = !!e.shiftKey;
           let tgtKind = 'none';
-          let tgt = null;
           if (isShift) {
-            tgt = getVoxelPickWorldCenter() || getSelectionCenter();
-            tgtKind = (tgt && getVoxelPickWorldCenter()) ? 'voxel' : (tgt ? 'selection' : 'none');
-          } else {
-            tgt = getSelectionCenter() || getVoxelPickWorldCenter();
-            tgtKind = (tgt && getSelectionCenter()) ? 'selection' : (tgt ? 'voxel' : 'none');
+            const vox = getVoxelPickWorldCenter();
+            const sel = getSelectionCenter();
+            const tgt = vox || sel || null;
+            tgtKind = vox ? 'voxel' : (sel ? 'selection' : 'none');
+            if (tgt) { try { camera.target.copyFrom(tgt); } catch {} }
           }
-          if (tgt) { try { camera.target.copyFrom(tgt); } catch {} }
           try { inputLog('pointer', 'rc:target', { shift: !!e.shiftKey, kind: tgtKind }); } catch {}
 
           // Guard against unintended pan when we intend to rotate: temporarily nerf pan sensitivity
@@ -2851,6 +2854,14 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
           }
         } catch {}
       }
+      function onPointerMoveCapture(e){
+        try {
+          // While rotating, zero any panning inertia so RC cannot pan even on odd devices
+          if (_rcDecision === 'rotate') {
+            try { camera.inertialPanningX = 0; camera.inertialPanningY = 0; } catch {}
+          }
+        } catch {}
+      }
       function onPointerUp(){
         try { camera.panningMouseButton = 1; } catch {}
         // Restore pan sensitivity if we had guarded it
@@ -2858,11 +2869,30 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
           try { camera.panningSensibility = _rcPanGuard.saved; } catch {}
           _rcPanGuard = null;
         }
+        _rcDecision = null;
       }
       try { canvas.addEventListener('pointerdown', onPointerDownCapture, { capture: true }); } catch {}
+      try { canvas.addEventListener('pointermove', onPointerMoveCapture, { capture: true }); } catch {}
       try { window.addEventListener('pointerup', onPointerUp, { capture: true }); } catch {}
     } catch {}
   })();
+
+  // ——————————— Keep orbit center in sync with selection ———————————
+  // When a space is selected, set the camera target to the center of the selection.
+  // If selection becomes empty, do not change the current target so spin center "sticks".
+  try {
+    window.addEventListener('dw:selectionChange', (e) => {
+      try {
+        const sel = (e && e.detail && Array.isArray(e.detail.selection)) ? e.detail.selection : Array.from(state.selection || []);
+        if (!sel || sel.length === 0) return; // keep existing target when deselected
+        const c = getSelectionCenter();
+        if (c && isFinite(c.x) && isFinite(c.y) && isFinite(c.z)) {
+          try { camera.target.copyFrom(c); } catch {}
+          try { Log.log('CAMERA', 'target:set:selection', { selection: sel, center: { x: c.x, y: c.y, z: c.z } }); } catch {}
+        }
+      } catch {}
+    });
+  } catch {}
 
   // Brush-select: while left mouse held after an initial voxel pick, keep adding voxels under the cursor
   scene.onPointerObservable.add((pi) => {
