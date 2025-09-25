@@ -2884,7 +2884,14 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     window.addEventListener('dw:selectionChange', (e) => {
       try {
         const sel = (e && e.detail && Array.isArray(e.detail.selection)) ? e.detail.selection : Array.from(state.selection || []);
-        if (!sel || sel.length === 0) return; // keep existing target when deselected
+        if (!sel || sel.length === 0) {
+          // Empty selection: keep current orbit center and fully clear/disable highlight layer to avoid artifacts
+          try { state.hl?.removeAllMeshes?.(); } catch {}
+          try { state.hl.isEnabled = false; } catch {}
+          return;
+        }
+        // Non-empty selection: enable highlight and set orbit center to selection center
+        try { state.hl.isEnabled = true; } catch {}
         const c = getSelectionCenter();
         if (c && isFinite(c.x) && isFinite(c.y) && isFinite(c.z)) {
           try { camera.target.copyFrom(c); } catch {}
