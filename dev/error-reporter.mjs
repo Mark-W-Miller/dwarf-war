@@ -15,27 +15,87 @@ function append(line) {
   catch (e) { console.error('append failed', e); }
 }
 
+function ensureCors(res) {
+  try {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  } catch {}
+}
+
 const server = http.createServer((req, res) => {
-  if (req.method !== 'POST' || req.url !== '/log') {
-    res.writeHead(404); return res.end('not found');
+  ensureCors(res);
+  const url = new URL(req.url || '/', 'http://localhost');
+  const { pathname, searchParams } = url;
+
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204); return res.end();
   }
-  const chunks = [];
-  req.on('data', (c) => chunks.push(c));
-  req.on('end', () => {
-    const raw = Buffer.concat(chunks).toString('utf8');
-    // Store as-is if JSON parse fails
+
+  if (pathname === '/log' && req.method === 'POST') {
+    const chunks = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => {
+      const raw = Buffer.concat(chunks).toString('utf8');
+      // Store as-is if JSON parse fails
+      try {
+        const obj = JSON.parse(raw);
+        const line = JSON.stringify({ t: Date.now(), ...obj });
+        append(line);
+      } catch {
+        append(JSON.stringify({ t: Date.now(), raw }));
+      }
+      res.writeHead(204); res.end();
+    });
+    return;
+  }
+
+  if (pathname === '/log' && req.method === 'GET') {
     try {
-      const obj = JSON.parse(raw);
-      const line = JSON.stringify({ t: Date.now(), ...obj });
-      append(line);
-    } catch {
-      append(JSON.stringify({ t: Date.now(), raw }));
+      const startParam = searchParams.get('start');
+      const format = (searchParams.get('format') || 'ndjson').toLowerCase();
+      const start = startParam != null ? Math.max(0, Number(startParam) || 0) : 0;
+      let buf = Buffer.alloc(0);
+      let size = 0;
+      try {
+        const stat = fs.statSync(LOG_PATH);
+        size = stat.size;
+        const fd = fs.openSync(LOG_PATH, 'r');
+        try {
+          const length = Math.max(0, size - start);
+          if (length > 0) {
+            buf = Buffer.alloc(length);
+            fs.readSync(fd, buf, 0, length, start);
+          }
+        } finally { fs.closeSync(fd); }
+      } catch {
+        // no file yet → empty
+        size = 0; buf = Buffer.alloc(0);
+      }
+      res.setHeader('X-Log-Size', String(size));
+      res.setHeader('X-Log-Start', String(start));
+      if (format === 'text') {
+        res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+        return res.end(buf);
+      }
+      res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8' });
+      return res.end(buf);
+    } catch (e) {
+      res.writeHead(500); return res.end('error reading log');
     }
-    res.writeHead(204); res.end();
-  });
+  }
+
+  if (pathname === '/log' && req.method === 'DELETE') {
+    try { fs.writeFileSync(LOG_PATH, ''); } catch {}
+    res.writeHead(204); return res.end();
+  }
+
+  res.writeHead(404); return res.end('not found');
 });
 
 server.listen(PORT, () => {
   console.log(`[error-reporter] listening on http://localhost:${PORT}/log, writing to ${LOG_PATH}`);
+  // Truncate the log on startup for a clean session, then append a start marker
+  try { fs.writeFileSync(LOG_PATH, ''); } catch (e) { console.error('truncate failed', e); }
+  try { append(JSON.stringify({ t: Date.now(), type: 'server', event: 'start', pid: process.pid })); } catch {}
 });
-

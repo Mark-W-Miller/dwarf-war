@@ -238,4 +238,30 @@ export function initSettingsTab(camApi, ui = {}) {
     try { localStorage.setItem(DKEY, cb8.checked ? '1' : '0'); } catch {}
     try { Log.log('UI', 'Change setting', { key: 'pickDebug', value: !!cb8.checked }); } catch {}
   });
+
+  // Send Errors to Local Server toggle
+  const rowSE = document.createElement('div'); rowSE.className = 'row';
+  const labelSE = document.createElement('label'); labelSE.style.display = 'flex'; labelSE.style.alignItems = 'center'; labelSE.style.gap = '8px';
+  const cbSE = document.createElement('input'); cbSE.type = 'checkbox'; cbSE.id = 'sendErrors';
+  const textSE = document.createElement('span'); textSE.textContent = 'Send Errors to Local Server';
+  labelSE.appendChild(cbSE); labelSE.appendChild(textSE); rowSE.appendChild(labelSE); pane.appendChild(rowSE);
+  const SEND_KEY = 'dw:dev:sendErrors';
+  try { cbSE.checked = (localStorage.getItem(SEND_KEY) === '1'); } catch { cbSE.checked = false; }
+  cbSE.addEventListener('change', () => {
+    try { localStorage.setItem(SEND_KEY, cbSE.checked ? '1' : '0'); } catch {}
+    try { Log.log('UI', 'Change setting', { key: 'sendErrors', value: !!cbSE.checked }); } catch {}
+  });
+
+  // Forward App Logs to Local Server toggle
+  const rowSL = document.createElement('div'); rowSL.className = 'row';
+  const labelSL = document.createElement('label'); labelSL.style.display = 'flex'; labelSL.style.alignItems = 'center'; labelSL.style.gap = '8px';
+  const cbSL = document.createElement('input'); cbSL.type = 'checkbox'; cbSL.id = 'sendLogs';
+  const textSL = document.createElement('span'); textSL.textContent = 'Send App Logs to Local Server';
+  labelSL.appendChild(cbSL); labelSL.appendChild(textSL); rowSL.appendChild(labelSL); pane.appendChild(rowSL);
+  const SEND_LOGS_KEY = 'dw:dev:sendLogs';
+  try { cbSL.checked = (localStorage.getItem(SEND_LOGS_KEY) === '1'); } catch { cbSL.checked = false; }
+  cbSL.addEventListener('change', () => {
+    try { localStorage.setItem(SEND_LOGS_KEY, cbSL.checked ? '1' : '0'); } catch {}
+    try { Log.log('UI', 'Change setting', { key: 'sendLogs', value: !!cbSL.checked }); } catch {}
+  });
 }

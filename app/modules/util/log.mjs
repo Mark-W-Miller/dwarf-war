@@ -6,6 +6,23 @@ export const Log = (() => {
   const classesAll = new Set(); // persisted across sessions
   const subs = new Set();
 
+  function sendToReceiver(obj) {
+    try {
+      const flag = localStorage.getItem('dw:dev:sendLogs');
+      if (flag !== '1') return;
+    } catch { return; }
+    try {
+      const url = 'http://localhost:6060/log';
+      const data = { app: 'dwarf-war', at: Date.now(), type: 'log', ...obj };
+      if (navigator.sendBeacon) {
+        const blob = new Blob([JSON.stringify(data)], { type: 'text/plain;charset=UTF-8' });
+        navigator.sendBeacon(url, blob);
+        return;
+      }
+      fetch(url, { method: 'POST', body: JSON.stringify(data), keepalive: true, mode: 'no-cors' }).catch(() => {});
+    } catch {}
+  }
+
   // Load persisted classes once
   try {
     const raw = localStorage.getItem('dw:log:classes');
@@ -43,6 +60,8 @@ export const Log = (() => {
       if (!classesAll.has(e.cls)) { classesAll.add(e.cls); persistAll(); }
       // Also forward to console for dev visibility
       try { console.log(`[${e.cls}]`, e.msg, e.data ?? ''); } catch {}
+      // Forward to local receiver when enabled
+      try { sendToReceiver({ time: e.time, cls: e.cls, msg: e.msg, data: e.data }); } catch {}
       notify();
       return e;
     },

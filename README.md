@@ -59,6 +59,12 @@ Logging and Error Reporting
 - In‑app `Log` tab aggregates class‑tagged logs in real time with simple class filters.
 - Optional local receiver: `dev/error-reporter.mjs` listens on `http://localhost:6060/log` and appends lines to `.assistant.log`.
   - Enable sending from the app by setting `localStorage['dw:dev:sendErrors'] = '1'`.
+  - Endpoints (CORS enabled):
+    - `POST /log` — append a JSON object or raw text. Body is stored as NDJSON with a timestamp.
+    - `GET /log?start=0&format=ndjson|text` — read the log. `start` is an optional byte offset (default `0` = from the beginning). Returns NDJSON by default; use `format=text` for plain text.
+      - Response headers: `X-Log-Size` (current file size), `X-Log-Start` (echoed start offset).
+    - `DELETE /log` — truncate the log file.
+  - On server start, a marker line `{ type: 'server', event: 'start' }` is appended so clients can segment sessions.
 
 How to Run
 - Open `app/index.html` in a modern browser. Internet access is required for Babylon.js CDN assets.

@@ -49,6 +49,81 @@
       .db-view details { transition: background 0.6s ease, box-shadow 0.6s ease; }
       .db-view details.flash-highlight { background: #132430 !important; box-shadow: 0 0 0 2px rgba(90,169,230,0.45) inset; }
     </style>
+    <script>
+      // Early dev prelude: enable error forwarding by default on localhost and attach early listeners
+      (function(){
+        try {
+          var hn = location.hostname || '';
+          var isLocal = hn === 'localhost' || hn === '127.0.0.1' || hn.endsWith('.local') || hn === '';
+          if (isLocal) {
+            if (localStorage.getItem('dw:dev:sendErrors') !== '1') {
+              localStorage.setItem('dw:dev:sendErrors', '1');
+            }
+            if (localStorage.getItem('dw:dev:sendLogs') !== '1') {
+              localStorage.setItem('dw:dev:sendLogs', '1');
+            }
+          }
+        } catch {}
+        function send(obj){
+          try {
+            if (localStorage.getItem('dw:dev:sendErrors') !== '1') return;
+            var url = 'http://localhost:6060/log';
+            var data = Object.assign({ app: 'dwarf-war', at: Date.now() }, obj || {});
+            if (navigator.sendBeacon) {
+              // Use text/plain for broad sendBeacon compatibility
+              var blob = new Blob([JSON.stringify(data)], { type: 'text/plain;charset=UTF-8' });
+              navigator.sendBeacon(url, blob);
+            } else {
+              fetch(url, { method: 'POST', body: JSON.stringify(data), keepalive: true, mode: 'no-cors' }).catch(function(){});
+            }
+          } catch {}
+        }
+        try { window.addEventListener('error', function(e){
+          try {
+            send({ type: 'early:error', message: e.message, file: e.filename, line: e.lineno, col: e.colno, stack: (e.error && e.error.stack) ? String(e.error.stack) : undefined });
+          } catch {}
+        }, { capture: true }); } catch {}
+        try { window.addEventListener('unhandledrejection', function(e){
+          try {
+            send({ type: 'early:unhandledrejection', reason: String(e.reason), stack: (e.reason && e.reason.stack) ? String(e.reason.stack) : undefined });
+          } catch {}
+        }); } catch {}
+
+        // Also forward console errors/warnings during dev to avoid misses when errors are caught and logged
+        try {
+          var _origErr = console.error.bind(console);
+          var _origWarn = console.warn.bind(console);
+          var _origLog = console.log.bind(console);
+          var _origInfo = console.info.bind(console);
+          var _origDebug = console.debug ? console.debug.bind(console) : function(){};
+          console.error = function(){
+            try { send({ type: 'console:error', args: Array.from(arguments).map(String) }); } catch {}
+            return _origErr.apply(console, arguments);
+          };
+          console.warn = function(){
+            try { send({ type: 'console:warn', args: Array.from(arguments).map(String) }); } catch {}
+            return _origWarn.apply(console, arguments);
+          };
+          function maybeForward(kind){
+            try { return (localStorage.getItem('dw:dev:sendLogs') === '1'); } catch { return false; }
+          }
+          console.log = function(){
+            try { if (maybeForward('log')) send({ type: 'console:log', args: Array.from(arguments).map(String) }); } catch {}
+            return _origLog.apply(console, arguments);
+          };
+          console.info = function(){
+            try { if (maybeForward('info')) send({ type: 'console:info', args: Array.from(arguments).map(String) }); } catch {}
+            return _origInfo.apply(console, arguments);
+          };
+          if (console.debug) {
+            console.debug = function(){
+              try { if (maybeForward('debug')) send({ type: 'console:debug', args: Array.from(arguments).map(String) }); } catch {}
+              return _origDebug.apply(console, arguments);
+            };
+          }
+        } catch {}
+      })();
+    </script>
     <script src="https://cdn.babylonjs.com/babylon.js"></script>
     <script src="https://cdn.babylonjs.com/materialsLibrary/babylonjs.materials.min.js"></script>
   </head>
