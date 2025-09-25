@@ -13,7 +13,7 @@ export const Log = (() => {
     } catch { return; }
     try {
       const url = 'http://localhost:6060/log';
-      const data = { app: 'dwarf-war', at: Date.now(), type: 'log', ...obj };
+      const data = { type: 'log', ...obj };
       if (navigator.sendBeacon) {
         const blob = new Blob([JSON.stringify(data)], { type: 'text/plain;charset=UTF-8' });
         navigator.sendBeacon(url, blob);

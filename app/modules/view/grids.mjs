@@ -87,9 +87,10 @@ export function initGrids(scene) {
         // Head length proportionate and clamped for visibility
         const headLen = Math.min(Math.max(totalLen * 0.1, 8), Math.max(30, totalLen * 0.3));
         const shaftLen = Math.max(0, totalLen - headLen);
-        // Thickness scales with length but clamped
+        // Thickness scales with length, then reduced to 1/8 for slender axes
         const baseT = Math.min(Math.max(totalLen * 0.02, 0.6), 20);
-        const t = Math.max(0.1, baseT * radiusScale);
+        const tBase = baseT * radiusScale;
+        const t = Math.max(0.05, tBase / 8);
         // Scale
         shaft.scaling.set(t, shaftLen, t);
         tip.scaling.set(t, headLen, t);

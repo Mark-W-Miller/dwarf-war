@@ -64,3 +64,19 @@ These are auto‑set to `'1'` on localhost at page start. Turn off in Settings o
 - Early prelude in `app/index.html` enables forwarding at startup and bridges `console.*`.
 - `sendBeacon` uses `text/plain` for broad compatibility; falls back to `fetch(..., keepalive:true)`.
 - Receiver appends a startup marker so you can segment sessions without clearing the file.
+
+## Assistant Signals (On-Demand Watching)
+
+From the app Settings tab under “Assistant Controls” you can send control signals into the log for the assistant to react to:
+
+- Start Watch — writes `{ type: 'control', event: 'watch:on' }`
+- Stop Watch — writes `{ type: 'control', event: 'watch:off' }`
+- Checkpoint — writes `{ type: 'control', event: 'checkpoint' }`
+
+Use these to tell the assistant when to begin/stop tailing and summarizing your actions. You can also trigger them manually:
+
+```
+curl -X POST http://localhost:6060/log \
+  -H 'Content-Type: application/json' \
+  -d '{"type":"control","event":"watch:on","app":"dwarf-war"}'
+```

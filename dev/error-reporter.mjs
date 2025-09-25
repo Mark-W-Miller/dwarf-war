@@ -40,10 +40,33 @@ const server = http.createServer((req, res) => {
       // Store as-is if JSON parse fails
       try {
         const obj = JSON.parse(raw);
-        const line = JSON.stringify({ t: Date.now(), ...obj });
-        append(line);
+        // Decide session based on raw payload so sanitation doesn't hide intent
+        function isSessionStartRaw(o) {
+          try {
+            return !!(o && (
+              (o.event === 'start') ||
+              (o.event === 'session:start') ||
+              (o.session === 'start')
+            ));
+          } catch { return false; }
+        }
+        // Sanitize: drop t/at/app and type universally
+        function sanitize(o) {
+          try {
+            if (o && typeof o === 'object') {
+              delete o.t; delete o.at; delete o.app; delete o.type;
+            }
+          } catch {}
+          return o;
+        }
+        if (isSessionStartRaw(obj)) {
+          try { fs.writeFileSync(LOG_PATH, ''); } catch {}
+        }
+        const clean = sanitize(obj);
+        append(JSON.stringify(clean));
       } catch {
-        append(JSON.stringify({ t: Date.now(), raw }));
+        // Keep NDJSON form for non-JSON bodies
+        append(JSON.stringify({ raw }));
       }
       res.writeHead(204); res.end();
     });
@@ -52,6 +75,12 @@ const server = http.createServer((req, res) => {
 
   if (pathname === '/log' && req.method === 'GET') {
     try {
+      // Clear request via query: /log?session=start
+      const sess = searchParams.get('session');
+      if (sess && sess.toLowerCase() === 'start') {
+        try { fs.writeFileSync(LOG_PATH, ''); } catch {}
+        res.writeHead(204); return res.end();
+      }
       const startParam = searchParams.get('start');
       const format = (searchParams.get('format') || 'ndjson').toLowerCase();
       const start = startParam != null ? Math.max(0, Number(startParam) || 0) : 0;
@@ -95,7 +124,6 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, () => {
   console.log(`[error-reporter] listening on http://localhost:${PORT}/log, writing to ${LOG_PATH}`);
-  // Truncate the log on startup for a clean session, then append a start marker
+  // Optional: truncate on startup to avoid stale logs (no marker)
   try { fs.writeFileSync(LOG_PATH, ''); } catch (e) { console.error('truncate failed', e); }
-  try { append(JSON.stringify({ t: Date.now(), type: 'server', event: 'start', pid: process.pid })); } catch {}
 });

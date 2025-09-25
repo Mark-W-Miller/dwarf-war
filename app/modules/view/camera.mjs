@@ -11,7 +11,14 @@ export function initCamera(scene, canvas, Log) {
   camera.lowerRadiusLimit = 2; camera.upperRadiusLimit = 5000;
   camera.minZ = 0.1; camera.maxZ = 10000;
   camera.wheelPrecision = 1; // percentage-based zoom
-  camera.panningMouseButton = 2; // right-button pan
+  // Default: middle-button pan so right-click rotates (reversible per-gesture in eventHandler)
+  camera.panningMouseButton = 1;
+  // Ensure RC rotates by default; disable Ctrl-for-pan surprises; restrict rotate buttons to left/right
+  try { if (camera.inputs && camera.inputs.attached && camera.inputs.attached.pointers) {
+    const ptr = camera.inputs.attached.pointers;
+    if (typeof ptr.useCtrlForPanning === 'boolean') ptr.useCtrlForPanning = false;
+    if (Array.isArray(ptr.buttons)) ptr.buttons = [0, 2]; // rotate on left/right; middle reserved for pan
+  } } catch {}
   camera.panningSensibility = 40;
   camera.panningInertia = 0.2;
 

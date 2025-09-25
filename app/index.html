@@ -64,11 +64,16 @@
             }
           }
         } catch {}
+        // Start a new session ASAP and clear server log before anything else
+        try {
+          var urlClear = 'http://localhost:6060/log?session=start';
+          fetch(urlClear, { method: 'GET', keepalive: true, mode: 'no-cors' }).catch(function(){});
+        } catch {}
         function send(obj){
           try {
             if (localStorage.getItem('dw:dev:sendErrors') !== '1') return;
             var url = 'http://localhost:6060/log';
-            var data = Object.assign({ app: 'dwarf-war', at: Date.now() }, obj || {});
+            var data = Object.assign({}, obj || {});
             if (navigator.sendBeacon) {
               // Use text/plain for broad sendBeacon compatibility
               var blob = new Blob([JSON.stringify(data)], { type: 'text/plain;charset=UTF-8' });
@@ -78,6 +83,8 @@
             }
           } catch {}
         }
+        // Also record a session start line (after clear)
+        try { send({ type: 'session', event: 'start' }); } catch {}
         try { window.addEventListener('error', function(e){
           try {
             send({ type: 'early:error', message: e.message, file: e.filename, line: e.lineno, col: e.colno, stack: (e.error && e.error.stack) ? String(e.error.stack) : undefined });

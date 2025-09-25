@@ -264,4 +264,28 @@ export function initSettingsTab(camApi, ui = {}) {
     try { localStorage.setItem(SEND_LOGS_KEY, cbSL.checked ? '1' : '0'); } catch {}
     try { Log.log('UI', 'Change setting', { key: 'sendLogs', value: !!cbSL.checked }); } catch {}
   });
+
+  // Assistant controls: send control signals to the local receiver so the assistant can react
+  const rowAC = document.createElement('div'); rowAC.className = 'row';
+  const labelAC = document.createElement('label'); labelAC.style.display = 'flex'; labelAC.style.alignItems = 'center'; labelAC.style.gap = '8px';
+  labelAC.textContent = 'Assistant Controls:';
+  const btnStart = document.createElement('button'); btnStart.className = 'btn'; btnStart.textContent = 'Start Watch';
+  const btnStop = document.createElement('button'); btnStop.className = 'btn'; btnStop.textContent = 'Stop Watch';
+  const btnMark = document.createElement('button'); btnMark.className = 'btn'; btnMark.textContent = 'Checkpoint';
+  rowAC.appendChild(labelAC); rowAC.appendChild(btnStart); rowAC.appendChild(btnStop); rowAC.appendChild(btnMark); pane.appendChild(rowAC);
+
+  function sendControl(event, note) {
+    try {
+      const url = 'http://localhost:6060/log';
+      const data = { app: 'dwarf-war', at: Date.now(), type: 'control', event, note: note||undefined, source: 'settings' };
+      if (navigator.sendBeacon) {
+        const blob = new Blob([JSON.stringify(data)], { type: 'text/plain;charset=UTF-8' });
+        navigator.sendBeacon(url, blob); return;
+      }
+      fetch(url, { method: 'POST', body: JSON.stringify(data), keepalive: true, mode: 'no-cors' }).catch(() => {});
+    } catch {}
+  }
+  btnStart.addEventListener('click', () => { try { sendControl('watch:on'); Log.log('UI', 'Assistant control', { event: 'watch:on' }); } catch {} });
+  btnStop.addEventListener('click', () => { try { sendControl('watch:off'); Log.log('UI', 'Assistant control', { event: 'watch:off' }); } catch {} });
+  btnMark.addEventListener('click', () => { try { sendControl('checkpoint'); Log.log('UI', 'Assistant control', { event: 'checkpoint' }); } catch {} });
 }

@@ -315,7 +315,7 @@ function sendToAssistant(obj) {
   } catch { return; }
   try {
     const url = 'http://localhost:6060/log';
-    const data = { app: 'dwarf-war', at: Date.now(), ...obj };
+    const data = { ...obj };
     if (navigator.sendBeacon) {
       // Use text/plain for broad sendBeacon compatibility across browsers
       const blob = new Blob([JSON.stringify(data)], { type: 'text/plain;charset=UTF-8' });

@@ -18,6 +18,83 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
   function mLog(ev, data = {}) {
     try { Log.log('MOVE', ev, data); } catch {}
   }
+  // Unified input logging helpers
+  function inputLog(kind, msg, data = {}) { try { Log.log('INPUT', `${kind}:${msg}`, data); } catch {} }
+  function modsOf(ev) {
+    return {
+      cmd: !!(ev && ev.metaKey),
+      ctrl: !!(ev && ev.ctrlKey),
+      shift: !!(ev && ev.shiftKey),
+      alt: !!(ev && ev.altKey)
+    };
+  }
+  function comboName(button, mods) {
+    const parts = [];
+    if (mods?.cmd) parts.push('cmd');
+    if (mods?.ctrl) parts.push('ctrl');
+    if (mods?.shift) parts.push('shift');
+    if (mods?.alt) parts.push('alt');
+    const btn = (button === 2) ? 'RC' : (button === 1) ? 'MC' : 'LC';
+    parts.push(btn);
+    return parts.join('-');
+  }
+
+  // ——————————— Camera target helpers ———————————
+  function getSelectionCenter() {
+    try {
+      const ids = Array.from(state.selection || []);
+      if (!ids.length) return null;
+      const builtSpaces = Array.isArray(state?.built?.spaces) ? state.built.spaces : [];
+      const entries = builtSpaces.filter(x => ids.includes(x.id)); if (!entries.length) return null;
+      let minX = Infinity, minY = Infinity, minZ = Infinity, maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+      for (const e of entries) {
+        try { e.mesh.computeWorldMatrix(true); e.mesh.refreshBoundingInfo(); } catch {}
+        const bb = e.mesh.getBoundingInfo()?.boundingBox; if (!bb) continue;
+        const bmin = bb.minimumWorld, bmax = bb.maximumWorld;
+        minX = Math.min(minX, bmin.x); minY = Math.min(minY, bmin.y); minZ = Math.min(minZ, bmin.z);
+        maxX = Math.max(maxX, bmax.x); maxY = Math.max(maxY, bmax.y); maxZ = Math.max(maxZ, bmax.z);
+      }
+      if (!isFinite(minX)) return null;
+      return new BABYLON.Vector3((minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2);
+    } catch { return null; }
+  }
+  function getVoxelPickWorldCenter() {
+    try {
+      // Prefer the last pick remembered globally
+      let pid = null, px = null, py = null, pz = null;
+      if (state && state.lastVoxPick && state.lastVoxPick.id) {
+        pid = state.lastVoxPick.id; px = state.lastVoxPick.x; py = state.lastVoxPick.y; pz = state.lastVoxPick.z;
+      } else {
+        const picks = Array.isArray(state.voxSel) ? state.voxSel : [];
+        if (!picks.length) return null;
+        const p = picks[picks.length - 1]; pid = p.id; px = p.x; py = p.y; pz = p.z;
+      }
+      const s = (state?.barrow?.spaces || []).find(x => x && x.id === pid);
+      if (!s || !s.vox || !s.vox.size) return null;
+      const vox = s.vox;
+      const nx = Math.max(1, vox.size?.x || 1);
+      const ny = Math.max(1, vox.size?.y || 1);
+      const nz = Math.max(1, vox.size?.z || 1);
+      const res = vox.res || s.res || (state?.barrow?.meta?.voxelSize || 1);
+      const minX = -(nx * res) / 2, minY = -(ny * res) / 2, minZ = -(nz * res) / 2;
+      const lx = minX + (px + 0.5) * res;
+      const ly = minY + (py + 0.5) * res;
+      const lz = minZ + (pz + 0.5) * res;
+      const worldAligned = !!(vox && vox.worldAligned);
+      let v = new BABYLON.Vector3(lx, ly, lz);
+      if (!worldAligned) {
+        const rx = Number(s.rotation?.x ?? 0) || 0;
+        const ry = (s.rotation && typeof s.rotation.y === 'number') ? Number(s.rotation.y) : Number(s.rotY || 0) || 0;
+        const rz = Number(s.rotation?.z ?? 0) || 0;
+        const q = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz);
+        const m = BABYLON.Matrix.Compose(new BABYLON.Vector3(1,1,1), q, BABYLON.Vector3.Zero());
+        v = BABYLON.Vector3.TransformCoordinates(v, m);
+      }
+      const cx = s.origin?.x||0, cy = s.origin?.y||0, cz = s.origin?.z||0;
+      v.x += cx; v.y += cy; v.z += cz;
+      return v;
+    } catch { return null; }
+  }
 
   // ——— Controls and elements ———
   const toggleRunBtn = document.getElementById('toggleRun');
@@ -1258,9 +1335,10 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       const radY = Math.max(halfX, halfZ) * 1.05 * gScale; // ring in XZ plane => rotate around Y
       const radX = Math.max(halfY, halfZ) * 1.05 * gScale; // ring in YZ plane => rotate around X
       const radZ = Math.max(halfX, halfY) * 1.05 * gScale; // ring in XY plane => rotate around Z
-      const thicknessY = Math.max(0.08, radY * 0.085);
-      const thicknessX = Math.max(0.08, radX * 0.085);
-      const thicknessZ = Math.max(0.08, radZ * 0.085);
+      // Slimmer axis rings: thickness = radius / 16 (~6.25%)
+      const thicknessY = Math.max(0.08, radY * 0.0625);
+      const thicknessX = Math.max(0.08, radX * 0.0625);
+      const thicknessZ = Math.max(0.08, radZ * 0.0625);
       // Rebuild if missing or different target
       const id = primary.id;
       if (!rotWidget.meshes.y || rotWidget.group !== isGroup || rotWidget.groupKey !== groupKey || (rotWidget.meshes.y.isDisposed && rotWidget.meshes.y.isDisposed())) {
@@ -2537,6 +2615,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       if (voxBrush.active) {
         voxBrush.active = false; voxBrush.pointerId = null; voxBrush.lastAt = 0;
         try { const canvas = engine.getRenderingCanvas(); camera.inputs?.attached?.pointers?.attachControl(canvas, true); } catch {}
+        try { inputLog('pointer', 'brush:end', {}); } catch {}
         try { setTimeout(() => { try { scene.render(); } catch {} }, 0); } catch {}
       }
       if (rotWidget.dragging) {
@@ -2630,6 +2709,161 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       rotWidget.activeAxis = axis;
     } catch {}
   }
+
+  // Keyboard logging (arrows + modifiers) without changing behavior
+  ;(function setupKeyboardLogging(){
+    try {
+      function keyCombo(e){
+        const mods = modsOf(e);
+        const parts = [];
+        if (mods.cmd) parts.push('cmd');
+        if (mods.ctrl) parts.push('ctrl');
+        if (mods.shift) parts.push('shift');
+        if (mods.alt) parts.push('alt');
+        parts.push(String(e.key||''));
+        return parts.join('-');
+      }
+      function onKeyDown(e){
+        try {
+          if (!e || typeof e.key !== 'string') return;
+          if (e.key.startsWith('Arrow')) {
+            const inScry = !!(state?._scry?.scryMode);
+            const decision = inScry ? 'scry:drive' : 'none';
+            inputLog('keyboard', 'arrow', { combo: keyCombo(e), decision });
+          } else if (e.key === 'Delete' || e.key === 'Backspace') {
+            inputLog('keyboard', 'delete', { combo: keyCombo(e), selection: Array.from(state?.selection||[]) });
+          }
+        } catch {}
+      }
+      window.addEventListener('keydown', onKeyDown, { capture: true });
+    } catch {}
+  })();
+  // Brush-select: while left mouse held after an initial voxel pick, keep adding voxels under the cursor
+  // Pre-pointer capture: start voxel brush before camera processes pointer so the camera doesn't rotate
+  ;(function setupPreVoxelBrushCapture(){
+    try {
+      scene.onPrePointerObservable.add((pi) => {
+        try {
+          if (state.mode !== 'edit') return;
+          if (pi.type !== BABYLON.PointerEventTypes.POINTERDOWN) return;
+          if (_gizmosSuppressed || rotWidget.dragging || moveWidget.dragging) return;
+          const ev = pi.event || window.event;
+          const isLeft = (ev && typeof ev.button === 'number') ? (ev.button === 0) : true;
+          const isCmd = !!(ev && ev.metaKey);
+          const isShift = !!(ev && ev.shiftKey);
+          const isCtrl = !!(ev && ev.ctrlKey);
+          const isAlt = !!(ev && ev.altKey);
+          const _mods = modsOf(ev);
+          inputLog('pointer', 'down-capture', { combo: comboName(ev?.button, _mods), pointerType: ev?.pointerType || 'mouse', x: scene.pointerX, y: scene.pointerY });
+          if (!isLeft) { inputLog('pointer', 'down-capture:skip-nonLeft', { combo: comboName(ev?.button, _mods) }); return; }
+          // Never start brush on modifier-augmented clicks (Cmd/Ctrl/Alt) — let selection handlers run
+          if (isCmd || isCtrl || isAlt) { inputLog('pointer', 'down-capture:skip-modified', { combo: comboName(ev?.button, _mods) }); return; }
+          // Do not start brush if clicking a gizmo
+          try {
+            const onGizmo = (() => {
+              const g1 = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('moveGizmo:'));
+              const g2 = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('rotGizmo:'));
+              return !!(g1?.hit || g2?.hit);
+            })();
+            if (onGizmo) { inputLog('pointer', 'down-capture:skip-gizmo', { combo: comboName(ev?.button, _mods) }); return; }
+          } catch {}
+          // Find nearest voxel hit among all spaces
+          let vBest = null;
+          try {
+            for (const sp of (state?.barrow?.spaces || [])) {
+              if (!sp || !sp.vox || !sp.vox.size) continue;
+              const hit = voxelHitAtPointerForSpace(sp);
+              if (hit && isFinite(hit.t) && (vBest == null || hit.t < vBest.t)) vBest = { ...hit, id: sp.id };
+            }
+          } catch {}
+          if (!vBest) { inputLog('pointer', 'down-capture:no-voxel-hit', { combo: comboName(ev?.button, _mods) }); return; }
+          // Begin brush immediately and block camera rotate before it starts
+          const canvas = engine.getRenderingCanvas();
+          try { camera.inputs?.attached?.pointers?.detachControl(canvas); } catch {}
+          try { const pe = pi.event; if (pe && pe.pointerId != null && canvas.setPointerCapture) canvas.setPointerCapture(pe.pointerId); } catch {}
+          voxBrush.active = true; voxBrush.pointerId = (pi.event && pi.event.pointerId != null) ? pi.event.pointerId : null; voxBrush.lastAt = 0;
+          // Apply voxel selection semantics: shift adds, otherwise replace
+          try {
+            const k = `${vBest.id}:${vBest.ix},${vBest.iy},${vBest.iz}`;
+            state.voxSel = Array.isArray(state.voxSel) ? state.voxSel : [];
+            if (isShift) {
+              if (!state.voxSel.some(p => p && `${p.id}:${p.x},${p.y},${p.z}` === k)) state.voxSel.push({ id: vBest.id, x: vBest.ix, y: vBest.iy, z: vBest.iz, v: vBest.v });
+            } else {
+              state.voxSel = [{ id: vBest.id, x: vBest.ix, y: vBest.iy, z: vBest.iz, v: vBest.v }];
+            }
+            try { rebuildHalos(); } catch {}
+            try { scene.render(); requestAnimationFrame(() => { try { scene.render(); } catch {} }); } catch {}
+          } catch {}
+          inputLog('pointer', 'brush:start', { combo: comboName(ev?.button, _mods), id: vBest.id, x: vBest.ix, y: vBest.iy, z: vBest.iz, add: !!isShift });
+          // Stop downstream processing (camera + other observers)
+          try { const e2 = pi.event; e2?.stopImmediatePropagation?.(); e2?.stopPropagation?.(); e2?.preventDefault?.(); } catch {}
+          try { pi.skipOnPointerObservable = true; } catch {}
+        } catch {}
+      });
+    } catch {}
+  })();
+
+  // ——————————— Camera gesture mapping: Right-click = rotate, Cmd+Right = pan ———————————
+  ;(function setupRightClickMapping(){
+    try {
+      // Default: pan on middle button so right-click rotates
+      camera.panningMouseButton = 1;
+      const canvas = engine.getRenderingCanvas();
+      try { canvas.addEventListener('contextmenu', (e) => e.preventDefault()); } catch {}
+      let _rcPanGuard = null; // { saved: number }
+      function onPointerDownCapture(e){
+        try {
+          const emulateRC = (e.button === 0 && !!e.ctrlKey && !e.metaKey); // ctrl-left as right-click (mac)
+          const rcLike = (e.button === 2) || emulateRC;
+          if (!rcLike) return; // only handle right-click or ctrl-left
+          const isCmd = !!e.metaKey;
+          // Cmd+Right → pan; plain Right → rotate
+          camera.panningMouseButton = isCmd ? 2 : 1;
+          const decision = (camera.panningMouseButton === 2) ? 'pan' : 'rotate';
+          try { Log.log('CAMERA', 'rc:map', { button: e.button, cmd: !!e.metaKey, ctrl: !!e.ctrlKey, alt: !!e.altKey, emulateRC, rcLike, panningMouseButton: camera.panningMouseButton, decision }); } catch {}
+          try { inputLog('pointer', 'rc:decision', { combo: comboName(e.button || (emulateRC?0:undefined), modsOf(e)), emulateRC, decision }); } catch {}
+          // Update camera target to selection or last voxel pick so rotation/pan centers on subject
+          const isShift = !!e.shiftKey;
+          let tgtKind = 'none';
+          let tgt = null;
+          if (isShift) {
+            tgt = getVoxelPickWorldCenter() || getSelectionCenter();
+            tgtKind = (tgt && getVoxelPickWorldCenter()) ? 'voxel' : (tgt ? 'selection' : 'none');
+          } else {
+            tgt = getSelectionCenter() || getVoxelPickWorldCenter();
+            tgtKind = (tgt && getSelectionCenter()) ? 'selection' : (tgt ? 'voxel' : 'none');
+          }
+          if (tgt) { try { camera.target.copyFrom(tgt); } catch {} }
+          try { inputLog('pointer', 'rc:target', { shift: !!e.shiftKey, kind: tgtKind }); } catch {}
+
+          // Guard against unintended pan when we intend to rotate: temporarily nerf pan sensitivity
+          if (decision === 'rotate') {
+            try {
+              _rcPanGuard = { saved: camera.panningSensibility };
+              camera.panningSensibility = 1e9;
+            } catch {}
+          } else {
+            // Explicit pan: ensure guard is cleared and sensitivity restored
+            if (_rcPanGuard && typeof _rcPanGuard.saved === 'number') {
+              try { camera.panningSensibility = _rcPanGuard.saved; } catch {}
+              _rcPanGuard = null;
+            }
+          }
+        } catch {}
+      }
+      function onPointerUp(){
+        try { camera.panningMouseButton = 1; } catch {}
+        // Restore pan sensitivity if we had guarded it
+        if (_rcPanGuard && typeof _rcPanGuard.saved === 'number') {
+          try { camera.panningSensibility = _rcPanGuard.saved; } catch {}
+          _rcPanGuard = null;
+        }
+      }
+      try { canvas.addEventListener('pointerdown', onPointerDownCapture, { capture: true }); } catch {}
+      try { window.addEventListener('pointerup', onPointerUp, { capture: true }); } catch {}
+    } catch {}
+  })();
+
   // Brush-select: while left mouse held after an initial voxel pick, keep adding voxels under the cursor
   scene.onPointerObservable.add((pi) => {
     try {
@@ -2733,6 +2967,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
               if (isLeft) {
                 state.selection.clear();
                 sLog('edit:deselectAll', { via: 'cmd-left-empty' });
+                try { inputLog('pointer', 'select:deselectAll', { combo: comboName(ev?.button, modsOf(ev)), via: 'cmd-left-empty' }); } catch {}
                 try { disposeLiveIntersections(); } catch {}
                 try { disposeMoveWidget(); } catch {}
                 try { disposeRotWidget(); } catch {}
@@ -2746,6 +2981,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
           }
         } catch { return; }
       } else {
+        try { inputLog('pointer', 'noHit:ignore', { combo: comboName(ev?.button, modsOf(ev)) }); } catch {}
         return;
       }
     }
@@ -2817,6 +3053,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
           // Do not alter space selection; just redraw halos to show picks
           rebuildHalos();
           try { scene.render(); requestAnimationFrame(() => { try { scene.render(); } catch {} }); } catch {}
+          try { inputLog('pointer', 'voxel:pick', { combo: comboName(ev?.button, modsOf(ev)), id: vBest.id, x: vBest.ix, y: vBest.iy, z: vBest.iz, add: !!isShift }); } catch {}
         } catch {}
         return; // handled voxel selection
       }
@@ -2848,12 +3085,16 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
         if (isShift) {
           // Shift+Cmd: multi-select (add-only)
           state.selection.add(id);
-          sLog('edit:updateSelection', { selection: Array.from(state.selection), via: 'shift-cmd-left:add', id });
+          const selNow = Array.from(state.selection);
+          sLog('edit:updateSelection', { selection: selNow, via: 'shift-cmd-left:add', id });
+          try { inputLog('pointer', 'select:add', { combo: comboName(ev?.button, modsOf(ev)), id, selection: selNow }); } catch {}
         } else {
           // Cmd only: single-select (clear others)
           state.selection.clear();
           state.selection.add(id);
-          sLog('edit:updateSelection', { selection: Array.from(state.selection), via: 'cmd-left:single', id });
+          const selNow = Array.from(state.selection);
+          sLog('edit:updateSelection', { selection: selNow, via: 'cmd-left:single', id });
+          try { inputLog('pointer', 'select:single', { combo: comboName(ev?.button, modsOf(ev)), id, selection: selNow }); } catch {}
         }
         rebuildHalos();
         try { scene.render(); requestAnimationFrame(() => { try { scene.render(); } catch {} }); } catch {}
