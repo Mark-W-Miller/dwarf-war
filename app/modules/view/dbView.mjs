@@ -53,6 +53,11 @@ export function renderDbView(barrow) {
   // Spaces list with deeper drilldown
   const dSpaces = make('details'); dSpaces.id = 'dbSpaces';
   dSpaces.appendChild(make('summary', { text: `Spaces ${(barrow.spaces||[]).length}` }));
+  // Controls row for DB tab
+  const controls = make('div', { class: 'row' });
+  const closeAllBtn = make('button', { class: 'btn', id: 'dbCloseAll', text: 'Close All' });
+  controls.appendChild(closeAllBtn);
+  dSpaces.appendChild(controls);
   if (!Array.isArray(barrow.spaces) || barrow.spaces.length === 0) {
     dSpaces.appendChild(make('div', { class: 'kv', text: '(none)' }));
   } else {
@@ -61,7 +66,11 @@ export function renderDbView(barrow) {
       if (!s.rotation || typeof s.rotation !== 'object') s.rotation = { x: 0, y: (typeof s.rotY === 'number' ? s.rotY : 0), z: 0 };
       const d = make('details');
       d.dataset.spaceId = s.id || String(idx);
-      d.appendChild(make('summary', { text: `${s.id} — ${s.type}` }));
+      // Build a summary with a clickable name/link that does NOT toggle when clicked
+      const sum = make('summary');
+      const link = document.createElement('a'); link.href = '#'; link.textContent = `${s.id} — ${s.type}`; link.className = 'db-space-link'; link.dataset.spaceId = s.id || String(idx);
+      sum.appendChild(link);
+      d.appendChild(sum);
       d.appendChild(kv('id', s.id, { path: `spaces.${idx}.id`, type: 'text' }));
       d.appendChild(kv('type', s.type, { path: `spaces.${idx}.type`, type: 'text' }));
       d.appendChild(kv('res', s2(s.res), { path: `spaces.${idx}.res`, type: 'number' }));
@@ -97,6 +106,37 @@ export function renderDbView(barrow) {
     });
   }
   root.appendChild(dSpaces);
+  // Selection highlighting for space names
+  function updateSelectionHighlight(ids) {
+    try {
+      const set = new Set(Array.isArray(ids) ? ids.map(String) : []);
+      root.querySelectorAll('a.db-space-link').forEach((a) => {
+        const id = a.dataset.spaceId || '';
+        const on = set.has(id);
+        a.classList.toggle('selected', on);
+        // Inline styles to avoid external CSS dependency
+        if (on) {
+          a.style.fontWeight = '700';
+          a.style.color = '#e9f1f7';
+          a.style.background = '#132430';
+          a.style.borderRadius = '4px';
+          a.style.padding = '2px 6px';
+        } else {
+          a.style.fontWeight = '';
+          a.style.color = '';
+          a.style.background = '';
+          a.style.borderRadius = '';
+          a.style.padding = '';
+        }
+      });
+    } catch {}
+  }
+  try {
+    window.addEventListener('dw:selectionChange', (e) => {
+      const ids = (e && e.detail && Array.isArray(e.detail.selection)) ? e.detail.selection : [];
+      updateSelectionHighlight(ids);
+    });
+  } catch {}
   // Restore top-level Spaces open state
   try { dSpaces.open = !!spacesWasOpen; } catch {}
 
@@ -169,10 +209,22 @@ export function renderDbView(barrow) {
     startEdit(span);
   });
 
-  // Toggle twist-open details (use native <details> behavior) and center on space when clicking within a space block
+  // Toggle twist-open details (native <details> behavior).
+  // Selection: clicking the name link selects (and does not toggle). Clicking elsewhere inside the space block selects and allows default toggling if on summary.
   root.addEventListener('click', (e) => {
     // Ignore clicks on editors/controls
     if (e.target.closest('input,select,textarea,button')) return;
+    // Handle clicks on the space name link: select (with shift) and prevent toggling
+    const nameLink = e.target.closest('a.db-space-link');
+    if (nameLink) {
+      e.preventDefault(); e.stopPropagation();
+      const id = nameLink.dataset.spaceId;
+      if (id) {
+        const shiftKey = !!(e.shiftKey);
+        try { window.dispatchEvent(new CustomEvent('dw:dbRowClick', { detail: { type: 'space', id, shiftKey } })); } catch {}
+      }
+      return;
+    }
     const spaceDetails = e.target.closest('details[data-space-id]');
     const sum = e.target.closest('summary');
     // Let the browser handle <details>/<summary> toggling by default; do not preventDefault here
@@ -183,6 +235,14 @@ export function renderDbView(barrow) {
         try { window.dispatchEvent(new CustomEvent('dw:dbRowClick', { detail: { type: 'space', id, shiftKey } })); } catch {}
       }
     }
+  });
+
+  // Close All button behavior: collapse all details under Spaces (including per-space and subsections)
+  closeAllBtn.addEventListener('click', (e) => {
+    try {
+      // Close per-space details and subsections
+      root.querySelectorAll('#dbSpaces details').forEach((det) => { det.open = false; });
+    } catch {}
   });
 
   // Also support toggling via the native 'toggle' event for <details>

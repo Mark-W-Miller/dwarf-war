@@ -2769,12 +2769,12 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     } catch {}
   })();
   // Brush-select: while left mouse held after an initial voxel pick, keep adding voxels under the cursor
-  // Pre-pointer capture: observe but do NOT consume — let main handler manage brush and double-click
+  // Pre-pointer capture: in Cavern mode, claim LMB early to prevent camera rotation; otherwise just observe
   ;(function setupPreVoxelBrushCapture(){
     try {
       scene.onPrePointerObservable.add((pi) => {
         try {
-          if (state.mode !== 'edit') return;
+          if (state.mode !== 'edit' && state.mode !== 'cavern') return;
           if (pi.type !== BABYLON.PointerEventTypes.POINTERDOWN) return;
           if (_gizmosSuppressed || rotWidget.dragging || moveWidget.dragging) return;
           const ev = pi.event || window.event;
@@ -2785,7 +2785,58 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
           const isAlt = !!(ev && ev.altKey);
           const _mods = modsOf(ev);
           inputLog('pointer', 'down-capture', { combo: comboName(ev?.button, _mods), pointerType: ev?.pointerType || 'mouse', x: scene.pointerX, y: scene.pointerY });
-          // Intentionally do not start brush here; main handler will manage selection, double-click, and brush
+          // In Cavern mode: start brush immediately on plain left click over a voxel to prevent camera rotation
+          if (state.mode === 'cavern') {
+            if (!isLeft) return;
+            if (isCmd || isCtrl || isAlt) return; // respect modifier behaviors
+            // Do not start brush if clicking the scry ball
+            try {
+              const pickScry = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name === 'scryBall');
+              if (pickScry?.hit) return;
+            } catch {}
+            // Do not start brush if clicking a gizmo
+            try {
+              const onGizmo = (() => {
+                const g1 = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('moveGizmo:'));
+                const g2 = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('rotGizmo:'));
+                return !!(g1?.hit || g2?.hit);
+              })();
+              if (onGizmo) return;
+            } catch {}
+            // Find nearest voxel hit among all spaces
+            let vBest = null;
+            try {
+              for (const sp of (state?.barrow?.spaces || [])) {
+                if (!sp || !sp.vox || !sp.vox.size) continue;
+                const hit = voxelHitAtPointerForSpace(sp);
+                if (hit && isFinite(hit.t) && (vBest == null || hit.t < vBest.t)) vBest = { ...hit, id: sp.id };
+              }
+            } catch {}
+            if (!vBest) return;
+            // Begin brush: detach camera pointers and capture pointer, update voxel selection
+            try {
+              const canvas = engine.getRenderingCanvas();
+              camera.inputs?.attached?.pointers?.detachControl(canvas);
+              if (ev && ev.pointerId != null && canvas.setPointerCapture) canvas.setPointerCapture(ev.pointerId);
+            } catch {}
+            voxBrush.active = true; voxBrush.pointerId = ev && ev.pointerId != null ? ev.pointerId : null; voxBrush.lastAt = 0;
+            try {
+              const k = `${vBest.id}:${vBest.ix},${vBest.iy},${vBest.iz}`;
+              state.voxSel = Array.isArray(state.voxSel) ? state.voxSel : [];
+              if (isShift) {
+                if (!state.voxSel.some(p => p && `${p.id}:${p.x},${p.y},${p.z}` === k)) state.voxSel.push({ id: vBest.id, x: vBest.ix, y: vBest.iy, z: vBest.iz, v: vBest.v });
+              } else {
+                state.voxSel = [{ id: vBest.id, x: vBest.ix, y: vBest.iy, z: vBest.iz, v: vBest.v }];
+              }
+              rebuildHalos();
+            } catch {}
+            inputLog('pointer', 'brush:start', { combo: comboName(ev?.button, _mods), id: vBest.id, x: vBest.ix, y: vBest.iy, z: vBest.iz, add: !!isShift });
+            // Stop downstream processing (camera + other observers)
+            try { ev?.stopImmediatePropagation?.(); ev?.stopPropagation?.(); ev?.preventDefault?.(); } catch {}
+            try { pi.skipOnPointerObservable = true; } catch {}
+            return;
+          }
+          // In Edit mode: do not start brush here; main handler will manage selection, double-click, and brush
         } catch {}
       });
     } catch {}
@@ -2865,9 +2916,8 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     } catch {}
   })();
 
-  // ——————————— Keep orbit center in sync with selection ———————————
-  // When a space is selected, set the camera target to the center of the selection.
-  // If selection becomes empty, do not change the current target so spin center "sticks".
+  // ——————————— Selection UI side-effects ———————————
+  // Do not re-center camera on selection; only manage highlighting visibility.
   try {
     window.addEventListener('dw:selectionChange', (e) => {
       try {
@@ -2880,11 +2930,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
         }
         // Non-empty selection: enable highlight and set orbit center to selection center
         try { state.hl.isEnabled = true; } catch {}
-        const c = getSelectionCenter();
-        if (c && isFinite(c.x) && isFinite(c.y) && isFinite(c.z)) {
-          try { camera.target.copyFrom(c); } catch {}
-          try { Log.log('CAMERA', 'target:set:selection', { selection: sel, center: { x: c.x, y: c.y, z: c.z } }); } catch {}
-        }
+        // Intentionally leave camera.target unchanged to avoid re-centering on selection
       } catch {}
     });
   } catch {}
@@ -3242,10 +3288,25 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
   // ——————————— Keyboard: Delete non-voxelized selected spaces ———————————
   window.addEventListener('keydown', (e) => {
     try {
-      // Escape exits Cavern Mode immediately
+      // Escape exits Cavern/Scry immediately; in War Room (edit) it clears selection
       if (e.key === 'Escape') {
         if (state._scry?.scryMode) { e.preventDefault(); e.stopPropagation(); exitScryMode(); return; }
         if (state.mode === 'cavern') { e.preventDefault(); e.stopPropagation(); exitCavernMode(); return; }
+        // In War Room (edit) mode: clear selection
+        if (state.mode === 'edit') {
+          // Ignore when typing in inputs
+          const t = e.target; const tag = (t && t.tagName) ? String(t.tagName).toLowerCase() : '';
+          const isEditable = (tag === 'input') || (tag === 'textarea') || (t && t.isContentEditable) || (tag === 'select');
+          if (!isEditable) {
+            e.preventDefault(); e.stopPropagation();
+            try { state.selection.clear(); } catch {}
+            try { rebuildHalos(); } catch {}
+            try { ensureRotWidget(); ensureMoveWidget(); } catch {}
+            try { window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: [] } })); } catch {}
+            Log.log('UI', 'Clear selection (Esc)', {});
+            return;
+          }
+        }
       }
 
       if (state.mode !== 'edit') return;
@@ -3381,6 +3442,311 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     // Populate the database view now that the container exists
     try { renderDbView(state.barrow); } catch {}
 
+    // ——— Voxel Operations (Edit tab, bottom section) ———
+    (function addVoxelOpsSection(){
+      try {
+        const section = document.createElement('div');
+        section.style.borderTop = '1px solid #1e2a30';
+        section.style.marginTop = '10px';
+        section.style.paddingTop = '8px';
+        const title = document.createElement('h3');
+        title.textContent = 'Voxel Operations (Selection)'; title.style.margin = '6px 0';
+        const row = document.createElement('div'); row.className = 'row';
+        const btnTunnel = document.createElement('button'); btnTunnel.className = 'btn'; btnTunnel.id = 'voxelAddTunnel'; btnTunnel.textContent = 'Add Tunnel Segment';
+        const hint = document.createElement('div'); hint.className = 'hint'; hint.textContent = 'For each space with selected voxels, adds a box-shaped tunnel pointing outward from that space’s center through the voxel selection. Discontinuous voxel groups create multiple tunnel sprouts.';
+        row.appendChild(btnTunnel);
+        // Second row: Set selected voxels to Empty/Rock/Wall
+        const rowSet = document.createElement('div'); rowSet.className = 'row';
+        const btnEmpty = document.createElement('button'); btnEmpty.className = 'btn'; btnEmpty.title = 'Set selected voxels = Empty'; btnEmpty.textContent = 'Empty';
+        const btnRock = document.createElement('button'); btnRock.className = 'btn'; btnRock.title = 'Set selected voxels = Rock'; btnRock.textContent = 'Rock';
+        const btnWall = document.createElement('button'); btnWall.className = 'btn'; btnWall.title = 'Set selected voxels = Wall'; btnWall.textContent = 'Wall';
+        const btnConnect = document.createElement('button'); btnConnect.className = 'btn'; btnConnect.id = 'voxelConnectSpaces'; btnConnect.textContent = 'Connect Spaces'; btnConnect.title = 'Connect two spaces via tunnel segments between their selected voxels';
+        rowSet.appendChild(btnEmpty); rowSet.appendChild(btnRock); rowSet.appendChild(btnWall); rowSet.appendChild(btnConnect);
+        section.appendChild(title); section.appendChild(row); section.appendChild(rowSet); section.appendChild(hint);
+        editPane.appendChild(section);
+
+        function worldPointFromVoxelIndex(s, ix, iy, iz) {
+          try {
+            const res = s.vox?.res || s.res || (state?.barrow?.meta?.voxelSize || 1);
+            const nx = Math.max(1, s.vox?.size?.x || 1);
+            const ny = Math.max(1, s.vox?.size?.y || 1);
+            const nz = Math.max(1, s.vox?.size?.z || 1);
+            const minX = -(nx * res) / 2, minY = -(ny * res) / 2, minZ = -(nz * res) / 2;
+            const lx = minX + (ix + 0.5) * res;
+            const ly = minY + (iy + 0.5) * res;
+            const lz = minZ + (iz + 0.5) * res;
+            const worldAligned = !!(s.vox && s.vox.worldAligned);
+            let v = new BABYLON.Vector3(lx, ly, lz);
+            if (!worldAligned) {
+              const rx = Number(s.rotation?.x || 0) || 0;
+              const ry = (typeof s.rotation?.y === 'number') ? Number(s.rotation.y) : Number(s.rotY || 0) || 0;
+              const rz = Number(s.rotation?.z || 0) || 0;
+              const q = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz);
+              const m = BABYLON.Matrix.Compose(new BABYLON.Vector3(1,1,1), q, BABYLON.Vector3.Zero());
+              v = BABYLON.Vector3.TransformCoordinates(v, m);
+            }
+            const cx = s.origin?.x||0, cy = s.origin?.y||0, cz = s.origin?.z||0;
+            v.x += cx; v.y += cy; v.z += cz;
+            return v;
+          } catch { return null; }
+        }
+
+        function uniqueId(base) {
+          const used = new Set((state?.barrow?.spaces||[]).map(sp => sp?.id).filter(Boolean));
+          let i = 1; let id = `${base}-${i}`;
+          while (used.has(id)) { i++; id = `${base}-${i}`; }
+          return id;
+        }
+
+        // Helper: set selected voxels in-place to a given VoxelType value
+        function applySetSelectedVoxels(value) {
+          try {
+            const picks = Array.isArray(state.voxSel) ? state.voxSel : [];
+            if (!picks.length) { Log.log('UI', 'Voxel set: no picks', {}); return; }
+            const bySpace = new Map();
+            for (const p of picks) { if (p && p.id != null) { if (!bySpace.has(p.id)) bySpace.set(p.id, []); bySpace.get(p.id).push(p); } }
+            const spacesById = new Map((state?.barrow?.spaces||[]).map(s => [s.id, s]));
+            let changed = 0;
+            for (const [sid, arr] of bySpace.entries()) {
+              const s = spacesById.get(sid); if (!s || !s.vox || !s.vox.size || !Array.isArray(s.vox.data)) continue;
+              const nx = Math.max(1, s.vox.size?.x|0), ny = Math.max(1, s.vox.size?.y|0), nz = Math.max(1, s.vox.size?.z|0);
+              const idx = (x,y,z) => x + nx*(y + ny*z);
+              for (const p of arr) {
+                const x = p.x|0, y = p.y|0, z = p.z|0;
+                if (x>=0 && y>=0 && z>=0 && x<nx && y<ny && z<nz) {
+                  const i = idx(x,y,z);
+                  if (s.vox.data[i] !== value) { s.vox.data[i] = value; changed++; }
+                }
+              }
+              try { s.vox.worldAligned = true; } catch {}
+            }
+            if (changed > 0) {
+              try { saveBarrow(state.barrow); snapshot(state.barrow); } catch {}
+              try { renderDbView(state.barrow); } catch {}
+              try { rebuildScene(); } catch {}
+              try { scheduleGridUpdate(); } catch {}
+              try { window.dispatchEvent(new CustomEvent('dw:transform', { detail: { kind: 'voxel-set', value, changed } })); } catch {}
+              Log.log('UI', 'Voxel set: applied', { value, changed });
+              // Keep voxel selection as-is
+              try { rebuildHalos(); } catch {}
+            } else {
+              Log.log('UI', 'Voxel set: no changes', { value });
+            }
+          } catch (e) { logErr('EH:voxelSet', e); }
+        }
+
+        btnEmpty.addEventListener('click', () => applySetSelectedVoxels(VoxelType.Empty));
+        btnRock.addEventListener('click', () => applySetSelectedVoxels(VoxelType.Rock));
+        btnWall.addEventListener('click', () => applySetSelectedVoxels(VoxelType.Wall));
+
+        // Connect two spaces by a polyline path avoiding other spaces (approximate AABB routing)
+        function segAabbIntersect(p0, p1, aabb, expand) {
+          try {
+            const min = { x: aabb.min.x - expand, y: aabb.min.y - expand, z: aabb.min.z - expand };
+            const max = { x: aabb.max.x + expand, y: aabb.max.y + expand, z: aabb.max.z + expand };
+            const dir = { x: p1.x - p0.x, y: p1.y - p0.y, z: p1.z - p0.z };
+            let tmin = 0, tmax = 1;
+            for (const ax of ['x','y','z']) {
+              const d = dir[ax]; const o = p0[ax];
+              if (Math.abs(d) < 1e-12) {
+                if (o < min[ax] || o > max[ax]) return false;
+              } else {
+                const inv = 1 / d;
+                let t1 = (min[ax] - o) * inv; let t2 = (max[ax] - o) * inv;
+                if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; }
+                tmin = Math.max(tmin, t1); tmax = Math.min(tmax, t2);
+                if (tmax < tmin) return false;
+              }
+            }
+            return tmax >= Math.max(0, tmin) && tmin <= 1 && tmax >= 0;
+          } catch { return true; }
+        }
+        function pathAvoidingObstacles(start, end, obstacles, radius, upY) {
+          const orders = [ ['x','y','z'], ['x','z','y'], ['y','x','z'], ['y','z','x'], ['z','x','y'], ['z','y','x'] ];
+          function buildVia(order) {
+            const p1 = new BABYLON.Vector3(start.x, start.y, start.z);
+            const p2 = new BABYLON.Vector3(start.x, start.y, start.z);
+            p1[order[0]] = end[order[0]];
+            p2[order[0]] = end[order[0]]; p2[order[1]] = end[order[1]];
+            return [p1, p2];
+          }
+          function clearPath(points) {
+            for (let i = 0; i < points.length - 1; i++) {
+              const a = points[i], b = points[i+1];
+              for (const ob of obstacles) { if (segAabbIntersect(a, b, ob, radius)) return false; }
+            }
+            return true;
+          }
+          for (const ord of orders) {
+            const [v1, v2] = buildVia(ord);
+            const pts = [start, v1, v2, end];
+            if (clearPath(pts)) return pts;
+          }
+          // Fallback: up-and-over
+          const yHub = isFinite(upY) ? upY : (Math.max(...obstacles.map(o => o.max.y)) + radius * 2 + 2);
+          const viaA = new BABYLON.Vector3(start.x, yHub, start.z);
+          const viaB = new BABYLON.Vector3(end.x, yHub, end.z);
+          const pts2 = [start, viaA, viaB, end];
+          if (clearPath(pts2)) return pts2;
+          return null;
+        }
+        function addTunnelsAlongSegment(p0, p1, opts) {
+          const addedIds = [];
+          try {
+            const dirV = p1.subtract(p0); const dist = dirV.length(); if (!(dist > 1e-6)) return addedIds;
+            const dir = dirV.scale(1 / dist);
+            const baseRes = opts.baseRes;
+            const cs = opts.cs; const Lvox = opts.Lvox;
+            const halfLw = (Lvox * baseRes) / 2;
+            const nSeg = Math.max(1, Math.ceil(dist / (Lvox * baseRes)));
+            const step = dist / nSeg;
+            for (let i = 0; i < nSeg; i++) {
+              const segLen = Math.min(step, dist - i * step);
+              const half = segLen / 2;
+              let center = p0.add(dir.scale(i * step + half));
+              if (opts.isFirst && i === 0) center = p0.add(dir.scale(half - opts.depthInside));
+              if (opts.isLast && i === nSeg - 1) center = p1.subtract(dir.scale(half - opts.depthInside));
+              const yaw = Math.atan2(dir.x, dir.z);
+              const pitch = -Math.asin(Math.max(-1, Math.min(1, dir.y)));
+              const sizeVox = { x: cs, y: cs, z: Math.max(3, Math.round(segLen / baseRes)) };
+              const id = uniqueId('connect-tunnel');
+              const tunnel = { id, type: 'Tunnel', size: sizeVox, origin: { x: center.x, y: center.y, z: center.z }, res: baseRes, rotation: { x: pitch, y: yaw, z: 0 } };
+              state.barrow.spaces.push(tunnel); addedIds.push(id);
+            }
+          } catch {}
+          return addedIds;
+        }
+        btnConnect.addEventListener('click', () => {
+          try {
+            const sel = Array.from(state.selection || []);
+            if (sel.length !== 2) { Log.log('UI', 'Connect: need exactly two selected spaces', { count: sel.length }); return; }
+            const picks = Array.isArray(state.voxSel) ? state.voxSel : [];
+            const bySpace = new Map(); for (const p of picks) { if (p && p.id != null) { if (!bySpace.has(p.id)) bySpace.set(p.id, []); bySpace.get(p.id).push(p); } }
+            if (!bySpace.has(sel[0]) || !bySpace.has(sel[1])) { Log.log('UI', 'Connect: both spaces must have selected voxels', {}); return; }
+            const spacesById = new Map((state?.barrow?.spaces||[]).map(s => [s.id, s]));
+            const sA = spacesById.get(sel[0]); const sB = spacesById.get(sel[1]); if (!sA || !sB) return;
+            // Compute world centroids for both selections
+            const ptsA = bySpace.get(sel[0]).map(p => worldPointFromVoxelIndex(sA, p.x, p.y, p.z)).filter(Boolean);
+            const ptsB = bySpace.get(sel[1]).map(p => worldPointFromVoxelIndex(sB, p.x, p.y, p.z)).filter(Boolean);
+            const centroid = (arr) => { let s = new BABYLON.Vector3(0,0,0); let n = 0; for (const v of arr) { s = s.add(v); n++; } return n? s.scale(1/n) : null; };
+            const start = centroid(ptsA); const end = centroid(ptsB); if (!start || !end) { Log.log('UI', 'Connect: unable to compute centroids', {}); return; }
+            // Obstacles = all other spaces' AABB
+            const obstacles = [];
+            try {
+              for (const sp of (state?.barrow?.spaces||[])) {
+                if (!sp || sp.id === sA.id || sp.id === sB.id) continue;
+                obstacles.push(aabbForSpace(sp));
+              }
+            } catch {}
+            const baseRes = Math.max(sA.res || (state?.barrow?.meta?.voxelSize||1), sB.res || (state?.barrow?.meta?.voxelSize||1));
+            const cs = 6; // consistent with tunnels
+            const maxDim = Math.max((sA.size?.x|0), (sA.size?.y|0), (sA.size?.z|0), (sB.size?.x|0), (sB.size?.y|0), (sB.size?.z|0));
+            const Lvox = Math.max(12, Math.round(maxDim * 0.375));
+            const radius = (cs * baseRes) / 2;
+            const upY = Math.max( (Math.max(start.y, end.y) + radius*2 + 2), Math.max(...obstacles.map(o => o.max.y), 0) + radius*2 + 2 );
+            const path = pathAvoidingObstacles(start, end, obstacles, radius, upY);
+            if (!path) { Log.log('UI', 'Connect: no clear path found', {}); return; }
+            // Place tunnels along each segment
+            const depthInside = Math.max(cs * baseRes * 1.5, (maxDim * baseRes) * 0.20);
+            const addedIds = [];
+            for (let i = 0; i < path.length - 1; i++) {
+              const p0 = path[i]; const p1 = path[i+1];
+              const ids = addTunnelsAlongSegment(p0, p1, { baseRes, cs, Lvox, depthInside, isFirst: i===0, isLast: i===path.length-2 });
+              addedIds.push(...ids);
+            }
+            if (addedIds.length) {
+              saveBarrow(state.barrow); snapshot(state.barrow);
+              renderDbView(state.barrow); rebuildScene(); scheduleGridUpdate();
+              try { window.dispatchEvent(new CustomEvent('dw:transform', { detail: { kind: 'voxel-connect', added: addedIds, path: path.map(p=>({x:p.x,y:p.y,z:p.z})) } })); } catch {}
+              Log.log('UI', 'Connect: added', { added: addedIds.length });
+            } else {
+              Log.log('UI', 'Connect: no segments added', {});
+            }
+          } catch (e) { logErr('EH:voxelConnect', e); }
+        });
+
+        btnTunnel.addEventListener('click', () => {
+          try {
+            const picks = Array.isArray(state.voxSel) ? state.voxSel : [];
+            if (!picks.length) { Log.log('UI', 'Voxel tunnel: no picks', {}); return; }
+            const bySpace = new Map();
+            for (const p of picks) { if (p && p.id != null) { if (!bySpace.has(p.id)) bySpace.set(p.id, []); bySpace.get(p.id).push(p); } }
+            const spacesById = new Map((state?.barrow?.spaces||[]).map(s => [s.id, s]));
+            const added = [];
+            function clusterVoxels(points) {
+              // points: array of {x,y,z}
+              const key = (x,y,z) => `${x},${y},${z}`;
+              const map = new Map();
+              for (const p of points) { if (!p) continue; map.set(key(p.x|0,p.y|0,p.z|0), { x:p.x|0, y:p.y|0, z:p.z|0 }); }
+              const visited = new Set();
+              const comps = [];
+              const neigh = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];
+              for (const [k, start] of map.entries()) {
+                if (visited.has(k)) continue;
+                const comp = [];
+                const q = [start]; visited.add(k);
+                while (q.length) {
+                  const cur = q.shift();
+                  comp.push(cur);
+                  for (const d of neigh) {
+                    const nx = cur.x + d[0], ny = cur.y + d[1], nz = cur.z + d[2];
+                    const nk = key(nx,ny,nz);
+                    if (map.has(nk) && !visited.has(nk)) { visited.add(nk); q.push(map.get(nk)); }
+                  }
+                }
+                comps.push(comp);
+              }
+              return comps;
+            }
+            for (const [sid, arr] of bySpace.entries()) {
+              const s = spacesById.get(sid); if (!s) continue;
+              const res = s.res || (state?.barrow?.meta?.voxelSize || 1);
+              const comps = clusterVoxels(arr);
+              for (const comp of comps) {
+                // Compute voxel centroid in world for this component
+                let sum = new BABYLON.Vector3(0,0,0); let n = 0;
+                for (const p of comp) { const w = worldPointFromVoxelIndex(s, p.x, p.y, p.z); if (w) { sum = sum.add(w); n++; } }
+                if (n === 0) continue;
+                const centroid = sum.scale(1 / n);
+                const center = new BABYLON.Vector3(s.origin?.x||0, s.origin?.y||0, s.origin?.z||0);
+                let dir = centroid.subtract(center); const len = dir.length();
+                if (!(len > 1e-6)) dir = new BABYLON.Vector3(0,0,1); else dir = dir.scale(1/len);
+                // Tunnel dimensions (box): increase size by ~50%
+                // Cross‑section: thicker for visibility; Length: ~3/8 of cavern size
+                const cs = 6;
+                const maxDim = Math.max(1, (s.size?.x|0) || 1, (s.size?.y|0) || 1, (s.size?.z|0) || 1);
+                const L = Math.max(12, Math.round(maxDim * 0.375));
+                const tunnelRes = res; // match base space resolution
+                const sizeVox = { x: cs, y: cs, z: L };
+                // Position: ensure the inner end penetrates well inside the cavern so merges create an opening
+                const halfLen = (L * tunnelRes) / 2;
+                const depthInside = Math.max(cs * tunnelRes * 1.5, (maxDim * tunnelRes) * 0.20); // deeper: >= 1.5*CS or 20% of cavern size
+                const origin = centroid.add(dir.scale(halfLen - depthInside));
+                // Orientation: align local Z with dir (yaw/pitch)
+                const yaw = Math.atan2(dir.x, dir.z);
+                const pitch = -Math.asin(Math.max(-1, Math.min(1, dir.y)));
+                const rot = { x: pitch, y: yaw, z: 0 };
+                const baseId = (s.id || 'space') + '-tunnel';
+                const id = uniqueId(baseId);
+                const tunnel = { id, type: 'Tunnel', size: sizeVox, origin: { x: origin.x, y: origin.y, z: origin.z }, res: tunnelRes, rotation: rot };
+                try { state.barrow.spaces.push(tunnel); added.push(id); } catch {}
+              }
+            }
+            if (added.length) {
+              try { saveBarrow(state.barrow); snapshot(state.barrow); } catch {}
+              try { rebuildScene(); } catch {}
+              try { renderDbView(state.barrow); } catch {}
+              try { scheduleGridUpdate(); } catch {}
+              try { window.dispatchEvent(new CustomEvent('dw:transform', { detail: { kind: 'voxel-add-tunnel', added } })); } catch {}
+              Log.log('UI', 'Voxel tunnel: added', { added });
+            } else {
+              Log.log('UI', 'Voxel tunnel: none added', {});
+            }
+          } catch (e) { logErr('EH:voxelAddTunnel', e); }
+        });
+      } catch (e) { logErr('EH:addVoxelOpsSection', e); }
+    })();
+
     function activate(tabId) {
       try {
         // Toggle all panes generically
@@ -3439,14 +3805,13 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     try { ensureRotWidget(); ensureMoveWidget(); rebuildHalos(); } catch {}
   });
 
-  // ——————————— DB navigation and centering ———————————
-  // Center camera when a DB row (space summary) is clicked
+  // ——————————— DB navigation and selection ———————————
+  // Do not center camera when a DB row (space summary) is clicked; only update selection
   window.addEventListener('dw:dbRowClick', (e) => {
     const { type, id, shiftKey } = e.detail || {};
     if (type !== 'space' || !id) return;
     try {
-      const mesh = (state?.built?.spaces || []).find(x => x.id === id)?.mesh || scene.getMeshByName(`space:${id}`);
-      if (mesh) camApi.centerOnMesh(mesh);
+      // Leave the camera where it is; no centering on DB selection
       // Update selection to the clicked space and refresh halos (support shift to toggle)
       try {
         if (shiftKey) {
