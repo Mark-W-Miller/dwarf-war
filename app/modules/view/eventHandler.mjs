@@ -511,8 +511,17 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
           mode: state.mode,
         };
       } catch {}
-      // Place scry ball at center-most empty voxel (or solid fallback)
-      const pos = findScryWorldPosForSpace(s) || new BABYLON.Vector3(s.origin?.x||0, s.origin?.y||0, s.origin?.z||0);
+      // Place scry ball: prefer saved position for this space, else center-most empty voxel (or solid fallback)
+      let pos = null;
+      try {
+        const key = 'dw:scry:pos:' + s.id;
+        const saved = localStorage.getItem(key);
+        if (saved) {
+          const o = JSON.parse(saved);
+          if (o && isFinite(o.x) && isFinite(o.y) && isFinite(o.z)) pos = new BABYLON.Vector3(o.x, o.y, o.z);
+        }
+      } catch {}
+      if (!pos) pos = findScryWorldPosForSpace(s) || new BABYLON.Vector3(s.origin?.x||0, s.origin?.y||0, s.origin?.z||0);
       const res = s.res || (state?.barrow?.meta?.voxelSize || 1);
       ensureScryBallAt(pos, res * 0.8);
       // Switch materials to cavern style (opaque + textured)
@@ -869,7 +878,19 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
                       if (canOccupy(cand.x, cand.y, cand.z)) { next.copyFrom(cand); }
                       else { blocked = true; break; }
                     }
-                    if (!next.equals(pos)) { ball2.position.copyFrom(next); camera.target.copyFrom(next); }
+                    if (!next.equals(pos)) {
+                      ball2.position.copyFrom(next); camera.target.copyFrom(next);
+                      // Persist per-space scry position (throttled)
+                      try {
+                        const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+                        const lastT = state._scry._lastSaveT || 0;
+                        if (now - lastT > 120) {
+                          state._scry._lastSaveT = now;
+                          const key = 'dw:scry:pos:' + state._scry.spaceId;
+                          localStorage.setItem(key, JSON.stringify({ x: next.x, y: next.y, z: next.z }));
+                        }
+                      } catch {}
+                    }
                     if (blocked) { try { Log.log('COLLIDE', 'scry:block', { from: pos, to: next, vert: isVert }); } catch {} }
                   }
                 }
@@ -955,6 +976,15 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
   function exitScryMode() {
     try {
       if (!state._scry?.scryMode) return;
+      // Persist final scry position for this space
+      try {
+        const id = state._scry.spaceId;
+        const b = state._scry.ball;
+        if (id && b && !b.isDisposed()) {
+          const key = 'dw:scry:pos:' + id;
+          localStorage.setItem(key, JSON.stringify({ x: b.position.x, y: b.position.y, z: b.position.z }));
+        }
+      } catch {}
       state._scry.scryMode = false;
       try { if (state._scry.scryObs) { engine.onBeginFrameObservable.remove(state._scry.scryObs); state._scry.scryObs = null; } } catch {}
       try { if (state._scry.scryKeys) { window.removeEventListener('keydown', state._scry.scryKeys); state._scry.scryKeys = null; } } catch {}
