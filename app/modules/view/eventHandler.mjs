@@ -2533,6 +2533,12 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
   // Global pointerup failsafe (release outside canvas)
   window.addEventListener('pointerup', () => {
     try {
+      // End voxel brush session and restore camera controls
+      if (voxBrush.active) {
+        voxBrush.active = false; voxBrush.pointerId = null; voxBrush.lastAt = 0;
+        try { const canvas = engine.getRenderingCanvas(); camera.inputs?.attached?.pointers?.attachControl(canvas, true); } catch {}
+        try { setTimeout(() => { try { scene.render(); } catch {} }, 0); } catch {}
+      }
       if (rotWidget.dragging) {
         rotWidget.dragging = false; rotWidget.preDrag = false;
         try { const canvas = engine.getRenderingCanvas(); camera.inputs?.attached?.pointers?.attachControl(canvas, true); } catch {}
@@ -2594,6 +2600,9 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
   const DOUBLE_CLICK_MS = Number(localStorage.getItem('dw:ui:doubleClickMs') || '500') || 500;
   let lastPickName = null;
   let lastPickTime = 0;
+  // Voxel brush-drag state (left mouse held while painting voxels)
+  const _VOX_BRUSH_THROTTLE_MS = 16; // ~60 Hz
+  let voxBrush = { active: false, lastAt: 0, pointerId: null };
   function setRingsDim() {
     try {
       const mats = rotWidget?.mats || {};
@@ -2621,6 +2630,36 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       rotWidget.activeAxis = axis;
     } catch {}
   }
+  // Brush-select: while left mouse held after an initial voxel pick, keep adding voxels under the cursor
+  scene.onPointerObservable.add((pi) => {
+    try {
+      if (!voxBrush.active) return;
+      if (pi.type !== BABYLON.PointerEventTypes.POINTERMOVE) return;
+      const now = performance.now ? performance.now() : Date.now();
+      if (now - voxBrush.lastAt < _VOX_BRUSH_THROTTLE_MS) return;
+      voxBrush.lastAt = now;
+      // Find nearest voxel hit among all spaces
+      let vBest = null;
+      try {
+        for (const sp of (state?.barrow?.spaces || [])) {
+          if (!sp || !sp.vox || !sp.vox.size) continue;
+          const hit = voxelHitAtPointerForSpace(sp);
+          if (hit && isFinite(hit.t) && (vBest == null || hit.t < vBest.t)) vBest = { ...hit, id: sp.id };
+        }
+      } catch {}
+      if (!vBest) return;
+      const k = `${vBest.id}:${vBest.ix},${vBest.iy},${vBest.iz}`;
+      state.voxSel = Array.isArray(state.voxSel) ? state.voxSel : [];
+      if (!state.voxSel.some(p => p && `${p.id}:${p.x},${p.y},${p.z}` === k)) {
+        state.voxSel.push({ id: vBest.id, x: vBest.ix, y: vBest.iy, z: vBest.iz, v: vBest.v });
+        // Redraw halos to reflect growing voxel selection
+        try { rebuildHalos(); } catch {}
+      }
+      // Block camera rotation while brushing (already detached on start), also stop further pointer processing
+      try { const ev = pi.event; ev?.stopImmediatePropagation?.(); ev?.stopPropagation?.(); ev?.preventDefault?.(); } catch {}
+      try { pi.skipOnPointerObservable = true; } catch {}
+    } catch {}
+  });
   scene.onPointerObservable.add((pi) => {
     if (_gizmosSuppressed) {
       try { if (rotWidget) { rotWidget.dragging = false; rotWidget.preDrag = false; rotWidget.axis = null; } } catch {}
@@ -2765,6 +2804,16 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
           } else {
             state.voxSel = [{ id: vBest.id, x: vBest.ix, y: vBest.iy, z: vBest.iz, v: vBest.v }];
           }
+          // Begin brush mode: while mouse is down, add voxels under cursor; disable camera rotation during brush
+          try {
+            const canvas = engine.getRenderingCanvas();
+            camera.inputs?.attached?.pointers?.detachControl(canvas);
+            const pe = pi.event; if (pe && pe.pointerId != null && canvas.setPointerCapture) canvas.setPointerCapture(pe.pointerId);
+            voxBrush.active = true; voxBrush.pointerId = pe && pe.pointerId != null ? pe.pointerId : null; voxBrush.lastAt = 0;
+            // Prevent camera from starting a rotate on this gesture
+            try { pe?.stopImmediatePropagation?.(); pe?.stopPropagation?.(); pe?.preventDefault?.(); } catch {}
+            try { pi.skipOnPointerObservable = true; } catch {}
+          } catch {}
           // Do not alter space selection; just redraw halos to show picks
           rebuildHalos();
           try { scene.render(); requestAnimationFrame(() => { try { scene.render(); } catch {} }); } catch {}
