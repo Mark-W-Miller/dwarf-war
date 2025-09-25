@@ -2739,7 +2739,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     } catch {}
   })();
   // Brush-select: while left mouse held after an initial voxel pick, keep adding voxels under the cursor
-  // Pre-pointer capture: start voxel brush before camera processes pointer so the camera doesn't rotate
+  // Pre-pointer capture: observe but do NOT consume — let main handler manage brush and double-click
   ;(function setupPreVoxelBrushCapture(){
     try {
       scene.onPrePointerObservable.add((pi) => {
@@ -2755,49 +2755,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
           const isAlt = !!(ev && ev.altKey);
           const _mods = modsOf(ev);
           inputLog('pointer', 'down-capture', { combo: comboName(ev?.button, _mods), pointerType: ev?.pointerType || 'mouse', x: scene.pointerX, y: scene.pointerY });
-          if (!isLeft) { inputLog('pointer', 'down-capture:skip-nonLeft', { combo: comboName(ev?.button, _mods) }); return; }
-          // Never start brush on modifier-augmented clicks (Cmd/Ctrl/Alt) — let selection handlers run
-          if (isCmd || isCtrl || isAlt) { inputLog('pointer', 'down-capture:skip-modified', { combo: comboName(ev?.button, _mods) }); return; }
-          // Do not start brush if clicking a gizmo
-          try {
-            const onGizmo = (() => {
-              const g1 = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('moveGizmo:'));
-              const g2 = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('rotGizmo:'));
-              return !!(g1?.hit || g2?.hit);
-            })();
-            if (onGizmo) { inputLog('pointer', 'down-capture:skip-gizmo', { combo: comboName(ev?.button, _mods) }); return; }
-          } catch {}
-          // Find nearest voxel hit among all spaces
-          let vBest = null;
-          try {
-            for (const sp of (state?.barrow?.spaces || [])) {
-              if (!sp || !sp.vox || !sp.vox.size) continue;
-              const hit = voxelHitAtPointerForSpace(sp);
-              if (hit && isFinite(hit.t) && (vBest == null || hit.t < vBest.t)) vBest = { ...hit, id: sp.id };
-            }
-          } catch {}
-          if (!vBest) { inputLog('pointer', 'down-capture:no-voxel-hit', { combo: comboName(ev?.button, _mods) }); return; }
-          // Begin brush immediately and block camera rotate before it starts
-          const canvas = engine.getRenderingCanvas();
-          try { camera.inputs?.attached?.pointers?.detachControl(canvas); } catch {}
-          try { const pe = pi.event; if (pe && pe.pointerId != null && canvas.setPointerCapture) canvas.setPointerCapture(pe.pointerId); } catch {}
-          voxBrush.active = true; voxBrush.pointerId = (pi.event && pi.event.pointerId != null) ? pi.event.pointerId : null; voxBrush.lastAt = 0;
-          // Apply voxel selection semantics: shift adds, otherwise replace
-          try {
-            const k = `${vBest.id}:${vBest.ix},${vBest.iy},${vBest.iz}`;
-            state.voxSel = Array.isArray(state.voxSel) ? state.voxSel : [];
-            if (isShift) {
-              if (!state.voxSel.some(p => p && `${p.id}:${p.x},${p.y},${p.z}` === k)) state.voxSel.push({ id: vBest.id, x: vBest.ix, y: vBest.iy, z: vBest.iz, v: vBest.v });
-            } else {
-              state.voxSel = [{ id: vBest.id, x: vBest.ix, y: vBest.iy, z: vBest.iz, v: vBest.v }];
-            }
-            try { rebuildHalos(); } catch {}
-            try { scene.render(); requestAnimationFrame(() => { try { scene.render(); } catch {} }); } catch {}
-          } catch {}
-          inputLog('pointer', 'brush:start', { combo: comboName(ev?.button, _mods), id: vBest.id, x: vBest.ix, y: vBest.iy, z: vBest.iz, add: !!isShift });
-          // Stop downstream processing (camera + other observers)
-          try { const e2 = pi.event; e2?.stopImmediatePropagation?.(); e2?.stopPropagation?.(); e2?.preventDefault?.(); } catch {}
-          try { pi.skipOnPointerObservable = true; } catch {}
+          // Intentionally do not start brush here; main handler will manage selection, double-click, and brush
         } catch {}
       });
     } catch {}
@@ -3056,6 +3014,25 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       } catch {}
     }
     sLog('edit:selectId', { id, name });
+    // Double-click detection before handling plain-left voxel selection
+    {
+      const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+      if (name === lastPickName && (now - lastPickTime) <= DOUBLE_CLICK_MS) {
+        dPick('doubleClick', { name, id });
+        sLog('edit:doubleClick', { name, id });
+        // Double-click enters Cavern Mode for spaces
+        if (name.startsWith('space:')) {
+          try { enterCavernModeForSpace(id); } catch {}
+        } else {
+          try { camApi.centerOnMesh(pick.pickedMesh); } catch (err) { Log.log('ERROR', 'Center on item failed', { error: String(err) }); }
+        }
+        lastPickName = '';
+        lastPickTime = 0;
+        return;
+      }
+      lastPickName = name;
+      lastPickTime = now;
+    }
     // If voxel hit exists on plain left click (no Cmd), handle voxel selection (do not select space)
     if (isLeft && !isCmd) {
       let vBest = null;
@@ -3140,20 +3117,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       }
     } catch {}
 
-    // Handle double-click/tap with adjustable threshold
-    const now = performance.now();
-    if (name === lastPickName && (now - lastPickTime) <= DOUBLE_CLICK_MS) {
-      dPick('doubleClick', { name, id });
-      sLog('edit:doubleClick', { name, id });
-      // Double-click enters Cavern Mode for spaces
-      if (name.startsWith('space:')) {
-        try { enterCavernModeForSpace(id); } catch {}
-      } else {
-        try { camApi.centerOnMesh(pick.pickedMesh); } catch (err) { Log.log('ERROR', 'Center on item failed', { error: String(err) }); }
-      }
-    }
-    lastPickName = name;
-    lastPickTime = now;
+    // (double-click handled above)
 
     // If a voxelized space is selected and clicked, compute the voxel indices at the picked point and emit an event
     try {
