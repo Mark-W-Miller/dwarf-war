@@ -142,7 +142,8 @@ layoutBarrow(state.barrow); // ensure positions from directions
 // Create highlight layer before first halo rebuild so it applies immediately
 state.hl = new BABYLON.HighlightLayer('hl', scene, { blurHorizontalSize: 0.45, blurVerticalSize: 0.45 });
 state.hl.innerGlow = true; state.hl.outerGlow = true;
-try { state.hl.renderingGroupId = 3; } catch {}
+// Keep highlight layer in group 2 to avoid overlay artifacts (black triangle)
+try { state.hl.renderingGroupId = 2; } catch {}
 state.built = buildSceneFromBarrow(scene, state.barrow);
 renderDbView(state.barrow);
 grids.updateUnitGrids(state.barrow?.meta?.voxelSize || 1);

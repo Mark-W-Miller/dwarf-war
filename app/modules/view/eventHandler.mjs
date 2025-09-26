@@ -4,6 +4,7 @@ import { buildSceneFromBarrow, disposeBuilt } from '../barrow/builder.mjs';
 import { VoxelType, decompressVox } from '../voxels/voxelize.mjs';
 import { Log } from '../util/log.mjs';
 import { renderDbView } from './dbView.mjs';
+import { initDbUiHandlers } from './handlers/ui/db.mjs';
 
 // Initialize all UI and scene event handlers that were previously in main.mjs
 export function initEventHandlers({ scene, engine, camApi, camera, state, helpers }) {
@@ -4572,140 +4573,11 @@ function ensureConnectGizmo() {
     try { window.dispatchEvent(new CustomEvent('dw:tabsReady', { detail: {} })); } catch {}
   })();
 
-  // ——————————— DB edit events ———————————
-  window.addEventListener('dw:dbEdit', (e) => {
-    const { path, value, prev } = e.detail || {};
-    try {
-      // Ensure unique space id on rename
-      const m = String(path || '').match(/^spaces\.(\d+)\.id$/);
-      if (m) {
-        const idx = Number(m[1]);
-        const arr = state.barrow.spaces || [];
-        if (arr[idx]) {
-          const desired = String(value || '').trim();
-          if (desired.length >= 1) {
-            const used = new Set(arr.map((s, i) => i === idx ? null : (s?.id || '')).filter(Boolean));
-            let candidate = desired; let n = 1;
-            while (used.has(candidate)) candidate = `${desired}-${++n}`;
-            arr[idx].id = candidate;
-            // Update selection if needed
-            if (prev && state.selection.has(prev)) { state.selection.delete(prev); state.selection.add(candidate); try { rebuildHalos(); } catch (e2) { logErr('EH:rebuildHalos:rename', e2); } }
-          }
-        }
-      }
-    } catch (e) { logErr('EH:dbEdit:rename', e); }
-    try { saveBarrow(state.barrow); snapshot(state.barrow); } catch (e) { logErr('EH:dbEdit:saveSnapshot', e); }
-    try { rebuildScene(); } catch (e) { logErr('EH:dbEdit:rebuildScene', e); }
-    try { renderDbView(state.barrow); } catch (e) { logErr('EH:dbEdit:renderDbView', e); }
-    try { scheduleGridUpdate(); } catch (e) { logErr('EH:dbEdit:scheduleGridUpdate', e); }
-    try { applyViewToggles?.(); } catch (e) { logErr('EH:dbEdit:applyViewToggles', e); }
-    try { updateHud?.(); } catch (e) { logErr('EH:dbEdit:updateHud', e); }
-    try { ensureRotWidget(); ensureMoveWidget(); } catch (e) { logErr('EH:dbEdit:ensureWidgets', e); }
-  });
-
-  // Delete selected spaces (from DB tab button)
-  window.addEventListener('dw:dbDeleteSelected', (e) => {
-    try {
-      const ids = (e && e.detail && Array.isArray(e.detail.ids)) ? e.detail.ids : [];
-      if (!ids.length) return;
-      const before = (state?.barrow?.spaces || []).length;
-      const delSet = new Set(ids.map(String));
-      // Snapshot before deletion to support undo
-      try { snapshot(state.barrow); } catch {}
-      // Remove spaces from model
-      state.barrow.spaces = (state.barrow.spaces || []).filter(s => !delSet.has(String(s?.id)));
-      // Clear selection of deleted ids
-      try { for (const id of ids) state.selection.delete(id); } catch {}
-      // Persist + rebuild
-      try { saveBarrow(state.barrow); snapshot(state.barrow); } catch {}
-      try { disposeBuilt(state.built); } catch {}
-      try { state.built = buildSceneFromBarrow(scene, state.barrow); } catch {}
-      try { renderDbView(state.barrow); } catch {}
-      try { rebuildHalos(); } catch {}
-      try { scheduleGridUpdate(); } catch {}
-      try { ensureRotWidget(); ensureMoveWidget(); } catch {}
-      try { window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: Array.from(state.selection) } })); } catch {}
-      try { updateHud?.(); } catch {}
-      Log.log('UI', 'DB delete selected', { removed: ids, before, after: (state?.barrow?.spaces || []).length });
-    } catch (err) { Log.log('ERROR', 'DB delete selected failed', { error: String(err) }); }
-  });
-
-  // Undo last DB change (primarily deletes)
-  window.addEventListener('dw:dbUndo', () => {
-    try {
-      const restored = undoLast();
-      if (!restored) { Log.log('UI', 'Undo: nothing to undo', {}); return; }
-      state.barrow = restored;
-      // Rebuild scene and DB
-      try { disposeBuilt(state.built); } catch {}
-      try { state.built = buildSceneFromBarrow(scene, state.barrow); } catch {}
-      try { renderDbView(state.barrow); } catch {}
-      try { rebuildHalos(); } catch {}
-      try { scheduleGridUpdate(); } catch {}
-      try { ensureRotWidget(); ensureMoveWidget(); } catch {}
-      try { window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: Array.from(state.selection) } })); } catch {}
-      try { updateHud?.(); } catch {}
-      Log.log('UI', 'Undo: restored previous snapshot', {});
-    } catch (e) { Log.log('ERROR', 'Undo failed', { error: String(e) }); }
-  });
-
   // ——————————— External transforms (buttons/commands) ———————————
   window.addEventListener('dw:transform', (e) => {
     try { ensureRotWidget(); ensureMoveWidget(); rebuildHalos(); } catch {}
   });
 
-  // ——————————— DB navigation and selection ———————————
-  // Do not center camera when a DB row (space summary) is clicked; only update selection
-  window.addEventListener('dw:dbRowClick', (e) => {
-    const { type, id, shiftKey } = e.detail || {};
-    if (type !== 'space' || !id) return;
-    try {
-      // Leave the camera where it is; no centering on DB selection
-      // Update selection to the clicked space and refresh halos (support shift to toggle)
-      try {
-        if (shiftKey) {
-          if (state.selection.has(id)) state.selection.delete(id); else state.selection.add(id);
-        } else {
-          state.selection.clear(); state.selection.add(id);
-        }
-        rebuildHalos(); ensureRotWidget(); ensureMoveWidget();
-        window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: Array.from(state.selection) } }));
-      } catch {}
-      Log.log('UI', 'DB row center', { id });
-    } catch (err) { Log.log('ERROR', 'Center from DB failed', { id, error: String(err) }); }
-  });
-
-  // Open the Database tab and expand to a specific space
-  window.addEventListener('dw:showDbForSpace', (e) => {
-    const { id } = e.detail || {};
-    if (!id) return;
-    try {
-      // Ensure panel is expanded/visible
-      try { applyPanelCollapsed(false); localStorage.setItem(PANEL_STATE_KEY, '0'); } catch {}
-      // Activate DB tab
-      const dbBtn = document.querySelector('.tabs .tab[data-tab="tab-db"]');
-      dbBtn?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-      // Ensure dbView exists
-      const dbView = document.getElementById('dbView'); if (!dbView) return;
-      // Open Spaces section
-      const spaces = dbView.querySelector('#dbSpaces'); if (spaces) spaces.open = true;
-      // Open specific space details and scroll into view
-      let target = null;
-      try { target = dbView.querySelector(`details[data-space-id="${id}"]`); } catch {}
-      if (!target) {
-        target = Array.from(dbView.querySelectorAll('details[data-space-id]')).find(d => (d.dataset.spaceId || '') === String(id));
-      }
-      if (target) {
-        target.open = true;
-        // Open nested transform sections as well
-        try { target.querySelectorAll('details[data-section]').forEach(sec => { sec.open = true; }); } catch {}
-        try { target.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch { target.scrollIntoView(); }
-        // Flash highlight the target for a moment
-        try {
-          target.classList.add('flash-highlight');
-          setTimeout(() => target.classList.remove('flash-highlight'), 1300);
-        } catch {}
-      }
-    } catch (err) { Log.log('ERROR', 'Open DB to space failed', { id, error: String(err) }); }
-  });
+  // ——————————— DB UI handlers moved to handlers/ui/db.mjs ———————————
+  try { initDbUiHandlers({ scene, engine, camApi, camera, state, helpers, gizmo: { ensureRotWidget, ensureMoveWidget } }); } catch (e) { logErr('EH:dbUi:init', e); }
 }
