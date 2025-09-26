@@ -210,7 +210,7 @@ export function renderDbView(barrow) {
   });
 
   // Toggle twist-open details (native <details> behavior).
-  // Selection: clicking the name link selects (and does not toggle). Clicking elsewhere inside the space block selects and allows default toggling if on summary.
+  // Selection: clicking the name link selects (and does not toggle). Clicking summary toggles twist only.
   root.addEventListener('click', (e) => {
     // Ignore clicks on editors/controls
     if (e.target.closest('input,select,textarea,button')) return;
@@ -225,16 +225,8 @@ export function renderDbView(barrow) {
       }
       return;
     }
-    const spaceDetails = e.target.closest('details[data-space-id]');
-    const sum = e.target.closest('summary');
-    // Let the browser handle <details>/<summary> toggling by default; do not preventDefault here
-    if (spaceDetails && root.contains(spaceDetails)) {
-      const id = spaceDetails.dataset.spaceId;
-      if (id) {
-        const shiftKey = !!(e.shiftKey);
-        try { window.dispatchEvent(new CustomEvent('dw:dbRowClick', { detail: { type: 'space', id, shiftKey } })); } catch {}
-      }
-    }
+    // Ignore other clicks inside details for selection to avoid accidental toggles
+    // Let the browser handle <summary> toggling naturally
   });
 
   // Close All button behavior: collapse all details under Spaces (including per-space and subsections)
@@ -243,6 +235,29 @@ export function renderDbView(barrow) {
       // Close per-space details and subsections
       root.querySelectorAll('#dbSpaces details').forEach((det) => { det.open = false; });
     } catch {}
+  });
+
+  // Delete Selected button
+  const delBtn = make('button', { class: 'btn warn', id: 'dbDeleteSelected', text: 'Delete Selected' });
+  const undoBtn = make('button', { class: 'btn', id: 'dbUndoDelete', text: 'Undo Delete' });
+  controls.appendChild(delBtn);
+  controls.appendChild(undoBtn);
+  let lastSelection = [];
+  try { window.addEventListener('dw:selectionChange', (e) => { lastSelection = (e && e.detail && Array.isArray(e.detail.selection)) ? e.detail.selection : []; }); } catch {}
+  delBtn.addEventListener('click', () => {
+    try {
+      const ids = Array.isArray(lastSelection) ? lastSelection : [];
+      if (!ids.length) return;
+      const list = ids.join(', ');
+      const ok = window.confirm(`Delete selected spaces?\n\n${list}`);
+      if (ok) {
+        try { window.dispatchEvent(new CustomEvent('dw:dbDeleteSelected', { detail: { ids } })); } catch {}
+      }
+    } catch {}
+  });
+
+  undoBtn.addEventListener('click', () => {
+    try { window.dispatchEvent(new CustomEvent('dw:dbUndo', { detail: {} })); } catch {}
   });
 
   // Also support toggling via the native 'toggle' event for <details>

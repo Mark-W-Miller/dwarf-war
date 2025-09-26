@@ -1,5 +1,5 @@
 import { makeDefaultBarrow, mergeInstructions, layoutBarrow, worldAabbFromSpace } from '../barrow/schema.mjs';
-import { loadBarrow, saveBarrow, snapshot, cloneForSave, inflateAfterLoad } from '../barrow/store.mjs';
+import { loadBarrow, saveBarrow, snapshot, cloneForSave, inflateAfterLoad, undoLast } from '../barrow/store.mjs';
 import { buildSceneFromBarrow, disposeBuilt } from '../barrow/builder.mjs';
 import { VoxelType, decompressVox } from '../voxels/voxelize.mjs';
 import { Log } from '../util/log.mjs';
@@ -18,6 +18,54 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
   function mLog(ev, data = {}) {
     try { Log.log('MOVE', ev, data); } catch {}
   }
+  // ——————————— Error banner (top of screen) ———————————
+  let _errBar = null; let _errList = null; let _errTimer = null;
+  function ensureErrorBar() {
+    if (_errBar && document.body.contains(_errBar)) return _errBar;
+    const bar = document.createElement('div');
+    bar.id = 'errorBanner';
+    bar.style.position = 'fixed'; bar.style.top = '0'; bar.style.left = '0'; bar.style.right = '0';
+    bar.style.zIndex = '2000'; bar.style.display = 'none';
+    bar.style.background = 'rgba(180,0,0,0.92)'; bar.style.color = '#fff';
+    bar.style.fontFamily = 'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+    bar.style.fontSize = '12px'; bar.style.padding = '6px 10px';
+    bar.style.borderBottom = '1px solid rgba(255,255,255,0.25)';
+    const head = document.createElement('div'); head.style.display = 'flex'; head.style.justifyContent = 'space-between'; head.style.alignItems = 'center';
+    const title = document.createElement('div'); title.textContent = 'Errors'; title.style.fontWeight = '600'; title.style.marginRight = '8px';
+    const btn = document.createElement('button'); btn.textContent = '×'; btn.title = 'Dismiss'; btn.style.background = 'transparent'; btn.style.color = '#fff'; btn.style.border = 'none'; btn.style.cursor = 'pointer'; btn.style.fontSize = '14px'; btn.onclick = () => { bar.style.display = 'none'; };
+    head.appendChild(title); head.appendChild(btn);
+    const list = document.createElement('div'); list.style.marginTop = '4px';
+    bar.appendChild(head); bar.appendChild(list);
+    document.body.appendChild(bar);
+    _errBar = bar; _errList = list;
+    return bar;
+  }
+  function showErrorMessage(cls, msg, data) {
+    try {
+      ensureErrorBar();
+      const line = document.createElement('div');
+      const at = new Date().toLocaleTimeString();
+      let detail = '';
+      try { if (data && (data.error || data.message)) detail = ` — ${String(data.error || data.message)}`; } catch {}
+      line.textContent = `[${at}] ${msg}${detail}`;
+      _errList.appendChild(line);
+      _errBar.style.display = 'block';
+      // Keep last 6 lines
+      try { while (_errList.childElementCount > 6) _errList.removeChild(_errList.firstChild); } catch {}
+      // Auto-hide after 10s if no new errors
+      if (_errTimer) { clearTimeout(_errTimer); _errTimer = null; }
+      _errTimer = setTimeout(() => { try { _errBar.style.display = 'none'; } catch {} }, 10000);
+    } catch {}
+  }
+  try {
+    Log.on(({ entries }) => {
+      const last = entries && entries.length ? entries[entries.length - 1] : null;
+      if (!last) return;
+      if (String(last.cls).toUpperCase() === 'ERROR') {
+        showErrorMessage(last.cls, last.msg, last.data);
+      }
+    });
+  } catch {}
   // Unified input logging helpers
   function inputLog(kind, msg, data = {}) { try { Log.log('INPUT', `${kind}:${msg}`, data); } catch {} }
   function modsOf(ev) {
@@ -2926,10 +2974,15 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
           // Empty selection: keep current orbit center and fully clear/disable highlight layer to avoid artifacts
           try { state.hl?.removeAllMeshes?.(); } catch {}
           try { state.hl.isEnabled = false; } catch {}
+          // Ensure all gizmos are torn down when nothing is selected
+          try { disposeMoveWidget(); } catch {}
+          try { disposeRotWidget(); } catch {}
           return;
         }
         // Non-empty selection: enable highlight and set orbit center to selection center
         try { state.hl.isEnabled = true; } catch {}
+        // Refresh gizmos to match current selection
+        try { ensureRotWidget(); ensureMoveWidget(); } catch {}
         // Intentionally leave camera.target unchanged to avoid re-centering on selection
       } catch {}
     });
@@ -3460,9 +3513,17 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
         const btnEmpty = document.createElement('button'); btnEmpty.className = 'btn'; btnEmpty.title = 'Set selected voxels = Empty'; btnEmpty.textContent = 'Empty';
         const btnRock = document.createElement('button'); btnRock.className = 'btn'; btnRock.title = 'Set selected voxels = Rock'; btnRock.textContent = 'Rock';
         const btnWall = document.createElement('button'); btnWall.className = 'btn'; btnWall.title = 'Set selected voxels = Wall'; btnWall.textContent = 'Wall';
-        const btnConnect = document.createElement('button'); btnConnect.className = 'btn'; btnConnect.id = 'voxelConnectSpaces'; btnConnect.textContent = 'Connect Spaces'; btnConnect.title = 'Connect two spaces via tunnel segments between their selected voxels';
-        rowSet.appendChild(btnEmpty); rowSet.appendChild(btnRock); rowSet.appendChild(btnWall); rowSet.appendChild(btnConnect);
-        section.appendChild(title); section.appendChild(row); section.appendChild(rowSet); section.appendChild(hint);
+        const btnConnect = document.createElement('button'); btnConnect.className = 'btn'; btnConnect.id = 'voxelConnectSpaces'; btnConnect.textContent = 'Connect Spaces'; btnConnect.title = 'Propose a single most‑direct polyline path (≤30° slope) between two spaces’ voxel selections, then edit and finalize.';
+        const btnFinalize = document.createElement('button'); btnFinalize.className = 'btn'; btnFinalize.id = 'voxelConnectFinalize'; btnFinalize.textContent = 'Finalize Path'; btnFinalize.title = 'Commit current proposed path to tunnels'; btnFinalize.style.display = 'none';
+        rowSet.appendChild(btnEmpty); rowSet.appendChild(btnRock); rowSet.appendChild(btnWall); rowSet.appendChild(btnConnect); rowSet.appendChild(btnFinalize);
+        // Min Tunnel Width control
+        const minRow = document.createElement('div'); minRow.className = 'row';
+        const minLabel = document.createElement('label'); minLabel.textContent = 'Min Tunnel Width (vox)'; minLabel.style.display = 'flex'; minLabel.style.alignItems = 'center'; minLabel.style.gap = '6px';
+        const minInput = document.createElement('input'); minInput.type = 'number'; minInput.min = '1'; minInput.step = '1'; minInput.style.width = '72px';
+        try { minInput.value = String(Math.max(1, Number(localStorage.getItem('dw:ops:minTunnelWidth') || '6')||6)); } catch { minInput.value = '6'; }
+        minLabel.appendChild(minInput); minRow.appendChild(minLabel);
+        // Build section
+        section.appendChild(title); section.appendChild(row); section.appendChild(rowSet); section.appendChild(minRow); section.appendChild(hint);
         editPane.appendChild(section);
 
         function worldPointFromVoxelIndex(s, ix, iy, iz) {
@@ -3538,6 +3599,8 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
         btnEmpty.addEventListener('click', () => applySetSelectedVoxels(VoxelType.Empty));
         btnRock.addEventListener('click', () => applySetSelectedVoxels(VoxelType.Rock));
         btnWall.addEventListener('click', () => applySetSelectedVoxels(VoxelType.Wall));
+        // Persist min tunnel width
+        minInput.addEventListener('change', () => { try { const v = Math.max(1, Number(minInput.value)||6); localStorage.setItem('dw:ops:minTunnelWidth', String(v)); } catch {} });
 
         // Connect two spaces by a polyline path avoiding other spaces (approximate AABB routing)
         function segAabbIntersect(p0, p1, aabb, expand) {
@@ -3616,18 +3679,221 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
           } catch {}
           return addedIds;
         }
+        // State for connection proposals
+        // Connection/proposal state and helpers
+        state._connect = state._connect || { props: [], pickObs: null, editObs: null, nodes: [], segs: [], path: null };
+        function clearProposals() {
+          try {
+            for (const p of state._connect.props || []) { try { p.mesh?.dispose?.(); } catch {} }
+            for (const n of state._connect.nodes || []) { try { n.mesh?.dispose?.(); } catch {} }
+            for (const s of state._connect.segs || []) { try { s.mesh?.dispose?.(); } catch {} }
+            try {
+              if (state._connect.gizmo && state._connect.gizmo.root) { try { state._connect.gizmo.root.dispose(); } catch {} }
+              if (state._connect.gizmo && state._connect.gizmo.parts) { for (const m of state._connect.gizmo.parts) { try { m.dispose(); } catch {} } }
+            } catch {}
+          } catch {}
+          state._connect.props = [];
+          state._connect.nodes = [];
+          state._connect.segs = [];
+          state._connect.path = null;
+          if (state._connect.pickObs) { try { scene.onPrePointerObservable.remove(state._connect.pickObs); } catch {}; state._connect.pickObs = null; }
+          if (state._connect.editObs) { try { scene.onPrePointerObservable.remove(state._connect.editObs); } catch {}; state._connect.editObs = null; }
+          try { btnFinalize.style.display = 'none'; } catch {}
+        }
+        function segLen(a, b) { const dx=b.x-a.x, dy=b.y-a.y, dz=b.z-a.z; return Math.sqrt(dx*dx+dy*dy+dz*dz); }
+        function pathLength(path) { let L=0; for (let i=0;i<path.length-1;i++) L+=segLen(path[i], path[i+1]); return L; }
+        function slopeOK(a, b, maxDeg) {
+          const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+          const horiz = Math.sqrt(dx*dx + dz*dz);
+          if (horiz <= 1e-6) return Math.abs(dy) < 1e-6; // vertical not allowed unless ~0
+          const ang = Math.atan2(Math.abs(dy), horiz) * 180/Math.PI;
+          return ang <= maxDeg + 1e-3;
+        }
+        function enforceSlope(path, maxDeg) {
+          const MAX_DEG = maxDeg || 30;
+          if (!path || path.length < 2) return path;
+          // Compute total horizontal (XZ) length and total vertical delta
+          let Lxy = 0; let totalDy = path[path.length-1].y - path[0].y;
+          for (let i=0;i<path.length-1;i++) { const a=path[i], b=path[i+1]; const dx=b.x-a.x, dz=b.z-a.z; Lxy += Math.sqrt(dx*dx+dz*dz); }
+          const tanMax = Math.tan(MAX_DEG * Math.PI/180);
+          const needLxy = Math.abs(totalDy) / Math.max(1e-6, tanMax);
+          // If insufficient XY run, extend with a simple lateral detour around the midpoint
+          let pts = path.map(p => new BABYLON.Vector3(p.x, p.y, p.z));
+          if (Lxy < needLxy - 1e-6) {
+            const a = pts[0], b = pts[pts.length-1];
+            let dir = new BABYLON.Vector3(b.x - a.x, 0, b.z - a.z);
+            if (dir.lengthSquared() < 1e-6) dir = new BABYLON.Vector3(1,0,0); else dir.normalize();
+            const perp = new BABYLON.Vector3(-dir.z, 0, dir.x);
+            const add = (needLxy - Lxy);
+            const off = Math.max(0.1, add / 2);
+            // Build two detour points roughly along the midpoint
+            const mid = new BABYLON.Vector3((a.x+b.x)/2, 0, (a.z+b.z)/2);
+            const via1 = mid.add(perp.scale(off));
+            const via2 = mid.subtract(perp.scale(off));
+            // Insert into a simple 4-point path
+            pts = [ new BABYLON.Vector3(a.x,a.y,a.z), new BABYLON.Vector3(via1.x, a.y, via1.z), new BABYLON.Vector3(via2.x, b.y, via2.z), new BABYLON.Vector3(b.x,b.y,b.z) ];
+            // Recompute Lxy
+            Lxy = 0; for (let i=0;i<pts.length-1;i++){ const p=pts[i], q=pts[i+1]; Lxy += Math.hypot(q.x-p.x, q.z-p.z); }
+          }
+          // Spread Y along XY progress to avoid vertical segments and keep constant slope across segments
+          const out = [ new BABYLON.Vector3(pts[0].x, pts[0].y, pts[0].z) ];
+          let acc = 0;
+          for (let i=0;i<pts.length-1;i++) {
+            const p = pts[i], q = pts[i+1];
+            const dxy = Math.hypot(q.x-p.x, q.z-p.z);
+            acc += dxy;
+            const t = (Lxy > 0) ? (acc / Lxy) : 1;
+            const y = pts[0].y + (totalDy * t);
+            out.push(new BABYLON.Vector3(q.x, y, q.z));
+          }
+          return out;
+        }
+        function buildSinglePath(start, end, obstacles, radius, upY, maxSlopeDeg) {
+          const candidates = [];
+          // Straight if clear
+          const straight = [start, end];
+          const clearStraight = (() => { try { for (const ob of obstacles) { if (segAabbIntersect(start, end, ob, radius)) return false; } return true; } catch { return false; } })();
+          if (clearStraight) candidates.push(straight);
+          // Try routed (existing helper)
+          const routed = pathAvoidingObstacles(start, end, obstacles, radius, upY);
+          if (routed) candidates.push(routed);
+          // Single-axis bends
+          const axes = ['x','y','z'];
+          for (const ax of axes) {
+            const via = new BABYLON.Vector3(start.x, start.y, start.z); via[ax] = end[ax];
+            const p = [start, via, end];
+            let clear = true; for (let i=0;i<p.length-1;i++){ for (const ob of obstacles) { if (segAabbIntersect(p[i], p[i+1], ob, radius)) { clear = false; break; } } if(!clear) break; }
+            if (clear) candidates.push(p);
+          }
+          // If none were clear, attempt a higher up-and-over and, failing that, accept straight as a last-resort
+          if (!candidates.length) {
+            try {
+              const up2 = (isFinite(upY) ? upY : Math.max(...obstacles.map(o => o.max.y), 0)) + radius * 4 + 6;
+              const viaA = new BABYLON.Vector3(start.x, up2, start.z);
+              const viaB = new BABYLON.Vector3(end.x, up2, end.z);
+              const pts2 = [start, viaA, viaB, end];
+              let ok = true; for (let i=0;i<pts2.length-1;i++){ const a=pts2[i], b=pts2[i+1]; for (const ob of obstacles) { if (segAabbIntersect(a,b,ob,radius)) { ok = false; break; } } if(!ok) break; }
+              if (ok) candidates.push(pts2);
+            } catch {}
+          }
+          if (!candidates.length) {
+            // Absolute fallback: straight path (may intersect obstacles); still enforce slope
+            try { Log.log('UI', 'Connect: using fallback path through obstacles', {}); } catch {}
+            candidates.push(straight);
+          }
+          // Enforce slope and choose the shortest adjusted path
+          let best = null; let bestL = Infinity;
+          for (const c of candidates) {
+            const adj = enforceSlope(c, maxSlopeDeg||30);
+            const L = pathLength(adj);
+            if (L < bestL) { best = adj; bestL = L; }
+          }
+          return best;
+        }
+        function createProposalMeshesFromPath(path) {
+          try {
+            // Main polyline
+            const pts = path.map(p => new BABYLON.Vector3(p.x, p.y, p.z));
+            const line = BABYLON.MeshBuilder.CreateLines('connect:proposal', { points: pts, updatable: true }, scene);
+            line.color = new BABYLON.Color3(0.55, 0.9, 1.0);
+            line.isPickable = false; line.renderingGroupId = 3;
+            state._connect.props.push({ name: 'connect:proposal', mesh: line, path });
+            // Per-segment pick tubes for selection
+            for (let i=0;i<pts.length-1;i++) {
+              const segPath = [pts[i], pts[i+1]];
+              const tube = BABYLON.MeshBuilder.CreateTube(`connect:seg:${i}`, { path: segPath, radius: 0.15, tessellation: 12 }, scene);
+              tube.isPickable = true; tube.renderingGroupId = 3;
+              const mat = new BABYLON.StandardMaterial(`connect:seg:${i}:mat`, scene); mat.diffuseColor = new BABYLON.Color3(0.4,0.8,1.0); mat.alpha = 0.7; tube.material = mat;
+              state._connect.segs.push({ i, mesh: tube });
+            }
+            // Elbow nodes (exclude endpoints)
+            for (let i=1;i<pts.length-1;i++) {
+              const s = BABYLON.MeshBuilder.CreateSphere(`connect:node:${i}`, { diameter: 0.6 }, scene);
+              s.position.copyFrom(pts[i]); s.isPickable = true; s.renderingGroupId = 3;
+              const mat = new BABYLON.StandardMaterial(`connect:node:${i}:mat`, scene);
+              mat.emissiveColor = new BABYLON.Color3(0.6,0.9,1.0); // base: light blue
+              mat.diffuseColor = new BABYLON.Color3(0.15,0.25,0.35);
+              mat.specularColor = new BABYLON.Color3(0,0,0);
+              s.material = mat;
+              state._connect.nodes.push({ i, mesh: s });
+            }
+            btnFinalize.style.display = 'inline-block';
+          } catch {}
+        }
+        function updateProposalMeshes() {
+          try {
+            const path = state._connect.path || [];
+            const pts = path.map(p => new BABYLON.Vector3(p.x, p.y, p.z));
+            // Update main line by recreation (simple and safe)
+            for (const p of state._connect.props) { try { p.mesh?.dispose?.(); } catch {} }
+            state._connect.props = [];
+            const line = BABYLON.MeshBuilder.CreateLines('connect:proposal', { points: pts, updatable: false }, scene);
+            line.color = new BABYLON.Color3(0.55, 0.9, 1.0);
+            line.isPickable = false; line.renderingGroupId = 3;
+            state._connect.props.push({ name: 'connect:proposal', mesh: line, path });
+            // Update segments
+            for (const s of state._connect.segs) { try { s.mesh?.dispose?.(); } catch {} }
+            state._connect.segs = [];
+            for (let i=0;i<pts.length-1;i++) {
+              const tube = BABYLON.MeshBuilder.CreateTube(`connect:seg:${i}`, { path: [pts[i], pts[i+1]], radius: 0.15, tessellation: 12 }, scene);
+              tube.isPickable = true; tube.renderingGroupId = 3;
+              const mat = new BABYLON.StandardMaterial(`connect:seg:${i}:mat`, scene); mat.diffuseColor = new BABYLON.Color3(0.4,0.8,1.0); mat.alpha = 0.7; tube.material = mat;
+              state._connect.segs.push({ i, mesh: tube });
+            }
+            // Update nodes (rebuild for simplicity)
+            for (const n of state._connect.nodes) { try { n.mesh?.dispose?.(); } catch {} }
+            state._connect.nodes = [];
+            for (let i=1;i<pts.length-1;i++) {
+              const s = BABYLON.MeshBuilder.CreateSphere(`connect:node:${i}`, { diameter: 0.6 }, scene);
+              s.position.copyFrom(pts[i]); s.isPickable = true; s.renderingGroupId = 3;
+              const mat = new BABYLON.StandardMaterial(`connect:node:${i}:mat`, scene);
+              mat.emissiveColor = new BABYLON.Color3(0.6,0.9,1.0);
+              mat.diffuseColor = new BABYLON.Color3(0.15,0.25,0.35);
+              mat.specularColor = new BABYLON.Color3(0,0,0);
+              s.material = mat;
+              state._connect.nodes.push({ i, mesh: s });
+            }
+          } catch {}
+        }
+        // ESC to cancel proposed path
+        window.addEventListener('keydown', (ev) => {
+          if (ev.key === 'Escape') {
+            if (state?._connect?.path) {
+              clearProposals();
+              Log.log('UI', 'Connect: canceled proposal (Esc)', {});
+              ev.preventDefault(); ev.stopPropagation();
+            }
+          }
+        });
+
         btnConnect.addEventListener('click', () => {
           try {
             const sel = Array.from(state.selection || []);
-            if (sel.length !== 2) { Log.log('UI', 'Connect: need exactly two selected spaces', { count: sel.length }); return; }
             const picks = Array.isArray(state.voxSel) ? state.voxSel : [];
             const bySpace = new Map(); for (const p of picks) { if (p && p.id != null) { if (!bySpace.has(p.id)) bySpace.set(p.id, []); bySpace.get(p.id).push(p); } }
-            if (!bySpace.has(sel[0]) || !bySpace.has(sel[1])) { Log.log('UI', 'Connect: both spaces must have selected voxels', {}); return; }
+            // Decide which two spaces to connect:
+            // 1) Prefer exactly-two distinct spaces from voxel picks (no need to be selected)
+            // 2) Else, if exactly two spaces are selected and both have picks, use those
+            // 3) Otherwise, log a helpful message and return
+            let aId = null, bId = null;
+            const distinct = Array.from(bySpace.keys());
+            if (distinct.length === 2) {
+              aId = distinct[0]; bId = distinct[1];
+              try { Log.log('UI', 'Connect: using voxel picks (no selection needed)', { aId, bId }); } catch {}
+            } else if (sel.length === 2 && bySpace.has(sel[0]) && bySpace.has(sel[1])) {
+              aId = sel[0]; bId = sel[1];
+              try { Log.log('UI', 'Connect: using selected spaces with voxel picks', { aId, bId }); } catch {}
+            } else {
+              if (distinct.length < 2) { Log.log('UI', 'Connect: need voxels in two spaces', { uniqueSpaces: distinct.length }); }
+              else if (distinct.length > 2) { Log.log('UI', 'Connect: voxels span more than two spaces', { uniqueSpaces: distinct.length, ids: distinct.slice(0,6) }); }
+              else { Log.log('UI', 'Connect: unable to determine two spaces', { selCount: sel.length, uniqueSpaces: distinct.length }); }
+              return;
+            }
             const spacesById = new Map((state?.barrow?.spaces||[]).map(s => [s.id, s]));
-            const sA = spacesById.get(sel[0]); const sB = spacesById.get(sel[1]); if (!sA || !sB) return;
+            const sA = spacesById.get(aId); const sB = spacesById.get(bId); if (!sA || !sB) return;
             // Compute world centroids for both selections
-            const ptsA = bySpace.get(sel[0]).map(p => worldPointFromVoxelIndex(sA, p.x, p.y, p.z)).filter(Boolean);
-            const ptsB = bySpace.get(sel[1]).map(p => worldPointFromVoxelIndex(sB, p.x, p.y, p.z)).filter(Boolean);
+            const ptsA = (bySpace.get(aId) || []).map(p => worldPointFromVoxelIndex(sA, p.x, p.y, p.z)).filter(Boolean);
+            const ptsB = (bySpace.get(bId) || []).map(p => worldPointFromVoxelIndex(sB, p.x, p.y, p.z)).filter(Boolean);
             const centroid = (arr) => { let s = new BABYLON.Vector3(0,0,0); let n = 0; for (const v of arr) { s = s.add(v); n++; } return n? s.scale(1/n) : null; };
             const start = centroid(ptsA); const end = centroid(ptsB); if (!start || !end) { Log.log('UI', 'Connect: unable to compute centroids', {}); return; }
             // Obstacles = all other spaces' AABB
@@ -3639,29 +3905,381 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
               }
             } catch {}
             const baseRes = Math.max(sA.res || (state?.barrow?.meta?.voxelSize||1), sB.res || (state?.barrow?.meta?.voxelSize||1));
-            const cs = 6; // consistent with tunnels
+            let cs = 6; try { cs = Math.max(6, Number(localStorage.getItem('dw:ops:minTunnelWidth')||'6')||6); } catch {}
             const maxDim = Math.max((sA.size?.x|0), (sA.size?.y|0), (sA.size?.z|0), (sB.size?.x|0), (sB.size?.y|0), (sB.size?.z|0));
             const Lvox = Math.max(12, Math.round(maxDim * 0.375));
             const radius = (cs * baseRes) / 2;
             const upY = Math.max( (Math.max(start.y, end.y) + radius*2 + 2), Math.max(...obstacles.map(o => o.max.y), 0) + radius*2 + 2 );
-            const path = pathAvoidingObstacles(start, end, obstacles, radius, upY);
-            if (!path) { Log.log('UI', 'Connect: no clear path found', {}); return; }
-            // Place tunnels along each segment
-            const depthInside = Math.max(cs * baseRes * 1.5, (maxDim * baseRes) * 0.20);
-            const addedIds = [];
-            for (let i = 0; i < path.length - 1; i++) {
-              const p0 = path[i]; const p1 = path[i+1];
-              const ids = addTunnelsAlongSegment(p0, p1, { baseRes, cs, Lvox, depthInside, isFirst: i===0, isLast: i===path.length-2 });
-              addedIds.push(...ids);
+            clearProposals();
+            // Compute one most-direct path with slope <= 30 deg
+            const best = buildSinglePath(start, end, obstacles, radius, upY, 30);
+            if (!best || best.length < 2) { Log.log('UI', 'Connect: no path found', {}); return; }
+            state._connect.path = best;
+            createProposalMeshesFromPath(best);
+            // Deselect spaces now that proposal line exists
+            try { state.selection.clear(); rebuildHalos(); window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: [] } })); } catch {}
+            Log.log('UI', 'Connect: proposal ready (edit elbows or segments, then Finalize)', {});
+            // Enable editing: pick nodes or segments (shift to multi-select). Drag moves selection on XZ plane.
+            if (state._connect.editObs) { try { scene.onPrePointerObservable.remove(state._connect.editObs); } catch {} }
+            let drag = { active: false, ids: [], type: 'node', startPt: null, basePts: null, planeY: 0 };
+            function idFromMesh(m) {
+              const nm = String(m?.name||'');
+              if (nm.startsWith('connect:node:')) return nm;
+              if (nm.startsWith('connect:seg:')) return nm;
+              return null;
             }
-            if (addedIds.length) {
-              saveBarrow(state.barrow); snapshot(state.barrow);
-              renderDbView(state.barrow); rebuildScene(); scheduleGridUpdate();
-              try { window.dispatchEvent(new CustomEvent('dw:transform', { detail: { kind: 'voxel-connect', added: addedIds, path: path.map(p=>({x:p.x,y:p.y,z:p.z})) } })); } catch {}
-              Log.log('UI', 'Connect: added', { added: addedIds.length });
-            } else {
-              Log.log('UI', 'Connect: no segments added', {});
+            state._connect.sel = new Set();
+
+            function applySelectionVisual() {
+              try {
+                // Reset segs to cyan-ish, nodes to light-blue
+                for (const s of state._connect.segs) {
+                  const mat = s.mesh.material; if (!mat) continue;
+                  if (mat.diffuseColor) mat.diffuseColor = new BABYLON.Color3(0.4,0.8,1.0);
+                  if (mat.emissiveColor) mat.emissiveColor = new BABYLON.Color3(0,0,0);
+                }
+                for (const n of state._connect.nodes) {
+                  const mat = n.mesh.material; if (!mat) continue;
+                  if (mat.emissiveColor) mat.emissiveColor = new BABYLON.Color3(0.6,0.9,1.0);
+                  if (mat.diffuseColor) mat.diffuseColor = new BABYLON.Color3(0.15,0.25,0.35);
+                }
+                // Apply selection colors
+                for (const sid of state._connect.sel) {
+                  if (sid.startsWith('connect:seg:')) {
+                    const idx = Number(sid.split(':').pop());
+                    const s = state._connect.segs.find(x => x.i === idx);
+                    if (s && s.mesh.material) { s.mesh.material.diffuseColor = new BABYLON.Color3(1.0,0.95,0.3); }
+                  } else if (sid.startsWith('connect:node:')) {
+                    const idx = Number(sid.split(':').pop());
+                    const n = state._connect.nodes.find(x => x.i === idx);
+                    if (n && n.mesh.material) {
+                      // Make selected node vivid (orange-red)
+                      n.mesh.material.emissiveColor = new BABYLON.Color3(0.98, 0.38, 0.25);
+                      n.mesh.material.diffuseColor = new BABYLON.Color3(0.55, 0.18, 0.10);
+                    }
+                  }
+                }
+              } catch {}
+              try { ensureConnectGizmo(); } catch {}
+              try { requestAnimationFrame(() => { try { ensureConnectGizmo(); } catch {} }); } catch {}
             }
+            function pickPlaneY() {
+              try {
+                // Use the lowest y among selected items as drag plane
+                let y = null;
+                for (const sid of state._connect.sel) {
+                  if (sid.startsWith('connect:node:')) { const n = state._connect.nodes.find(x => x.i === Number(sid.split(':').pop())); if (n) y = (y==null)? n.mesh.position.y : Math.min(y, n.mesh.position.y); }
+                  if (sid.startsWith('connect:seg:')) { const idx = Number(sid.split(':').pop()); const p0 = state._connect.path[idx]; const p1 = state._connect.path[idx+1]; const my = Math.min(p0.y, p1.y); y = (y==null) ? my : Math.min(y, my); }
+                }
+                return (y==null) ? 0 : y;
+              } catch { return 0; }
+            }
+            function pickPointOnPlaneY(y) {
+              try {
+                const ray = camera.getForwardRay();
+                const n = new BABYLON.Vector3(0,1,0);
+                const base = new BABYLON.Vector3(0,y,0);
+                const denom = BABYLON.Vector3.Dot(ray.direction, n);
+                if (Math.abs(denom) < 1e-6) return null;
+                const t = BABYLON.Vector3.Dot(base.subtract(ray.origin), n) / denom;
+                return ray.origin.add(ray.direction.scale(t));
+              } catch { return null; }
+            }
+
+            // ——— Connect gizmo (X/Y/Z arrows + XZ plane) ———
+function disposeConnectGizmo() {
+  try {
+                try { Log.log('PATH', 'gizmo:dispose', {}); } catch {}
+                const g = state._connect.gizmo || {};
+                try { g.root?.dispose?.(); } catch {}
+                try { (g.parts||[]).forEach(m => { try { m.dispose(); } catch {} }); } catch {}
+              } catch {}
+              state._connect.gizmo = null;
+            }
+function ensureConnectGizmo() {
+  // Disabled: no gizmo on proposed path nodes
+  try { Log.log('PATH', 'gizmo:suppressed', {}); } catch {}
+  try { disposeConnectGizmo(); } catch {}
+  return;
+  try {
+    // Only show gizmo when some path element is selected
+    if (!state._connect || !state._connect.sel || state._connect.sel.size === 0) {
+      disposeConnectGizmo();
+      return;
+    }
+                try { Log.log('PATH', 'gizmo:ensure', { sel: Array.from(state._connect.sel||[]) }); } catch {}
+                const center = selectionCenter() || (state._connect.path && state._connect.path[0] ? new BABYLON.Vector3(state._connect.path[0].x, state._connect.path[0].y, state._connect.path[0].z) : null);
+                if (!center) { disposeConnectGizmo(); return; }
+                const g = state._connect.gizmo;
+                const scalePct = Number(localStorage.getItem('dw:ui:gizmoScale') || '100') || 100;
+                const showMove = (() => { try { return localStorage.getItem('dw:ui:pathGizmo:move') !== '0'; } catch { return true; } })();
+                const showRotate = (() => { try { return localStorage.getItem('dw:ui:pathGizmo:rotate') !== '0'; } catch { return true; } })();
+                const showDisc = (() => { try { return localStorage.getItem('dw:ui:pathGizmo:disc') !== '0'; } catch { return true; } })();
+                const showCast = (() => { try { return localStorage.getItem('dw:ui:pathGizmo:cast') !== '0'; } catch { return true; } })();
+                // Estimate radius from path extents for sizing
+                let minX=Infinity,minY=Infinity,minZ=Infinity,maxX=-Infinity,maxY=-Infinity,maxZ=-Infinity;
+                for (const p of (state._connect.path||[])) { if (!p) continue; if (p.x<minX)minX=p.x; if (p.y<minY)minY=p.y; if (p.z<minZ)minZ=p.z; if(p.x>maxX)maxX=p.x; if(p.y>maxY)maxY=p.y; if(p.z>maxZ)maxZ=p.z; }
+                const rad = Math.max(1, Math.max(maxX-minX, maxY-minY, maxZ-minZ) * 0.4);
+                const gScale = Math.max(0.1, scalePct / 100);
+                const len = Math.max(1.0, rad * 1.2 * gScale);
+                const shaft = Math.max(0.04, len * 0.08);
+                const tipLen = Math.max(0.12, len * 0.22);
+                const tipDia = shaft * 2.2;
+                const cfgKey = `${showMove?'1':'0'}-${showRotate?'1':'0'}-${showDisc?'1':'0'}-${showCast?'1':'0'}`;
+                if (!g || !g.root || (g.root.isDisposed && g.root.isDisposed()) || g.key !== cfgKey) {
+                  disposeConnectGizmo();
+                  const root = new BABYLON.TransformNode('connectGizmo:root', scene);
+                  const parts = [];
+                  const mkArrow = (axis, color) => {
+                    const name = `connectGizmo:${axis}`;
+                    const shaftMesh = BABYLON.MeshBuilder.CreateCylinder(`${name}:shaft`, { height: len - tipLen, diameter: shaft }, scene);
+                    const tipMesh = BABYLON.MeshBuilder.CreateCylinder(`${name}:tip`, { height: tipLen, diameterTop: 0, diameterBottom: tipDia, tessellation: 24 }, scene);
+                    const mat = new BABYLON.StandardMaterial(`${name}:mat`, scene);
+                    mat.diffuseColor = color.scale(0.25); mat.emissiveColor = color.clone(); mat.specularColor = new BABYLON.Color3(0,0,0);
+                    shaftMesh.material = mat; tipMesh.material = mat;
+                    shaftMesh.isPickable = true; tipMesh.isPickable = true; shaftMesh.alwaysSelectAsActiveMesh = true; tipMesh.alwaysSelectAsActiveMesh = true;
+                    shaftMesh.renderingGroupId = 3; tipMesh.renderingGroupId = 3;
+                    shaftMesh.parent = root; tipMesh.parent = root;
+                    if (axis === 'x') { shaftMesh.rotation.z = -Math.PI/2; tipMesh.rotation.z = -Math.PI/2; shaftMesh.position.x = (len - tipLen)/2; tipMesh.position.x = len - tipLen/2; }
+                    else if (axis === 'y') { shaftMesh.position.y = (len - tipLen)/2; tipMesh.position.y = len - tipLen/2; }
+                    else { shaftMesh.rotation.x = Math.PI/2; tipMesh.rotation.x = Math.PI/2; shaftMesh.position.z = (len - tipLen)/2; tipMesh.position.z = len - tipLen/2; }
+                    shaftMesh.name = name; tipMesh.name = name; parts.push(shaftMesh, tipMesh);
+                  };
+                  if (showMove) { mkArrow('x', new BABYLON.Color3(0.95, 0.2, 0.2)); mkArrow('y', new BABYLON.Color3(0.2, 0.95, 0.2)); mkArrow('z', new BABYLON.Color3(0.2, 0.45, 0.95)); }
+                  // Rotate rings
+                  if (showRotate) {
+                    const mkRing = (axis, color, diamMul = 2.2, thickMul = 0.06) => {
+                      const name = `connectGizmo:rot:${axis}`;
+                      const ring = BABYLON.MeshBuilder.CreateTorus(name, { diameter: Math.max(0.4, len * diamMul), thickness: Math.max(0.02, len * thickMul), tessellation: 96 }, scene);
+                      const mat = new BABYLON.StandardMaterial(`${name}:mat`, scene); mat.diffuseColor = new BABYLON.Color3(0,0,0); mat.emissiveColor = color.clone(); mat.specularColor = new BABYLON.Color3(0,0,0); ring.material = mat;
+                      ring.isPickable = true; ring.alwaysSelectAsActiveMesh = true; ring.renderingGroupId = 3; ring.parent = root;
+                      if (axis === 'x') ring.rotation.z = Math.PI/2; else if (axis === 'z') ring.rotation.x = Math.PI/2;
+                      parts.push(ring);
+                    };
+                    mkRing('y', new BABYLON.Color3(0.2, 0.95, 0.2));
+                    mkRing('x', new BABYLON.Color3(0.95, 0.2, 0.2));
+                    mkRing('z', new BABYLON.Color3(0.2, 0.45, 0.95));
+                  }
+                  let disc = null; let cast = null;
+                  if (showDisc) {
+                    try {
+                      const discR = Math.max(0.6, rad * 0.9 * gScale);
+                      disc = BABYLON.MeshBuilder.CreateDisc('connectGizmo:disc', { radius: discR, tessellation: 64 }, scene);
+                      const dmat = new BABYLON.StandardMaterial('connectGizmo:disc:mat', scene);
+                      dmat.diffuseColor = new BABYLON.Color3(0.15, 0.5, 0.95); dmat.emissiveColor = new BABYLON.Color3(0.12, 0.42, 0.85); dmat.alpha = 0.18; dmat.specularColor = new BABYLON.Color3(0,0,0);
+                      disc.material = dmat; disc.isPickable = true; disc.alwaysSelectAsActiveMesh = true; disc.renderingGroupId = 3; disc.rotation.x = Math.PI/2; disc.parent = root; parts.push(disc);
+                    } catch {}
+                  }
+                  if (showCast) {
+                    try {
+                      cast = BABYLON.MeshBuilder.CreateDisc('connectGizmo:cast', { radius: Math.max(0.6, rad), tessellation: 64 }, scene);
+                      const cmat = new BABYLON.StandardMaterial('connectGizmo:cast:mat', scene);
+                      cmat.diffuseColor = new BABYLON.Color3(0.85, 0.80, 0.20); cmat.emissiveColor = new BABYLON.Color3(0.35, 0.33, 0.10); cmat.alpha = 0.28; cmat.specularColor = new BABYLON.Color3(0,0,0);
+                      cast.material = cmat; cast.isPickable = false; cast.renderingGroupId = 1; cast.rotation.x = Math.PI/2; cast.parent = root; parts.push(cast);
+                    } catch {}
+                  }
+                  state._connect.gizmo = { root, parts, disc, cast, key: cfgKey };
+                }
+                try { state._connect.gizmo.root.position.copyFrom(center); } catch {}
+                // Place disc on selection’s lowest Y for convenience
+                try {
+                  let minY = center.y;
+                  for (const sid of (state._connect.sel || [])) {
+                    if (sid.startsWith('connect:node:')) { const idx = Number(sid.split(':').pop()); const p = state._connect.path[idx]; if (p) minY = Math.min(minY, p.y); }
+                    else if (sid.startsWith('connect:seg:')) { const i = Number(sid.split(':').pop()); const p0 = state._connect.path[i], p1 = state._connect.path[i+1]; if (p0&&p1) minY = Math.min(minY, p0.y, p1.y); }
+                  }
+                  if (state._connect.gizmo.disc) { state._connect.gizmo.disc.position.set(center.x, minY, center.z); }
+                  if (state._connect.gizmo.cast) { state._connect.gizmo.cast.position.set(center.x, minY, center.z); }
+                } catch {}
+              } catch {}
+}
+            // React to settings changes for gizmo parts
+            try { window.addEventListener('dw:pathGizmo:config', () => { try { ensureConnectGizmo(); } catch {} }); } catch {}
+            state._connect.editObs = scene.onPrePointerObservable.add((pi) => {
+              try {
+                if (pi.type === BABYLON.PointerEventTypes.POINTERDOWN) {
+                  try {
+                    const nmDbg = (() => { const p = scene.pick(scene.pointerX, scene.pointerY); return p?.pickedMesh?.name || ''; })();
+                    const m = pi.event; Log.log('PATH', 'pointer:down', { name: nmDbg, shift: !!m?.shiftKey, cmd: !!m?.metaKey, alt: !!m?.altKey, ctrl: !!m?.ctrlKey });
+                  } catch {}
+                  // Prioritize PP node selection before gizmo activation
+                  const pickNS = scene.pick(scene.pointerX, scene.pointerY, (m) => m && typeof m.name === 'string' && (m.name.startsWith('connect:node:') || m.name.startsWith('connect:seg:')));
+                  const selId = idFromMesh(pickNS?.pickedMesh);
+                  const shift = !!(pi.event && pi.event.shiftKey);
+                  const cmd = !!(pi.event && pi.event.metaKey);
+                  if (selId && selId.startsWith('connect:node:')) {
+                    try { Log.log('PATH', 'select:node', { id: selId }); } catch {}
+                    if (!shift) state._connect.sel.clear();
+                    if (state._connect.sel.has(selId) && shift) state._connect.sel.delete(selId); else state._connect.sel.add(selId);
+                    applySelectionVisual();
+                    try { requestAnimationFrame(() => { try { ensureConnectGizmo(); } catch {} }); } catch {}
+                    // Prepare ground-plane drag for nodes only
+                    drag.active = true; drag.ids = Array.from(state._connect.sel);
+                    drag.type = 'node';
+                    drag.planeY = pickPlaneY();
+                    drag.startPt = pickPointOnPlaneY(drag.planeY);
+                    drag.basePts = JSON.parse(JSON.stringify(state._connect.path));
+                    try { const ev = pi.event; ev?.stopImmediatePropagation?.(); ev?.stopPropagation?.(); ev?.preventDefault?.(); } catch {}
+                    pi.skipOnPointerObservable = true; return;
+                  }
+                  // Cmd-click on a segment: split into two by inserting a node
+                  if (cmd && selId && selId.startsWith('connect:seg:')) {
+                    try {
+                      const i = Number(selId.split(':').pop());
+                      const path = Array.isArray(state._connect.path) ? state._connect.path.map(p => ({ x: p.x, y: p.y, z: p.z })) : [];
+                      const a = path[i], b = path[i+1];
+                      if (a && b && pickNS && pickNS.pickedPoint) {
+                        const A = new BABYLON.Vector3(a.x, a.y, a.z);
+                        const B = new BABYLON.Vector3(b.x, b.y, b.z);
+                        const P = pickNS.pickedPoint.clone();
+                        const AB = B.subtract(A);
+                        const AP = P.subtract(A);
+                        const ab2 = Math.max(1e-8, AB.lengthSquared());
+                        let t = BABYLON.Vector3.Dot(AP, AB) / ab2;
+                        t = Math.max(0.08, Math.min(0.92, t));
+                        const N = A.add(AB.scale(t));
+                        path.splice(i+1, 0, { x: N.x, y: N.y, z: N.z });
+                        state._connect.path = path;
+                        updateProposalMeshes();
+                        try { state._connect.sel.clear(); state._connect.sel.add(`connect:node:${i+1}`); applySelectionVisual(); } catch {}
+                        try { Log.log('PATH', 'split:insertNode', { seg: i, t, at: { x: N.x, y: N.y, z: N.z } }); } catch {}
+                        try { const ev = pi.event; ev?.stopImmediatePropagation?.(); ev?.stopPropagation?.(); ev?.preventDefault?.(); } catch {}
+                        pi.skipOnPointerObservable = true; return;
+                      }
+                    } catch (e) { logErr('EH:connect:cmdSplit', e); }
+                  }
+                  // If not selecting a node (and not cmd-splitting), allow gizmo picks
+                  let pickG = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('connectGizmo:'));
+                  if (pickG?.hit && pickG.pickedMesh) {
+                    try { Log.log('PATH', 'gizmo:pick', { name: String(pickG.pickedMesh.name||'') }); } catch {}
+                    const nm = String(pickG.pickedMesh.name || '');
+                    drag.gizmoActive = true; drag.basePts = JSON.parse(JSON.stringify(state._connect.path));
+                    const center = selectionCenter() || new BABYLON.Vector3(0,0,0);
+                    if (nm.startsWith('connectGizmo:disc')) {
+                      drag.mode = 'plane'; drag.axisVec = null; drag.planeNormal = new BABYLON.Vector3(0,1,0);
+                      drag.startPt = pickPointOnPlane(drag.planeNormal, new BABYLON.Vector3(center.x, (state._connect.gizmo?.disc?.position?.y || center.y), center.z));
+                    } else if (nm.startsWith('connectGizmo:rot:')) {
+                      drag.mode = 'rot';
+                      const ax = nm.endsWith(':x') ? 'x' : nm.endsWith(':y') ? 'y' : 'z';
+                      drag.rotAxis = ax;
+                      drag.rotAxisVec = (ax === 'x') ? new BABYLON.Vector3(1,0,0) : (ax === 'y') ? new BABYLON.Vector3(0,1,0) : new BABYLON.Vector3(0,0,1);
+                      drag.rotCenter = center.clone();
+                      drag.startAngle = angleToPointerFrom(center);
+                    } else {
+                      drag.mode = 'axis';
+                      const axis = nm.includes(':x') ? new BABYLON.Vector3(1,0,0) : nm.includes(':y') ? new BABYLON.Vector3(0,1,0) : new BABYLON.Vector3(0,0,1);
+                      drag.axisVec = axis.clone(); try { drag.axisVec.normalize(); } catch {}
+                      const view = camera.getForwardRay().direction.clone();
+                      let n = BABYLON.Vector3.Cross(axis, BABYLON.Vector3.Cross(view, axis));
+                      if (n.lengthSquared() < 1e-4) n = BABYLON.Vector3.Cross(axis, new BABYLON.Vector3(0,1,0));
+                      if (n.lengthSquared() < 1e-4) n = BABYLON.Vector3.Cross(axis, new BABYLON.Vector3(1,0,0));
+                      try { n.normalize(); } catch {}
+                      drag.planeNormal = n;
+                      drag.startPt = pickPointOnPlane(n, center) || center.clone();
+                    }
+                    // Detach camera pointer input during gizmo drag and capture pointer
+                    try {
+                      const canvas = engine.getRenderingCanvas();
+                      camera.inputs?.attached?.pointers?.detachControl(canvas);
+                      const pe = pi.event; drag.ptrId = pe && pe.pointerId != null ? pe.pointerId : null;
+                      if (drag.ptrId != null && canvas && canvas.setPointerCapture) canvas.setPointerCapture(drag.ptrId);
+                    } catch {}
+                    try { const ev = pi.event; ev?.stopImmediatePropagation?.(); ev?.stopPropagation?.(); ev?.preventDefault?.(); } catch {}
+                    pi.skipOnPointerObservable = true; return;
+                  }
+                  // Ignore plain clicks on segments for selection — nodes only
+                  // Fall through with no action
+                } else if (pi.type === BABYLON.PointerEventTypes.POINTERMOVE) {
+                  // Drag via gizmo
+                  if (drag.gizmoActive) {
+                    const center = selectionCenter() || new BABYLON.Vector3(0,0,0);
+                    if (drag.mode === 'rot') {
+                      const angNow = angleToPointerFrom(center);
+                      if (!isFinite(angNow) || !isFinite(drag.startAngle)) return;
+                      let delta = angNow - drag.startAngle;
+                      if (delta > Math.PI) delta -= 2*Math.PI; else if (delta < -Math.PI) delta += 2*Math.PI;
+                      const axis = drag.rotAxisVec || new BABYLON.Vector3(0,1,0);
+                      const R = BABYLON.Matrix.RotationAxis(axis, delta);
+                      const path = drag.basePts.map(p => ({ x: p.x, y: p.y, z: p.z }));
+                      const applyRot = (idx) => {
+                        const p = drag.basePts[idx]; if (!p) return;
+                        const rel = new BABYLON.Vector3(p.x - center.x, p.y - center.y, p.z - center.z);
+                        const out = BABYLON.Vector3.TransformCoordinates(rel, R);
+                        path[idx].x = center.x + out.x; path[idx].y = center.y + out.y; path[idx].z = center.z + out.z;
+                      };
+                      for (const sid of state._connect.sel || []) {
+                        if (sid.startsWith('connect:node:')) { const idx = Number(sid.split(':').pop()); applyRot(idx); }
+                        else if (sid.startsWith('connect:seg:')) { const i = Number(sid.split(':').pop()); applyRot(i); applyRot(i+1); }
+                      }
+                      state._connect.path = path; updateProposalMeshes(); ensureConnectGizmo(); pi.skipOnPointerObservable = true; return;
+                    } else {
+                      const cur = drag.mode === 'plane' ? pickPointOnPlane(drag.planeNormal || new BABYLON.Vector3(0,1,0), new BABYLON.Vector3(center.x, (state._connect.gizmo?.disc?.position?.y || center.y), center.z)) : pickPointOnPlane(drag.planeNormal || new BABYLON.Vector3(0,1,0), center);
+                      if (!cur || !drag.startPt) return;
+                      let move = new BABYLON.Vector3(0,0,0);
+                      if (drag.mode === 'plane') { move = new BABYLON.Vector3(cur.x - drag.startPt.x, 0, cur.z - drag.startPt.z); }
+                      else { const d = cur.subtract(drag.startPt); const axis = drag.axisVec || new BABYLON.Vector3(1,0,0); const dist = BABYLON.Vector3.Dot(d, axis); move = axis.scale(dist); }
+                      const path = drag.basePts.map(p => ({ x: p.x, y: p.y, z: p.z }));
+                      const applyMove = (idx) => { path[idx].x += move.x; path[idx].y += move.y; path[idx].z += move.z; };
+                      if (state._connect.sel && state._connect.sel.size > 0) {
+                        for (const sid of state._connect.sel) {
+                          if (sid.startsWith('connect:node:')) { const idx = Number(sid.split(':').pop()); applyMove(idx); }
+                          else if (sid.startsWith('connect:seg:')) { const i = Number(sid.split(':').pop()); applyMove(i); applyMove(i+1); }
+                        }
+                      } else { for (let i=0;i<path.length;i++) applyMove(i); }
+                      state._connect.path = path; updateProposalMeshes(); ensureConnectGizmo(); pi.skipOnPointerObservable = true; return;
+                    }
+                  }
+                  // Drag by direct selection on ground plane (legacy XZ drag)
+                  if (!drag.active) return;
+                  const cur = pickPointOnPlaneY(drag.planeY); if (!cur || !drag.startPt) return;
+                  const dx = cur.x - drag.startPt.x; const dz = cur.z - drag.startPt.z;
+                  const dvec = { x: dx, y: 0, z: dz };
+                  const path = drag.basePts.map(p => ({ x: p.x, y: p.y, z: p.z }));
+                  if (drag.type === 'node') {
+                    for (const sid of drag.ids) { if (!sid.startsWith('connect:node:')) continue; const idx = Number(sid.split(':').pop()); path[idx].x += dvec.x; path[idx].z += dvec.z; }
+                  } else {
+                    for (const sid of drag.ids) { if (!sid.startsWith('connect:seg:')) continue; const i = Number(sid.split(':').pop()); path[i].x += dvec.x; path[i].z += dvec.z; path[i+1].x += dvec.x; path[i+1].z += dvec.z; }
+                  }
+                  state._connect.path = path;
+                  updateProposalMeshes();
+                  pi.skipOnPointerObservable = true;
+                } else if (pi.type === BABYLON.PointerEventTypes.POINTERUP) {
+                  if (drag.active || drag.gizmoActive) {
+                    drag.active = false; drag.gizmoActive = false; drag.ids = []; drag.basePts = null;
+                    // Reattach camera pointer input and release capture
+                    try {
+                      const canvas = engine.getRenderingCanvas();
+                      camera.inputs?.attached?.pointers?.attachControl(canvas);
+                      if (drag.ptrId != null && canvas && canvas.releasePointerCapture) canvas.releasePointerCapture(drag.ptrId);
+                      drag.ptrId = null;
+                    } catch {}
+                  }
+                }
+              } catch (e2) { logErr('EH:connect:edit', e2); }
+            });
+
+            // Finalize handler
+            btnFinalize.onclick = () => {
+              try {
+                const path = state._connect.path || [];
+                const depthInside = Math.max(cs * baseRes * 1.5, (maxDim * baseRes) * 0.20, 2 * baseRes);
+                const addedIds = [];
+                for (let i = 0; i < path.length - 1; i++) {
+                  const p0 = path[i]; const p1 = path[i+1];
+                  const ids = addTunnelsAlongSegment(new BABYLON.Vector3(p0.x,p0.y,p0.z), new BABYLON.Vector3(p1.x,p1.y,p1.z), { baseRes, cs, Lvox, depthInside, isFirst: i===0, isLast: i===path.length-2 });
+                  addedIds.push(...ids);
+                }
+                if (addedIds.length) {
+                  saveBarrow(state.barrow); snapshot(state.barrow);
+                  renderDbView(state.barrow); rebuildScene(); scheduleGridUpdate();
+                  try { window.dispatchEvent(new CustomEvent('dw:transform', { detail: { kind: 'voxel-connect', added: addedIds, path: path.map(p=>({x:p.x,y:p.y,z:p.z})) } })); } catch {}
+                  Log.log('UI', 'Connect: finalized', { added: addedIds.length });
+                } else {
+                  Log.log('UI', 'Connect: no segments added', {});
+                }
+              } catch (e) { logErr('EH:voxelConnect:finalize', e); }
+              finally { clearProposals(); }
+            };
           } catch (e) { logErr('EH:voxelConnect', e); }
         });
 
@@ -3713,14 +4331,15 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
                 if (!(len > 1e-6)) dir = new BABYLON.Vector3(0,0,1); else dir = dir.scale(1/len);
                 // Tunnel dimensions (box): increase size by ~50%
                 // Cross‑section: thicker for visibility; Length: ~3/8 of cavern size
-                const cs = 6;
+                let minWidth = 6; try { minWidth = Math.max(1, Number(localStorage.getItem('dw:ops:minTunnelWidth')||'6')||6); } catch {}
+                const cs = Math.max(6, minWidth);
                 const maxDim = Math.max(1, (s.size?.x|0) || 1, (s.size?.y|0) || 1, (s.size?.z|0) || 1);
                 const L = Math.max(12, Math.round(maxDim * 0.375));
                 const tunnelRes = res; // match base space resolution
                 const sizeVox = { x: cs, y: cs, z: L };
                 // Position: ensure the inner end penetrates well inside the cavern so merges create an opening
                 const halfLen = (L * tunnelRes) / 2;
-                const depthInside = Math.max(cs * tunnelRes * 1.5, (maxDim * tunnelRes) * 0.20); // deeper: >= 1.5*CS or 20% of cavern size
+                const depthInside = Math.max(cs * tunnelRes * 1.5, (maxDim * tunnelRes) * 0.20, 2 * tunnelRes); // ensure >= 2 vox inside
                 const origin = centroid.add(dir.scale(halfLen - depthInside));
                 // Orientation: align local Z with dir (yaw/pitch)
                 const yaw = Math.atan2(dir.x, dir.z);
@@ -3798,6 +4417,52 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     try { applyViewToggles?.(); } catch (e) { logErr('EH:dbEdit:applyViewToggles', e); }
     try { updateHud?.(); } catch (e) { logErr('EH:dbEdit:updateHud', e); }
     try { ensureRotWidget(); ensureMoveWidget(); } catch (e) { logErr('EH:dbEdit:ensureWidgets', e); }
+  });
+
+  // Delete selected spaces (from DB tab button)
+  window.addEventListener('dw:dbDeleteSelected', (e) => {
+    try {
+      const ids = (e && e.detail && Array.isArray(e.detail.ids)) ? e.detail.ids : [];
+      if (!ids.length) return;
+      const before = (state?.barrow?.spaces || []).length;
+      const delSet = new Set(ids.map(String));
+      // Snapshot before deletion to support undo
+      try { snapshot(state.barrow); } catch {}
+      // Remove spaces from model
+      state.barrow.spaces = (state.barrow.spaces || []).filter(s => !delSet.has(String(s?.id)));
+      // Clear selection of deleted ids
+      try { for (const id of ids) state.selection.delete(id); } catch {}
+      // Persist + rebuild
+      try { saveBarrow(state.barrow); snapshot(state.barrow); } catch {}
+      try { disposeBuilt(state.built); } catch {}
+      try { state.built = buildSceneFromBarrow(scene, state.barrow); } catch {}
+      try { renderDbView(state.barrow); } catch {}
+      try { rebuildHalos(); } catch {}
+      try { scheduleGridUpdate(); } catch {}
+      try { ensureRotWidget(); ensureMoveWidget(); } catch {}
+      try { window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: Array.from(state.selection) } })); } catch {}
+      try { updateHud?.(); } catch {}
+      Log.log('UI', 'DB delete selected', { removed: ids, before, after: (state?.barrow?.spaces || []).length });
+    } catch (err) { Log.log('ERROR', 'DB delete selected failed', { error: String(err) }); }
+  });
+
+  // Undo last DB change (primarily deletes)
+  window.addEventListener('dw:dbUndo', () => {
+    try {
+      const restored = undoLast();
+      if (!restored) { Log.log('UI', 'Undo: nothing to undo', {}); return; }
+      state.barrow = restored;
+      // Rebuild scene and DB
+      try { disposeBuilt(state.built); } catch {}
+      try { state.built = buildSceneFromBarrow(scene, state.barrow); } catch {}
+      try { renderDbView(state.barrow); } catch {}
+      try { rebuildHalos(); } catch {}
+      try { scheduleGridUpdate(); } catch {}
+      try { ensureRotWidget(); ensureMoveWidget(); } catch {}
+      try { window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: Array.from(state.selection) } })); } catch {}
+      try { updateHud?.(); } catch {}
+      Log.log('UI', 'Undo: restored previous snapshot', {});
+    } catch (e) { Log.log('ERROR', 'Undo failed', { error: String(e) }); }
   });
 
   // ——————————— External transforms (buttons/commands) ———————————

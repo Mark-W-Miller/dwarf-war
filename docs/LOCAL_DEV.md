@@ -1,4 +1,4 @@
-# Local Dev Servers and Logging
+ok, back to tunnels # Local Dev Servers and Logging
 
 This repo includes a tiny static server for the app and a minimal log receiver so you can capture browser logs/errors into a file during development.
 
@@ -58,6 +58,20 @@ These are auto‑set to `'1'` on localhost at page start. Turn off in Settings o
 - Changing ports:
   - Receiver: `PORT=6061 node dev/error-reporter.mjs`
   - Static server: `PORT=5173 node dev/static-server.mjs`
+
+  Note: the app currently posts logs to a fixed receiver URL (`http://localhost:6060/log`). If you change the receiver port, update the client URLs or use a local port forward. Places to update if needed:
+  - app/index.html:69
+  - app/main.mjs:317
+  - app/modules/view/settings.mjs:279
+  - app/modules/util/log.mjs:15
+
+## Stopping Servers
+
+- If you started servers in a terminal, press Ctrl+C in that terminal.
+- If started in the background, find processes by command and kill them, e.g.:
+  - `ps aux | grep dev/static-server.mjs`
+  - `ps aux | grep dev/error-reporter.mjs`
+  - Then `kill <PID>` (or `kill -9 <PID>` if needed).
 
 ## Implementation Notes
 

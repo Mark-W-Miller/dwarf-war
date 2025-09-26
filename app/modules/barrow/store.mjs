@@ -69,3 +69,20 @@ export function loadHistory() {
     return raw ? JSON.parse(raw) : [];
   } catch (e) { return []; }
 }
+
+export function undoLast() {
+  try {
+    const hist = loadHistory();
+    if (!Array.isArray(hist) || hist.length < 2) return null;
+    // Remove the most recent snapshot and restore the previous
+    hist.pop();
+    const prev = hist[hist.length - 1];
+    const barrowCompressed = prev && prev.barrow ? prev.barrow : null;
+    if (!barrowCompressed) return null;
+    localStorage.setItem(KEY_HISTORY, JSON.stringify(hist));
+    // Update current
+    localStorage.setItem(KEY_CURRENT, JSON.stringify(barrowCompressed));
+    // Return inflated barrow for runtime
+    return inflateAfterLoad(barrowCompressed);
+  } catch (e) { console.warn('undoLast failed', e); return null; }
+}

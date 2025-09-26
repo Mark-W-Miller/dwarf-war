@@ -265,6 +265,28 @@ export function initSettingsTab(camApi, ui = {}) {
     try { Log.log('UI', 'Change setting', { key: 'sendLogs', value: !!cbSL.checked }); } catch {}
   });
 
+  // Path Gizmo visibility toggles
+  const rowPG = document.createElement('div'); rowPG.className = 'row'; rowPG.style.flexDirection = 'column'; rowPG.style.alignItems = 'flex-start';
+  const titlePG = document.createElement('div'); titlePG.textContent = 'Path Gizmo (Proposed Tunnel)'; titlePG.style.fontWeight = '600'; titlePG.style.margin = '6px 0 2px 0'; rowPG.appendChild(titlePG);
+  function mkGz(label, key, dflt) {
+    const wrap = document.createElement('label'); wrap.style.display = 'flex'; wrap.style.alignItems = 'center'; wrap.style.gap = '8px';
+    const cb = document.createElement('input'); cb.type = 'checkbox';
+    try { const v = localStorage.getItem(key); cb.checked = (v == null) ? dflt : (v !== '0'); } catch { cb.checked = !!dflt; }
+    const sp = document.createElement('span'); sp.textContent = label;
+    wrap.appendChild(cb); wrap.appendChild(sp);
+    cb.addEventListener('change', () => {
+      try { localStorage.setItem(key, cb.checked ? '1' : '0'); } catch {}
+      try { window.dispatchEvent(new CustomEvent('dw:pathGizmo:config', { detail: { key, value: !!cb.checked } })); } catch {}
+      try { Log.log('UI', 'Change setting', { key, value: !!cb.checked }); } catch {}
+    });
+    return wrap;
+  }
+  rowPG.appendChild(mkGz('Move Arrows (XYZ)', 'dw:ui:pathGizmo:move', true));
+  rowPG.appendChild(mkGz('Rotate Rings (XYZ)', 'dw:ui:pathGizmo:rotate', true));
+  rowPG.appendChild(mkGz('Move Disc (XZ)', 'dw:ui:pathGizmo:disc', true));
+  rowPG.appendChild(mkGz('Yellow Cast', 'dw:ui:pathGizmo:cast', true));
+  pane.appendChild(rowPG);
+
   // Assistant controls: send control signals to the local receiver so the assistant can react
   const rowAC = document.createElement('div'); rowAC.className = 'row';
   const labelAC = document.createElement('label'); labelAC.style.display = 'flex'; labelAC.style.alignItems = 'center'; labelAC.style.gap = '8px';
