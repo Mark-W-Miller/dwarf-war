@@ -144,6 +144,32 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     } catch { return null; }
   }
 
+  // Center for Proposed Path (PP) gizmo: center on selected PP nodes/segments or whole path
+  function getConnectSelectionCenter() {
+    try {
+      const path = (state && state._connect && Array.isArray(state._connect.path)) ? state._connect.path : [];
+      const sel = (state && state._connect && state._connect.sel) ? Array.from(state._connect.sel) : [];
+      if (!path || path.length < 2) return null;
+      if (sel && sel.length) {
+        let cx=0, cy=0, cz=0, n=0;
+        for (const sid of sel) {
+          const s = String(sid||'');
+          if (s.startsWith('connect:node:')) {
+            const i = Number(s.split(':').pop()); const p = path[i]; if (!p) continue; cx+=p.x; cy+=p.y; cz+=p.z; n++;
+          } else if (s.startsWith('connect:seg:')) {
+            const i = Number(s.split(':').pop()); const p0 = path[i], p1 = path[i+1]; if (!p0||!p1) continue; cx += (p0.x+p1.x)/2; cy += (p0.y+p1.y)/2; cz += (p0.z+p1.z)/2; n++;
+          }
+        }
+        if (n>0) return new BABYLON.Vector3(cx/n, cy/n, cz/n);
+      }
+      // Fallback to whole path AABB center
+      let minX=Infinity,minY=Infinity,minZ=Infinity,maxX=-Infinity,maxY=-Infinity,maxZ=-Infinity;
+      for (const p of path) { if (!p) continue; if (p.x<minX)minX=p.x; if (p.y<minY)minY=p.y; if (p.z<minZ)minZ=p.z; if(p.x>maxX)maxX=p.x; if(p.y>maxY)maxY=p.y; if(p.z>maxZ)maxZ=p.z; }
+      if (!isFinite(minX)) return null;
+      return new BABYLON.Vector3((minX+maxX)/2, (minY+maxY)/2, (minZ+maxZ)/2);
+    } catch { return null; }
+  }
+
   // ——— Controls and elements ———
   const toggleRunBtn = document.getElementById('toggleRun');
   const resetBtn = document.getElementById('reset');
@@ -3801,24 +3827,18 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
             const pts = path.map(p => new BABYLON.Vector3(p.x, p.y, p.z));
             const line = BABYLON.MeshBuilder.CreateLines('connect:proposal', { points: pts, updatable: true }, scene);
             line.color = new BABYLON.Color3(0.55, 0.9, 1.0);
-            line.isPickable = false; line.renderingGroupId = 3;
+            line.isPickable = false; line.renderingGroupId = 3; // top overlay (max default group)
             state._connect.props.push({ name: 'connect:proposal', mesh: line, path });
-            // Per-segment pick tubes for selection
-            for (let i=0;i<pts.length-1;i++) {
-              const segPath = [pts[i], pts[i+1]];
-              const tube = BABYLON.MeshBuilder.CreateTube(`connect:seg:${i}`, { path: segPath, radius: 0.15, tessellation: 12 }, scene);
-              tube.isPickable = true; tube.renderingGroupId = 3;
-              const mat = new BABYLON.StandardMaterial(`connect:seg:${i}:mat`, scene); mat.diffuseColor = new BABYLON.Color3(0.4,0.8,1.0); mat.alpha = 0.7; tube.material = mat;
-              state._connect.segs.push({ i, mesh: tube });
-            }
+            // Simple mode: no per-segment tubes; nearest segment computed analytically when needed
             // Elbow nodes (exclude endpoints)
             for (let i=1;i<pts.length-1;i++) {
-              const s = BABYLON.MeshBuilder.CreateSphere(`connect:node:${i}`, { diameter: 0.9 }, scene);
+              const s = BABYLON.MeshBuilder.CreateSphere(`connect:node:${i}`, { diameter: 1.2 }, scene);
               s.position.copyFrom(pts[i]); s.isPickable = true; s.renderingGroupId = 3;
               const mat = new BABYLON.StandardMaterial(`connect:node:${i}:mat`, scene);
-              mat.emissiveColor = new BABYLON.Color3(0.6,0.9,1.0); // base: light blue
+              mat.emissiveColor = new BABYLON.Color3(0.6,0.9,1.0);
               mat.diffuseColor = new BABYLON.Color3(0.15,0.25,0.35);
               mat.specularColor = new BABYLON.Color3(0,0,0);
+              mat.disableDepthWrite = true; mat.backFaceCulling = false; mat.zOffset = 8;
               s.material = mat;
               state._connect.nodes.push({ i, mesh: s });
             }
@@ -3837,25 +3857,20 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
             line.color = new BABYLON.Color3(0.55, 0.9, 1.0);
             line.isPickable = false; line.renderingGroupId = 3;
             state._connect.props.push({ name: 'connect:proposal', mesh: line, path });
-            // Update segments
+            // Update segments — simple mode: none (computed analytically)
             for (const s of state._connect.segs) { try { s.mesh?.dispose?.(); } catch {} }
             state._connect.segs = [];
-            for (let i=0;i<pts.length-1;i++) {
-              const tube = BABYLON.MeshBuilder.CreateTube(`connect:seg:${i}`, { path: [pts[i], pts[i+1]], radius: 0.15, tessellation: 12 }, scene);
-              tube.isPickable = true; tube.renderingGroupId = 3;
-              const mat = new BABYLON.StandardMaterial(`connect:seg:${i}:mat`, scene); mat.diffuseColor = new BABYLON.Color3(0.4,0.8,1.0); mat.alpha = 0.7; tube.material = mat;
-              state._connect.segs.push({ i, mesh: tube });
-            }
             // Update nodes (rebuild for simplicity)
             for (const n of state._connect.nodes) { try { n.mesh?.dispose?.(); } catch {} }
             state._connect.nodes = [];
             for (let i=1;i<pts.length-1;i++) {
-              const s = BABYLON.MeshBuilder.CreateSphere(`connect:node:${i}`, { diameter: 0.9 }, scene);
+              const s = BABYLON.MeshBuilder.CreateSphere(`connect:node:${i}`, { diameter: 1.2 }, scene);
               s.position.copyFrom(pts[i]); s.isPickable = true; s.renderingGroupId = 3;
               const mat = new BABYLON.StandardMaterial(`connect:node:${i}:mat`, scene);
               mat.emissiveColor = new BABYLON.Color3(0.6,0.9,1.0);
               mat.diffuseColor = new BABYLON.Color3(0.15,0.25,0.35);
               mat.specularColor = new BABYLON.Color3(0,0,0);
+              mat.disableDepthWrite = true; mat.backFaceCulling = false; mat.zOffset = 8;
               s.material = mat;
               state._connect.nodes.push({ i, mesh: s });
             }
@@ -3875,6 +3890,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
 
         btnConnect.addEventListener('click', () => {
           try {
+            try { Log.log('UI', 'Connect: click', {}); } catch {}
             const sel = Array.from(state.selection || []);
             const picks = Array.isArray(state.voxSel) ? state.voxSel : [];
             const bySpace = new Map(); for (const p of picks) { if (p && p.id != null) { if (!bySpace.has(p.id)) bySpace.set(p.id, []); bySpace.get(p.id).push(p); } }
@@ -3891,9 +3907,18 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
               aId = sel[0]; bId = sel[1];
               try { Log.log('UI', 'Connect: using selected spaces with voxel picks', { aId, bId }); } catch {}
             } else {
-              if (distinct.length < 2) { Log.log('UI', 'Connect: need voxels in two spaces', { uniqueSpaces: distinct.length }); }
-              else if (distinct.length > 2) { Log.log('UI', 'Connect: voxels span more than two spaces', { uniqueSpaces: distinct.length, ids: distinct.slice(0,6) }); }
-              else { Log.log('UI', 'Connect: unable to determine two spaces', { selCount: sel.length, uniqueSpaces: distinct.length }); }
+              if (distinct.length < 2) {
+                try { Log.log('UI', 'Connect: need voxels in two spaces', { uniqueSpaces: distinct.length }); } catch {}
+                try { Log.log('ERROR', 'Connect: need voxels in two spaces', { uniqueSpaces: distinct.length }); } catch {}
+              }
+              else if (distinct.length > 2) {
+                try { Log.log('UI', 'Connect: voxels span more than two spaces', { uniqueSpaces: distinct.length, ids: distinct.slice(0,6) }); } catch {}
+                try { Log.log('ERROR', 'Connect: voxels span more than two spaces', { uniqueSpaces: distinct.length, ids: distinct.slice(0,6) }); } catch {}
+              }
+              else {
+                try { Log.log('UI', 'Connect: unable to determine two spaces', { selCount: sel.length, uniqueSpaces: distinct.length }); } catch {}
+                try { Log.log('ERROR', 'Connect: unable to determine two spaces', { selCount: sel.length, uniqueSpaces: distinct.length }); } catch {}
+              }
               return;
             }
             const spacesById = new Map((state?.barrow?.spaces||[]).map(s => [s.id, s]));
@@ -3902,7 +3927,12 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
             const ptsA = (bySpace.get(aId) || []).map(p => worldPointFromVoxelIndex(sA, p.x, p.y, p.z)).filter(Boolean);
             const ptsB = (bySpace.get(bId) || []).map(p => worldPointFromVoxelIndex(sB, p.x, p.y, p.z)).filter(Boolean);
             const centroid = (arr) => { let s = new BABYLON.Vector3(0,0,0); let n = 0; for (const v of arr) { s = s.add(v); n++; } return n? s.scale(1/n) : null; };
-            const start = centroid(ptsA); const end = centroid(ptsB); if (!start || !end) { Log.log('UI', 'Connect: unable to compute centroids', {}); return; }
+            const start = centroid(ptsA); const end = centroid(ptsB);
+            if (!start || !end) {
+              try { Log.log('UI', 'Connect: unable to compute centroids', { a: !!start, b: !!end }); } catch {}
+              try { Log.log('ERROR', 'Connect: unable to compute centroids', { a: !!start, b: !!end }); } catch {}
+              return;
+            }
             // Obstacles = all other spaces' AABB
             const obstacles = [];
             try {
@@ -3920,7 +3950,11 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
             clearProposals();
             // Compute one most-direct path with slope <= 30 deg
             const best = buildSinglePath(start, end, obstacles, radius, upY, 30);
-            if (!best || best.length < 2) { Log.log('UI', 'Connect: no path found', {}); return; }
+            if (!best || best.length < 2) {
+              try { Log.log('UI', 'Connect: no path found', {}); } catch {}
+              try { Log.log('ERROR', 'Connect: no path found', {}); } catch {}
+              return;
+            }
             state._connect.path = best;
             createProposalMeshesFromPath(best);
             try { Log.log('PATH', 'route:chosen', { points: best.length, length: Number(pathLength(best).toFixed(2)) }); } catch {}
@@ -3936,7 +3970,38 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
               if (nm.startsWith('connect:seg:')) return nm;
               return null;
             }
-            state._connect.sel = new Set();
+        state._connect.sel = new Set();
+            // Compute nearest segment to the pointer by projecting onto a Y plane
+            function nearestSegmentAtPointer() {
+              try {
+                const path = (state && state._connect && Array.isArray(state._connect.path)) ? state._connect.path : [];
+                if (!path || path.length < 2) return null;
+                // Plane Y: use min Y across path to approximate ground for PP
+                let minY = Infinity; for (const p of path) { if (p && isFinite(p.y)) minY = Math.min(minY, p.y); }
+                if (!isFinite(minY)) minY = 0;
+                const n = new BABYLON.Vector3(0,1,0);
+                const base = new BABYLON.Vector3(0, minY, 0);
+                const ray = camera.getForwardRay();
+                const denom = BABYLON.Vector3.Dot(ray.direction, n);
+                if (Math.abs(denom) < 1e-6) return null;
+                const tRay = BABYLON.Vector3.Dot(base.subtract(ray.origin), n) / denom;
+                if (!isFinite(tRay) || tRay <= 0) return null;
+                const P = ray.origin.add(ray.direction.scale(tRay));
+                let bestI = -1; let bestD2 = Infinity; let bestN = null;
+                for (let i=0;i<path.length-1;i++) {
+                  const A = new BABYLON.Vector3(path[i].x, path[i].y, path[i].z);
+                  const B = new BABYLON.Vector3(path[i+1].x, path[i+1].y, path[i+1].z);
+                  const AB = B.subtract(A); const AB2 = Math.max(1e-8, AB.lengthSquared());
+                  const AP = P.subtract(A);
+                  let t = BABYLON.Vector3.Dot(AP, AB) / AB2; if (t < 0) t = 0; else if (t > 1) t = 1;
+                  const N = A.add(AB.scale(t));
+                  const d2 = N.subtract(P).lengthSquared();
+                  if (d2 < bestD2) { bestD2 = d2; bestI = i; bestN = N; }
+                }
+                if (bestI < 0 || !bestN) return null;
+                return { i: bestI, point: bestN };
+              } catch { return null; }
+            }
 
             function applySelectionVisual() {
               try {
@@ -4024,7 +4089,7 @@ function ensureConnectGizmo() {
       return;
     }
                 try { Log.log('PATH', 'gizmo:ensure', { sel: Array.from(state._connect.sel||[]) }); } catch {}
-                const center = selectionCenter() || (state._connect.path && state._connect.path[0] ? new BABYLON.Vector3(state._connect.path[0].x, state._connect.path[0].y, state._connect.path[0].z) : null);
+                const center = getConnectSelectionCenter() || (state._connect.path && state._connect.path[0] ? new BABYLON.Vector3(state._connect.path[0].x, state._connect.path[0].y, state._connect.path[0].z) : null);
                 if (!center) { disposeConnectGizmo(); return; }
                 const g = state._connect.gizmo;
                 const scalePct = Number(localStorage.getItem('dw:ui:gizmoScale') || '100') || 100;
@@ -4056,7 +4121,7 @@ function ensureConnectGizmo() {
                     mat.diffuseColor = color.scale(0.25); mat.emissiveColor = color.clone(); mat.specularColor = new BABYLON.Color3(0,0,0);
                     shaftMesh.material = mat; tipMesh.material = mat;
                     shaftMesh.isPickable = true; tipMesh.isPickable = true; shaftMesh.alwaysSelectAsActiveMesh = true; tipMesh.alwaysSelectAsActiveMesh = true;
-                    shaftMesh.renderingGroupId = 4; tipMesh.renderingGroupId = 4;
+                    shaftMesh.renderingGroupId = 3; tipMesh.renderingGroupId = 3;
                     shaftMesh.parent = root; tipMesh.parent = root;
                     if (axis === 'x') { shaftMesh.rotation.z = -Math.PI/2; tipMesh.rotation.z = -Math.PI/2; shaftMesh.position.x = (len - tipLen)/2; tipMesh.position.x = len - tipLen/2; }
                     else if (axis === 'y') { shaftMesh.position.y = (len - tipLen)/2; tipMesh.position.y = len - tipLen/2; }
@@ -4085,7 +4150,7 @@ function ensureConnectGizmo() {
                       disc = BABYLON.MeshBuilder.CreateDisc('connectGizmo:disc', { radius: discR, tessellation: 64 }, scene);
                       const dmat = new BABYLON.StandardMaterial('connectGizmo:disc:mat', scene);
                       dmat.diffuseColor = new BABYLON.Color3(0.15, 0.5, 0.95); dmat.emissiveColor = new BABYLON.Color3(0.12, 0.42, 0.85); dmat.alpha = 0.30; dmat.specularColor = new BABYLON.Color3(0,0,0); dmat.zOffset = 3;
-                      disc.material = dmat; disc.isPickable = true; disc.alwaysSelectAsActiveMesh = true; disc.renderingGroupId = 4; disc.rotation.x = Math.PI/2; disc.parent = root; parts.push(disc);
+                      disc.material = dmat; disc.isPickable = true; disc.alwaysSelectAsActiveMesh = true; disc.renderingGroupId = 3; disc.rotation.x = Math.PI/2; disc.parent = root; parts.push(disc);
                     } catch {}
                   }
                   if (showCast) {
@@ -4099,7 +4164,7 @@ function ensureConnectGizmo() {
                   state._connect.gizmo = { root, parts, disc, cast, key: cfgKey };
                   try {
                     for (const m of parts) {
-                      try { m.renderingGroupId = 4; } catch {}
+                      try { m.renderingGroupId = 3; } catch {}
                       try {
                         const matAny = m.material; if (matAny && matAny instanceof BABYLON.StandardMaterial) {
                           matAny.disableDepthWrite = true; matAny.backFaceCulling = false; matAny.zOffset = Math.max(4, Number(matAny.zOffset||0));
@@ -4107,7 +4172,7 @@ function ensureConnectGizmo() {
                       } catch {}
                     }
                     if (disc && disc.material && disc.material instanceof BABYLON.StandardMaterial) {
-                      try { disc.renderingGroupId = 4; disc.material.disableDepthWrite = true; disc.material.backFaceCulling = false; disc.material.zOffset = Math.max(6, Number(disc.material.zOffset||0)); } catch {}
+                      try { disc.renderingGroupId = 3; disc.material.disableDepthWrite = true; disc.material.backFaceCulling = false; disc.material.zOffset = Math.max(6, Number(disc.material.zOffset||0)); } catch {}
                     }
                   } catch {}
                   try { Log.log('PATH', 'gizmo:created', { key: cfgKey, parts: parts.length, move: !!showMove, rot: !!showRotate, disc: !!showDisc, cast: !!showCast }); } catch {}
@@ -4117,7 +4182,7 @@ function ensureConnectGizmo() {
                   const gNow = state._connect.gizmo;
                   const list = (gNow && Array.isArray(gNow.parts) && gNow.parts.length) ? gNow.parts : (gNow && gNow.root && gNow.root.getChildMeshes ? gNow.root.getChildMeshes() : []);
                   for (const m of list) {
-                    try { m.renderingGroupId = 4; } catch {}
+                    try { m.renderingGroupId = 3; } catch {}
                     try {
                       const matAny = m.material; if (matAny && matAny instanceof BABYLON.StandardMaterial) {
                         matAny.disableDepthWrite = true; matAny.backFaceCulling = false; matAny.zOffset = Math.max(4, Number(matAny.zOffset||0));
@@ -4125,10 +4190,10 @@ function ensureConnectGizmo() {
                     } catch {}
                   }
                   if (gNow && gNow.disc && gNow.disc.material && gNow.disc.material instanceof BABYLON.StandardMaterial) {
-                    try { gNow.disc.renderingGroupId = 4; gNow.disc.material.disableDepthWrite = true; gNow.disc.material.backFaceCulling = false; gNow.disc.material.zOffset = Math.max(6, Number(gNow.disc.material.zOffset||0)); } catch {}
+                    try { gNow.disc.renderingGroupId = 3; gNow.disc.material.disableDepthWrite = true; gNow.disc.material.backFaceCulling = false; gNow.disc.material.zOffset = Math.max(6, Number(gNow.disc.material.zOffset||0)); } catch {}
                   }
                 } catch {}
-                try { state._connect.gizmo.root.position.copyFrom(center); } catch {}
+                try { state._connect.gizmo.root.position.copyFrom(center); } catch (e) { try { Log.log('ERROR', 'PP gizmo position', { error: String(e) }); } catch {} }
                 // Place disc on selection’s lowest Y for convenience
                 try {
                   let minY = center.y;
@@ -4149,7 +4214,7 @@ function ensureConnectGizmo() {
                         dbgMat.emissiveColor = new BABYLON.Color3(1.0, 0.1, 0.8);
                         dbgMat.diffuseColor = new BABYLON.Color3(0,0,0);
                         dbgMat.disableDepthWrite = true; dbgMat.backFaceCulling = false; dbgMat.zOffset = 10;
-                        dbg.material = dbgMat; dbg.isPickable = false; dbg.renderingGroupId = 5;
+                        dbg.material = dbgMat; dbg.isPickable = false; dbg.renderingGroupId = 3;
                         state._connect.debug = { marker: dbg };
                         try { Log.log('PATH', 'debug:marker:create', {}); } catch {}
                       }
@@ -4159,8 +4224,8 @@ function ensureConnectGizmo() {
                       } catch {}
                     }
                   } catch {}
-                } catch {}
-              } catch {}
+                } catch (e) { try { Log.log('ERROR', 'PP gizmo update', { error: String(e) }); } catch {} }
+              } catch (e) { try { Log.log('ERROR', 'PP gizmo ensure', { error: String(e) }); } catch {} }
 }
             // React to settings changes for gizmo parts
             try { window.addEventListener('dw:pathGizmo:config', () => { try { ensureConnectGizmo(); } catch {} }); } catch {}
@@ -4195,27 +4260,25 @@ function ensureConnectGizmo() {
                   const selId = idFromMesh(pickNS?.pickedMesh);
                   const shift = !!(pi.event && pi.event.shiftKey);
                   const cmd = !!(pi.event && pi.event.metaKey);
-                  // Cmd-click on a segment: split into two by inserting a node
-                  if (cmd && selId && selId.startsWith('connect:seg:')) {
+                  // Cmd-click: split nearest segment into two by inserting a node at nearest point
+                  if (cmd) {
                     try {
-                      const i = Number(selId.split(':').pop());
+                      const hit = nearestSegmentAtPointer();
                       const path = Array.isArray(state._connect.path) ? state._connect.path.map(p => ({ x: p.x, y: p.y, z: p.z })) : [];
-                      const a = path[i], b = path[i+1];
-                      if (a && b && pickNS && pickNS.pickedPoint) {
-                        const A = new BABYLON.Vector3(a.x, a.y, a.z);
-                        const B = new BABYLON.Vector3(b.x, b.y, b.z);
-                        const P = pickNS.pickedPoint.clone();
+                      if (hit && path[hit.i] && path[hit.i+1]) {
+                        const A = new BABYLON.Vector3(path[hit.i].x, path[hit.i].y, path[hit.i].z);
+                        const B = new BABYLON.Vector3(path[hit.i+1].x, path[hit.i+1].y, path[hit.i+1].z);
                         const AB = B.subtract(A);
-                        const AP = P.subtract(A);
+                        const AP = hit.point.subtract(A);
                         const ab2 = Math.max(1e-8, AB.lengthSquared());
                         let t = BABYLON.Vector3.Dot(AP, AB) / ab2;
                         t = Math.max(0.08, Math.min(0.92, t));
                         const N = A.add(AB.scale(t));
-                        path.splice(i+1, 0, { x: N.x, y: N.y, z: N.z });
+                        path.splice(hit.i+1, 0, { x: N.x, y: N.y, z: N.z });
                         state._connect.path = path;
                         updateProposalMeshes();
-                        try { state._connect.sel.clear(); state._connect.sel.add(`connect:node:${i+1}`); applySelectionVisual(); } catch {}
-                        try { Log.log('PATH', 'split:insertNode', { seg: i, t, at: { x: N.x, y: N.y, z: N.z } }); } catch {}
+                        try { state._connect.sel.clear(); state._connect.sel.add(`connect:node:${hit.i+1}`); applySelectionVisual(); } catch {}
+                        try { Log.log('PATH', 'split:insertNode', { seg: hit.i, t, at: { x: N.x, y: N.y, z: N.z } }); } catch {}
                         try { const ev = pi.event; ev?.stopImmediatePropagation?.(); ev?.stopPropagation?.(); ev?.preventDefault?.(); } catch {}
                         pi.skipOnPointerObservable = true; return;
                       }
@@ -4355,7 +4418,7 @@ function ensureConnectGizmo() {
               } catch (e) { logErr('EH:voxelConnect:finalize', e); }
               finally { clearProposals(); }
             };
-          } catch (e) { logErr('EH:voxelConnect', e); }
+          } catch (e) { logErr('EH:voxelConnect', e); try { Log.log('ERROR', 'Connect: exception', { error: String(e && e.message ? e.message : e) }); } catch {} }
         });
 
         btnTunnel.addEventListener('click', () => {
