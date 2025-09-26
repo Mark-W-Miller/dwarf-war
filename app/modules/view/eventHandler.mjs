@@ -5,6 +5,8 @@ import { VoxelType, decompressVox } from '../voxels/voxelize.mjs';
 import { Log } from '../util/log.mjs';
 import { renderDbView } from './dbView.mjs';
 import { initDbUiHandlers } from './handlers/ui/db.mjs';
+import { initGizmoHandlers } from './handlers/gizmo.mjs';
+import { initViewManipulations } from './handlers/view.mjs';
 
 // Initialize all UI and scene event handlers that were previously in main.mjs
 export function initEventHandlers({ scene, engine, camApi, camera, state, helpers }) {
@@ -2917,79 +2919,11 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     } catch {}
   })();
 
-  // ——————————— Camera gesture mapping: Right-click = rotate, Cmd+Right = pan ———————————
-  ;(function setupRightClickMapping(){
-    try {
-      // Default: pan on middle button so right-click rotates
-      camera.panningMouseButton = 1;
-      const canvas = engine.getRenderingCanvas();
-      try { canvas.addEventListener('contextmenu', (e) => e.preventDefault()); } catch {}
-      let _rcPanGuard = null; // { saved: number }
-      let _rcDecision = null; // 'rotate' | 'pan' | null
-      function onPointerDownCapture(e){
-        try {
-          const emulateRC = (e.button === 0 && !!e.ctrlKey && !e.metaKey); // ctrl-left as right-click (mac)
-          const rcLike = (e.button === 2) || emulateRC;
-          if (!rcLike) return; // only handle right-click or ctrl-left
-          const isCmd = !!e.metaKey;
-          // Cmd+Right → pan; plain Right → rotate
-          camera.panningMouseButton = isCmd ? 2 : 1;
-          const decision = (camera.panningMouseButton === 2) ? 'pan' : 'rotate';
-          _rcDecision = decision;
-          try { Log.log('CAMERA', 'rc:map', { button: e.button, cmd: !!e.metaKey, ctrl: !!e.ctrlKey, alt: !!e.altKey, emulateRC, rcLike, panningMouseButton: camera.panningMouseButton, decision }); } catch {}
-          try { inputLog('pointer', 'rc:decision', { combo: comboName(e.button || (emulateRC?0:undefined), modsOf(e)), emulateRC, decision }); } catch {}
-          // Targeting policy to avoid visible jumps:
-          // - Shift+RC: recenter to last voxel (or selection center) and rotate
-          // - Plain RC: do NOT recenter (rotate around current target)
-          // - Cmd+RC (pan): do NOT recenter (preserve current framing)
-          const isShift = !!e.shiftKey;
-          let tgtKind = 'none';
-          if (isShift) {
-            const vox = getVoxelPickWorldCenter();
-            const sel = getSelectionCenter();
-            const tgt = vox || sel || null;
-            tgtKind = vox ? 'voxel' : (sel ? 'selection' : 'none');
-            if (tgt) { try { camera.target.copyFrom(tgt); } catch {} }
-          }
-          try { inputLog('pointer', 'rc:target', { shift: !!e.shiftKey, kind: tgtKind }); } catch {}
+  // ——————————— View (camera) manipulations moved to handlers/view.mjs ———————————
+  try { initViewManipulations({ scene, engine, camera, state, helpers: { getSelectionCenter, getVoxelPickWorldCenter } }); } catch (e) { logErr('EH:view:init', e); }
 
-          // Guard against unintended pan when we intend to rotate: temporarily nerf pan sensitivity
-          if (decision === 'rotate') {
-            try {
-              _rcPanGuard = { saved: camera.panningSensibility };
-              camera.panningSensibility = 1e9;
-            } catch {}
-          } else {
-            // Explicit pan: ensure guard is cleared and sensitivity restored
-            if (_rcPanGuard && typeof _rcPanGuard.saved === 'number') {
-              try { camera.panningSensibility = _rcPanGuard.saved; } catch {}
-              _rcPanGuard = null;
-            }
-          }
-        } catch {}
-      }
-      function onPointerMoveCapture(e){
-        try {
-          // While rotating, zero any panning inertia so RC cannot pan even on odd devices
-          if (_rcDecision === 'rotate') {
-            try { camera.inertialPanningX = 0; camera.inertialPanningY = 0; } catch {}
-          }
-        } catch {}
-      }
-      function onPointerUp(){
-        try { camera.panningMouseButton = 1; } catch {}
-        // Restore pan sensitivity if we had guarded it
-        if (_rcPanGuard && typeof _rcPanGuard.saved === 'number') {
-          try { camera.panningSensibility = _rcPanGuard.saved; } catch {}
-          _rcPanGuard = null;
-        }
-        _rcDecision = null;
-      }
-      try { canvas.addEventListener('pointerdown', onPointerDownCapture, { capture: true }); } catch {}
-      try { canvas.addEventListener('pointermove', onPointerMoveCapture, { capture: true }); } catch {}
-      try { window.addEventListener('pointerup', onPointerUp, { capture: true }); } catch {}
-    } catch {}
-  })();
+  // ——————————— Gizmo pre-capture moved to handlers/gizmo.mjs ———————————
+  try { initGizmoHandlers({ scene, engine, camera, state }); } catch (e) { logErr('EH:gizmo:init', e); }
 
   // ——————————— Selection UI side-effects ———————————
   // Do not re-center camera on selection; only manage highlighting visibility.
@@ -2998,15 +2932,18 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       try {
         const sel = (e && e.detail && Array.isArray(e.detail.selection)) ? e.detail.selection : Array.from(state.selection || []);
         if (!sel || sel.length === 0) {
-          // Empty selection: keep current orbit center and fully clear/disable highlight layer to avoid artifacts
+          // Empty selection: keep current orbit center and just clear the highlight layer.
+          // Keep the layer enabled to avoid post-process teardown artifacts (black triangle),
+          // and clear again next frame to be extra safe across browsers.
           try { state.hl?.removeAllMeshes?.(); } catch {}
-          try { state.hl.isEnabled = false; } catch {}
+          try { requestAnimationFrame(() => { try { state.hl?.removeAllMeshes?.(); } catch {} }); } catch {}
+          try { /* keep highlight layer enabled */ state.hl.isEnabled = true; } catch {}
           // Ensure all gizmos are torn down when nothing is selected
           try { disposeMoveWidget(); } catch {}
           try { disposeRotWidget(); } catch {}
           return;
         }
-        // Non-empty selection: enable highlight and set orbit center to selection center
+        // Non-empty selection: ensure highlight layer stays enabled
         try { state.hl.isEnabled = true; } catch {}
         // Refresh gizmos to match current selection
         try { ensureRotWidget(); ensureMoveWidget(); } catch {}

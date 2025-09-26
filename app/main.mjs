@@ -141,6 +141,8 @@ state.barrow = loadBarrow() || makeDefaultBarrow();
 layoutBarrow(state.barrow); // ensure positions from directions
 // Create highlight layer before first halo rebuild so it applies immediately
 state.hl = new BABYLON.HighlightLayer('hl', scene, { blurHorizontalSize: 0.45, blurVerticalSize: 0.45 });
+// Make highlight layer composite transparent when no meshes are highlighted to avoid black-pass artifacts.
+try { state.hl.neutralColor = new BABYLON.Color4(0, 0, 0, 0); } catch {}
 state.hl.innerGlow = true; state.hl.outerGlow = true;
 // Keep highlight layer in group 2 to avoid overlay artifacts (black triangle)
 try { state.hl.renderingGroupId = 2; } catch {}
