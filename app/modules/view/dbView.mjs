@@ -225,6 +225,18 @@ export function renderDbView(barrow) {
       }
       return;
     }
+    // Support Shift-click on summary row to multi-select from the DB tree without toggling
+    const sum = e.target.closest('summary');
+    if (sum && e.shiftKey) {
+      e.preventDefault(); e.stopPropagation();
+      // summary is within details[data-space-id]
+      const details = sum.closest('details[data-space-id]');
+      const id = details && details.dataset ? details.dataset.spaceId : null;
+      if (id) {
+        try { window.dispatchEvent(new CustomEvent('dw:dbRowClick', { detail: { type: 'space', id, shiftKey: true } })); } catch {}
+      }
+      return;
+    }
     // Ignore other clicks inside details for selection to avoid accidental toggles
     // Let the browser handle <summary> toggling naturally
   });

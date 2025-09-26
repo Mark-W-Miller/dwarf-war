@@ -3683,6 +3683,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
         // Connection/proposal state and helpers
         state._connect = state._connect || { props: [], pickObs: null, editObs: null, nodes: [], segs: [], path: null };
         function clearProposals() {
+          try { Log.log('PATH', 'proposal:clear', { props: (state._connect.props||[]).length, nodes: (state._connect.nodes||[]).length, segs: (state._connect.segs||[]).length }); } catch {}
           try {
             for (const p of state._connect.props || []) { try { p.mesh?.dispose?.(); } catch {} }
             for (const n of state._connect.nodes || []) { try { n.mesh?.dispose?.(); } catch {} }
@@ -3690,6 +3691,9 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
             try {
               if (state._connect.gizmo && state._connect.gizmo.root) { try { state._connect.gizmo.root.dispose(); } catch {} }
               if (state._connect.gizmo && state._connect.gizmo.parts) { for (const m of state._connect.gizmo.parts) { try { m.dispose(); } catch {} } }
+            } catch {}
+            try {
+              if (state._connect.debug && state._connect.debug.marker) { try { state._connect.debug.marker.dispose(); } catch {} }
             } catch {}
           } catch {}
           state._connect.props = [];
@@ -3699,6 +3703,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
           if (state._connect.pickObs) { try { scene.onPrePointerObservable.remove(state._connect.pickObs); } catch {}; state._connect.pickObs = null; }
           if (state._connect.editObs) { try { scene.onPrePointerObservable.remove(state._connect.editObs); } catch {}; state._connect.editObs = null; }
           try { btnFinalize.style.display = 'none'; } catch {}
+          try { state._connect.debug = null; } catch {}
         }
         function segLen(a, b) { const dx=b.x-a.x, dy=b.y-a.y, dz=b.z-a.z; return Math.sqrt(dx*dx+dy*dy+dz*dz); }
         function pathLength(path) { let L=0; for (let i=0;i<path.length-1;i++) L+=segLen(path[i], path[i+1]); return L; }
@@ -3808,7 +3813,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
             }
             // Elbow nodes (exclude endpoints)
             for (let i=1;i<pts.length-1;i++) {
-              const s = BABYLON.MeshBuilder.CreateSphere(`connect:node:${i}`, { diameter: 0.6 }, scene);
+              const s = BABYLON.MeshBuilder.CreateSphere(`connect:node:${i}`, { diameter: 0.9 }, scene);
               s.position.copyFrom(pts[i]); s.isPickable = true; s.renderingGroupId = 3;
               const mat = new BABYLON.StandardMaterial(`connect:node:${i}:mat`, scene);
               mat.emissiveColor = new BABYLON.Color3(0.6,0.9,1.0); // base: light blue
@@ -3818,6 +3823,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
               state._connect.nodes.push({ i, mesh: s });
             }
             btnFinalize.style.display = 'inline-block';
+            try { Log.log('PATH', 'proposal:create', { points: path.length, segs: state._connect.segs.length, nodes: state._connect.nodes.length }); } catch {}
           } catch {}
         }
         function updateProposalMeshes() {
@@ -3844,7 +3850,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
             for (const n of state._connect.nodes) { try { n.mesh?.dispose?.(); } catch {} }
             state._connect.nodes = [];
             for (let i=1;i<pts.length-1;i++) {
-              const s = BABYLON.MeshBuilder.CreateSphere(`connect:node:${i}`, { diameter: 0.6 }, scene);
+              const s = BABYLON.MeshBuilder.CreateSphere(`connect:node:${i}`, { diameter: 0.9 }, scene);
               s.position.copyFrom(pts[i]); s.isPickable = true; s.renderingGroupId = 3;
               const mat = new BABYLON.StandardMaterial(`connect:node:${i}:mat`, scene);
               mat.emissiveColor = new BABYLON.Color3(0.6,0.9,1.0);
@@ -3853,6 +3859,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
               s.material = mat;
               state._connect.nodes.push({ i, mesh: s });
             }
+            try { Log.log('PATH', 'proposal:update', { points: path.length, segs: state._connect.segs.length, nodes: state._connect.nodes.length }); } catch {}
           } catch {}
         }
         // ESC to cancel proposed path
@@ -3916,6 +3923,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
             if (!best || best.length < 2) { Log.log('UI', 'Connect: no path found', {}); return; }
             state._connect.path = best;
             createProposalMeshesFromPath(best);
+            try { Log.log('PATH', 'route:chosen', { points: best.length, length: Number(pathLength(best).toFixed(2)) }); } catch {}
             // Deselect spaces now that proposal line exists
             try { state.selection.clear(); rebuildHalos(); window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: [] } })); } catch {}
             Log.log('UI', 'Connect: proposal ready (edit elbows or segments, then Finalize)', {});
@@ -3962,6 +3970,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
               } catch {}
               try { ensureConnectGizmo(); } catch {}
               try { requestAnimationFrame(() => { try { ensureConnectGizmo(); } catch {} }); } catch {}
+              try { Log.log('PATH', 'sel:update', { selected: Array.from(state._connect.sel||[]) }); } catch {}
             }
             function pickPlaneY() {
               try {
@@ -3997,11 +4006,18 @@ function disposeConnectGizmo() {
               state._connect.gizmo = null;
             }
 function ensureConnectGizmo() {
-  // Disabled: no gizmo on proposed path nodes
-  try { Log.log('PATH', 'gizmo:suppressed', {}); } catch {}
-  try { disposeConnectGizmo(); } catch {}
-  return;
   try {
+    // Only show gizmo when at least one PP node is selected
+    const hasSel = !!(state._connect && state._connect.sel && state._connect.sel.size > 0);
+    const hasNodeSel = hasSel && Array.from(state._connect.sel).some(id => String(id||'').startsWith('connect:node:'));
+    if (!hasNodeSel) {
+      try { Log.log('PATH', 'gizmo:suppressed', { reason: hasSel ? 'no-node-selected' : 'empty-selection' }); } catch {}
+      disposeConnectGizmo();
+      try { if (state._connect && state._connect.debug && state._connect.debug.marker) { state._connect.debug.marker.dispose(); } } catch {}
+      try { state._connect.debug = null; } catch {}
+      return;
+    }
+                try { Log.log('PATH', 'gizmo:ensure', { sel: Array.from(state._connect.sel||[]) }); } catch {}
     // Only show gizmo when some path element is selected
     if (!state._connect || !state._connect.sel || state._connect.sel.size === 0) {
       disposeConnectGizmo();
@@ -4012,10 +4028,11 @@ function ensureConnectGizmo() {
                 if (!center) { disposeConnectGizmo(); return; }
                 const g = state._connect.gizmo;
                 const scalePct = Number(localStorage.getItem('dw:ui:gizmoScale') || '100') || 100;
-                const showMove = (() => { try { return localStorage.getItem('dw:ui:pathGizmo:move') !== '0'; } catch { return true; } })();
-                const showRotate = (() => { try { return localStorage.getItem('dw:ui:pathGizmo:rotate') !== '0'; } catch { return true; } })();
-                const showDisc = (() => { try { return localStorage.getItem('dw:ui:pathGizmo:disc') !== '0'; } catch { return true; } })();
-                const showCast = (() => { try { return localStorage.getItem('dw:ui:pathGizmo:cast') !== '0'; } catch { return true; } })();
+                // For PP node gizmo, only show Move arrows and Blue XZ disc
+                const showMove = true;
+                const showRotate = false;
+                const showDisc = true;
+                const showCast = false;
                 // Estimate radius from path extents for sizing
                 let minX=Infinity,minY=Infinity,minZ=Infinity,maxX=-Infinity,maxY=-Infinity,maxZ=-Infinity;
                 for (const p of (state._connect.path||[])) { if (!p) continue; if (p.x<minX)minX=p.x; if (p.y<minY)minY=p.y; if (p.z<minZ)minZ=p.z; if(p.x>maxX)maxX=p.x; if(p.y>maxY)maxY=p.y; if(p.z>maxZ)maxZ=p.z; }
@@ -4026,19 +4043,20 @@ function ensureConnectGizmo() {
                 const tipLen = Math.max(0.12, len * 0.22);
                 const tipDia = shaft * 2.2;
                 const cfgKey = `${showMove?'1':'0'}-${showRotate?'1':'0'}-${showDisc?'1':'0'}-${showCast?'1':'0'}`;
-                if (!g || !g.root || (g.root.isDisposed && g.root.isDisposed()) || g.key !== cfgKey) {
+                const noParts = !g || !g.parts || (Array.isArray(g.parts) && g.parts.length === 0);
+                if (!g || !g.root || (g.root.isDisposed && g.root.isDisposed()) || g.key !== cfgKey || noParts) {
                   disposeConnectGizmo();
                   const root = new BABYLON.TransformNode('connectGizmo:root', scene);
                   const parts = [];
                   const mkArrow = (axis, color) => {
                     const name = `connectGizmo:${axis}`;
-                    const shaftMesh = BABYLON.MeshBuilder.CreateCylinder(`${name}:shaft`, { height: len - tipLen, diameter: shaft }, scene);
-                    const tipMesh = BABYLON.MeshBuilder.CreateCylinder(`${name}:tip`, { height: tipLen, diameterTop: 0, diameterBottom: tipDia, tessellation: 24 }, scene);
+                    const shaftMesh = BABYLON.MeshBuilder.CreateCylinder(`${name}:shaft`, { height: Math.max(0.1, len - Math.max(0.16, tipLen * 1.35)), diameter: Math.max(0.06, shaft * 1.5) }, scene);
+                    const tipMesh = BABYLON.MeshBuilder.CreateCylinder(`${name}:tip`, { height: Math.max(0.16, tipLen * 1.35), diameterTop: 0, diameterBottom: Math.max(Math.max(0.06, shaft * 1.5) * 2.6, tipDia * 1.2), tessellation: 24 }, scene);
                     const mat = new BABYLON.StandardMaterial(`${name}:mat`, scene);
                     mat.diffuseColor = color.scale(0.25); mat.emissiveColor = color.clone(); mat.specularColor = new BABYLON.Color3(0,0,0);
                     shaftMesh.material = mat; tipMesh.material = mat;
                     shaftMesh.isPickable = true; tipMesh.isPickable = true; shaftMesh.alwaysSelectAsActiveMesh = true; tipMesh.alwaysSelectAsActiveMesh = true;
-                    shaftMesh.renderingGroupId = 3; tipMesh.renderingGroupId = 3;
+                    shaftMesh.renderingGroupId = 4; tipMesh.renderingGroupId = 4;
                     shaftMesh.parent = root; tipMesh.parent = root;
                     if (axis === 'x') { shaftMesh.rotation.z = -Math.PI/2; tipMesh.rotation.z = -Math.PI/2; shaftMesh.position.x = (len - tipLen)/2; tipMesh.position.x = len - tipLen/2; }
                     else if (axis === 'y') { shaftMesh.position.y = (len - tipLen)/2; tipMesh.position.y = len - tipLen/2; }
@@ -4063,11 +4081,11 @@ function ensureConnectGizmo() {
                   let disc = null; let cast = null;
                   if (showDisc) {
                     try {
-                      const discR = Math.max(0.6, rad * 0.9 * gScale);
+                      const discR = Math.max(0.8, rad * 1.1 * gScale);
                       disc = BABYLON.MeshBuilder.CreateDisc('connectGizmo:disc', { radius: discR, tessellation: 64 }, scene);
                       const dmat = new BABYLON.StandardMaterial('connectGizmo:disc:mat', scene);
-                      dmat.diffuseColor = new BABYLON.Color3(0.15, 0.5, 0.95); dmat.emissiveColor = new BABYLON.Color3(0.12, 0.42, 0.85); dmat.alpha = 0.18; dmat.specularColor = new BABYLON.Color3(0,0,0);
-                      disc.material = dmat; disc.isPickable = true; disc.alwaysSelectAsActiveMesh = true; disc.renderingGroupId = 3; disc.rotation.x = Math.PI/2; disc.parent = root; parts.push(disc);
+                      dmat.diffuseColor = new BABYLON.Color3(0.15, 0.5, 0.95); dmat.emissiveColor = new BABYLON.Color3(0.12, 0.42, 0.85); dmat.alpha = 0.30; dmat.specularColor = new BABYLON.Color3(0,0,0); dmat.zOffset = 3;
+                      disc.material = dmat; disc.isPickable = true; disc.alwaysSelectAsActiveMesh = true; disc.renderingGroupId = 4; disc.rotation.x = Math.PI/2; disc.parent = root; parts.push(disc);
                     } catch {}
                   }
                   if (showCast) {
@@ -4079,7 +4097,37 @@ function ensureConnectGizmo() {
                     } catch {}
                   }
                   state._connect.gizmo = { root, parts, disc, cast, key: cfgKey };
+                  try {
+                    for (const m of parts) {
+                      try { m.renderingGroupId = 4; } catch {}
+                      try {
+                        const matAny = m.material; if (matAny && matAny instanceof BABYLON.StandardMaterial) {
+                          matAny.disableDepthWrite = true; matAny.backFaceCulling = false; matAny.zOffset = Math.max(4, Number(matAny.zOffset||0));
+                        }
+                      } catch {}
+                    }
+                    if (disc && disc.material && disc.material instanceof BABYLON.StandardMaterial) {
+                      try { disc.renderingGroupId = 4; disc.material.disableDepthWrite = true; disc.material.backFaceCulling = false; disc.material.zOffset = Math.max(6, Number(disc.material.zOffset||0)); } catch {}
+                    }
+                  } catch {}
+                  try { Log.log('PATH', 'gizmo:created', { key: cfgKey, parts: parts.length, move: !!showMove, rot: !!showRotate, disc: !!showDisc, cast: !!showCast }); } catch {}
                 }
+                // Always enforce overlay settings on existing gizmo (handles pre-patch creations)
+                try {
+                  const gNow = state._connect.gizmo;
+                  const list = (gNow && Array.isArray(gNow.parts) && gNow.parts.length) ? gNow.parts : (gNow && gNow.root && gNow.root.getChildMeshes ? gNow.root.getChildMeshes() : []);
+                  for (const m of list) {
+                    try { m.renderingGroupId = 4; } catch {}
+                    try {
+                      const matAny = m.material; if (matAny && matAny instanceof BABYLON.StandardMaterial) {
+                        matAny.disableDepthWrite = true; matAny.backFaceCulling = false; matAny.zOffset = Math.max(4, Number(matAny.zOffset||0));
+                      }
+                    } catch {}
+                  }
+                  if (gNow && gNow.disc && gNow.disc.material && gNow.disc.material instanceof BABYLON.StandardMaterial) {
+                    try { gNow.disc.renderingGroupId = 4; gNow.disc.material.disableDepthWrite = true; gNow.disc.material.backFaceCulling = false; gNow.disc.material.zOffset = Math.max(6, Number(gNow.disc.material.zOffset||0)); } catch {}
+                  }
+                } catch {}
                 try { state._connect.gizmo.root.position.copyFrom(center); } catch {}
                 // Place disc on selection’s lowest Y for convenience
                 try {
@@ -4090,6 +4138,27 @@ function ensureConnectGizmo() {
                   }
                   if (state._connect.gizmo.disc) { state._connect.gizmo.disc.position.set(center.x, minY, center.z); }
                   if (state._connect.gizmo.cast) { state._connect.gizmo.cast.position.set(center.x, minY, center.z); }
+                  try { Log.log('PATH', 'gizmo:update', { center: { x:center.x, y:center.y, z:center.z }, minY }); } catch {}
+                  // ——— Debug marker at gizmo center ———
+                  try {
+                    const wantDbg = true; // always on to diagnose
+                    if (wantDbg) {
+                      if (!state._connect.debug || !state._connect.debug.marker || (state._connect.debug.marker.isDisposed && state._connect.debug.marker.isDisposed())) {
+                        const dbg = BABYLON.MeshBuilder.CreateSphere('connectGizmo:debug:mark', { diameter: Math.max(0.6, rad * 0.6) }, scene);
+                        const dbgMat = new BABYLON.StandardMaterial('connectGizmo:debug:mat', scene);
+                        dbgMat.emissiveColor = new BABYLON.Color3(1.0, 0.1, 0.8);
+                        dbgMat.diffuseColor = new BABYLON.Color3(0,0,0);
+                        dbgMat.disableDepthWrite = true; dbgMat.backFaceCulling = false; dbgMat.zOffset = 10;
+                        dbg.material = dbgMat; dbg.isPickable = false; dbg.renderingGroupId = 5;
+                        state._connect.debug = { marker: dbg };
+                        try { Log.log('PATH', 'debug:marker:create', {}); } catch {}
+                      }
+                      try {
+                        const dbg = state._connect.debug.marker;
+                        dbg.position.set(center.x, minY + Math.max(0.3, (state?.barrow?.meta?.voxelSize||1) * 0.2), center.z);
+                      } catch {}
+                    }
+                  } catch {}
                 } catch {}
               } catch {}
 }
@@ -4102,15 +4171,14 @@ function ensureConnectGizmo() {
                     const nmDbg = (() => { const p = scene.pick(scene.pointerX, scene.pointerY); return p?.pickedMesh?.name || ''; })();
                     const m = pi.event; Log.log('PATH', 'pointer:down', { name: nmDbg, shift: !!m?.shiftKey, cmd: !!m?.metaKey, alt: !!m?.altKey, ctrl: !!m?.ctrlKey });
                   } catch {}
-                  // Prioritize PP node selection before gizmo activation
-                  const pickNS = scene.pick(scene.pointerX, scene.pointerY, (m) => m && typeof m.name === 'string' && (m.name.startsWith('connect:node:') || m.name.startsWith('connect:seg:')));
-                  const selId = idFromMesh(pickNS?.pickedMesh);
-                  const shift = !!(pi.event && pi.event.shiftKey);
-                  const cmd = !!(pi.event && pi.event.metaKey);
-                  if (selId && selId.startsWith('connect:node:')) {
-                    try { Log.log('PATH', 'select:node', { id: selId }); } catch {}
+                  // Strict priority: nodes first
+                  const pickNode = scene.pick(scene.pointerX, scene.pointerY, (m) => m && typeof m.name === 'string' && m.name.startsWith('connect:node:'));
+                  if (pickNode?.hit && pickNode.pickedMesh) {
+                    const nodeId = idFromMesh(pickNode.pickedMesh);
+                    const shift = !!(pi.event && pi.event.shiftKey);
+                    try { Log.log('PATH', 'select:node', { id: nodeId }); } catch {}
                     if (!shift) state._connect.sel.clear();
-                    if (state._connect.sel.has(selId) && shift) state._connect.sel.delete(selId); else state._connect.sel.add(selId);
+                    if (state._connect.sel.has(nodeId) && shift) state._connect.sel.delete(nodeId); else state._connect.sel.add(nodeId);
                     applySelectionVisual();
                     try { requestAnimationFrame(() => { try { ensureConnectGizmo(); } catch {} }); } catch {}
                     // Prepare ground-plane drag for nodes only
@@ -4119,9 +4187,14 @@ function ensureConnectGizmo() {
                     drag.planeY = pickPlaneY();
                     drag.startPt = pickPointOnPlaneY(drag.planeY);
                     drag.basePts = JSON.parse(JSON.stringify(state._connect.path));
+                    try { Log.log('PATH', 'drag:start', { type: drag.type, ids: drag.ids, planeY: drag.planeY }); } catch {}
                     try { const ev = pi.event; ev?.stopImmediatePropagation?.(); ev?.stopPropagation?.(); ev?.preventDefault?.(); } catch {}
                     pi.skipOnPointerObservable = true; return;
                   }
+                  const pickNS = scene.pick(scene.pointerX, scene.pointerY, (m) => m && typeof m.name === 'string' && m.name.startsWith('connect:seg:'));
+                  const selId = idFromMesh(pickNS?.pickedMesh);
+                  const shift = !!(pi.event && pi.event.shiftKey);
+                  const cmd = !!(pi.event && pi.event.metaKey);
                   // Cmd-click on a segment: split into two by inserting a node
                   if (cmd && selId && selId.startsWith('connect:seg:')) {
                     try {
@@ -4242,10 +4315,12 @@ function ensureConnectGizmo() {
                   }
                   state._connect.path = path;
                   updateProposalMeshes();
+                  try { const now = performance.now(); drag._lastLog = drag._lastLog||0; if (now - drag._lastLog > 150) { drag._lastLog = now; Log.log('PATH', 'drag:update', { type: drag.type, ids: drag.ids, dx, dz }); } } catch {}
                   pi.skipOnPointerObservable = true;
                 } else if (pi.type === BABYLON.PointerEventTypes.POINTERUP) {
                   if (drag.active || drag.gizmoActive) {
                     drag.active = false; drag.gizmoActive = false; drag.ids = []; drag.basePts = null;
+                    try { Log.log('PATH', 'drag:end', {}); } catch {}
                     // Reattach camera pointer input and release capture
                     try {
                       const canvas = engine.getRenderingCanvas();
