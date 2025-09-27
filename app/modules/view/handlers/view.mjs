@@ -45,6 +45,8 @@ export function initViewManipulations({ scene, engine, camera, state, helpers })
   function onPointerDownCapture(e) {
     try {
       if (state.mode !== 'edit') return;
+      // If modifiers are active, do not claim gizmo (spec: modifiers bypass gizmo)
+      if (e && (e.metaKey || e.shiftKey || e.ctrlKey || e.altKey)) return;
       // If a gizmo part is under the cursor, temporarily claim the pointer for view to prevent camera handling.
       // Do NOT stop the event — Babylon/gizmo handlers still need it.
       if (isGizmoHitAt(e)) {

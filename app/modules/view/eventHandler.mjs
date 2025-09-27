@@ -4,9 +4,13 @@ import { buildSceneFromBarrow, disposeBuilt } from '../barrow/builder.mjs';
 import { VoxelType, decompressVox } from '../voxels/voxelize.mjs';
 import { Log } from '../util/log.mjs';
 import { renderDbView } from './dbView.mjs';
+import { initErrorBar } from './errorBar.mjs';
 import { initDbUiHandlers } from './handlers/ui/db.mjs';
-import { initGizmoHandlers } from './handlers/gizmo.mjs';
+import { initGizmoHandlers, initTransformGizmos } from './handlers/gizmo.mjs';
 import { initViewManipulations } from './handlers/view.mjs';
+import { initPanelUI } from './handlers/ui/panel.mjs';
+import { initSelectionUI } from './handlers/ui/selection.mjs';
+import { initTabsUI } from './handlers/ui/tabs.mjs';
 
 // Initialize all UI and scene event handlers that were previously in main.mjs
 export function initEventHandlers({ scene, engine, camApi, camera, state, helpers }) {
@@ -21,54 +25,14 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
   function mLog(ev, data = {}) {
     try { Log.log('MOVE', ev, data); } catch {}
   }
-  // ——————————— Error banner (top of screen) ———————————
-  let _errBar = null; let _errList = null; let _errTimer = null;
-  function ensureErrorBar() {
-    if (_errBar && document.body.contains(_errBar)) return _errBar;
-    const bar = document.createElement('div');
-    bar.id = 'errorBanner';
-    bar.style.position = 'fixed'; bar.style.top = '0'; bar.style.left = '0'; bar.style.right = '0';
-    bar.style.zIndex = '2000'; bar.style.display = 'none';
-    bar.style.background = 'rgba(180,0,0,0.92)'; bar.style.color = '#fff';
-    bar.style.fontFamily = 'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
-    bar.style.fontSize = '12px'; bar.style.padding = '6px 10px';
-    bar.style.borderBottom = '1px solid rgba(255,255,255,0.25)';
-    const head = document.createElement('div'); head.style.display = 'flex'; head.style.justifyContent = 'space-between'; head.style.alignItems = 'center';
-    const title = document.createElement('div'); title.textContent = 'Errors'; title.style.fontWeight = '600'; title.style.marginRight = '8px';
-    const btn = document.createElement('button'); btn.textContent = '×'; btn.title = 'Dismiss'; btn.style.background = 'transparent'; btn.style.color = '#fff'; btn.style.border = 'none'; btn.style.cursor = 'pointer'; btn.style.fontSize = '14px'; btn.onclick = () => { bar.style.display = 'none'; };
-    head.appendChild(title); head.appendChild(btn);
-    const list = document.createElement('div'); list.style.marginTop = '4px';
-    bar.appendChild(head); bar.appendChild(list);
-    document.body.appendChild(bar);
-    _errBar = bar; _errList = list;
-    return bar;
-  }
-  function showErrorMessage(cls, msg, data) {
-    try {
-      ensureErrorBar();
-      const line = document.createElement('div');
-      const at = new Date().toLocaleTimeString();
-      let detail = '';
-      try { if (data && (data.error || data.message)) detail = ` — ${String(data.error || data.message)}`; } catch {}
-      line.textContent = `[${at}] ${msg}${detail}`;
-      _errList.appendChild(line);
-      _errBar.style.display = 'block';
-      // Keep last 6 lines
-      try { while (_errList.childElementCount > 6) _errList.removeChild(_errList.firstChild); } catch {}
-      // Auto-hide after 10s if no new errors
-      if (_errTimer) { clearTimeout(_errTimer); _errTimer = null; }
-      _errTimer = setTimeout(() => { try { _errBar.style.display = 'none'; } catch {} }, 10000);
-    } catch {}
-  }
-  try {
-    Log.on(({ entries }) => {
-      const last = entries && entries.length ? entries[entries.length - 1] : null;
-      if (!last) return;
-      if (String(last.cls).toUpperCase() === 'ERROR') {
-        showErrorMessage(last.cls, last.msg, last.data);
-      }
-    });
-  } catch {}
+  // Gizmo integration placeholders (populated by handlers/gizmo.mjs)
+  let _gizmosSuppressed = false;
+  let setGizmoHudVisible = (v) => {};
+  let renderGizmoHud = () => {};
+  let suppressGizmos = (on) => { _gizmosSuppressed = !!on; };
+  let _GIZMO_DCLICK_MS = Number(localStorage.getItem('dw:ui:doubleClickMs') || '500') || 500;
+  // ——————————— Error banner ———————————
+  try { initErrorBar(Log); } catch {}
   // Unified input logging helpers
   function inputLog(kind, msg, data = {}) { try { Log.log('INPUT', `${kind}:${msg}`, data); } catch {} }
   function modsOf(ev) {
@@ -205,70 +169,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
   const panel = document.getElementById('rightPanel');
   const collapsePanelBtn = document.getElementById('collapsePanel');
 
-  // ——————————— Resizable panel ———————————
-  (function setupPanelResizer(){
-    if (!panel) return;
-    // Apply stored width
-    try {
-      const w = Number(localStorage.getItem('dw:ui:panelWidth')||'0')||0;
-      if (w >= 240 && w <= Math.max(260, window.innerWidth - 80)) panel.style.width = w + 'px';
-    } catch {}
-    // Create resizer handle on the left edge
-    const handle = document.createElement('div');
-    handle.id = 'panelResizer';
-    handle.style.position = 'absolute';
-    handle.style.left = '-6px';
-    handle.style.top = '0';
-    handle.style.width = '8px';
-    handle.style.height = '100%';
-    handle.style.cursor = 'ew-resize';
-    handle.style.background = 'transparent';
-    handle.style.zIndex = '5';
-    handle.title = 'Drag to resize panel';
-    panel.appendChild(handle);
-
-    let dragging = false; let startX = 0; let startW = 0;
-    function onMove(e){
-      if (!dragging) return;
-      const dx = (startX - (e.clientX || 0)); // dragging left increases width
-      let w = Math.round(startW + dx);
-      const maxW = Math.max(260, window.innerWidth - 80);
-      w = Math.max(240, Math.min(maxW, w));
-      panel.style.width = w + 'px';
-      try { localStorage.setItem('dw:ui:panelWidth', String(w)); } catch (e) { logErr('EH:panel:setWidth', e); }
-    }
-    function onUp(e){
-      if (!dragging) return;
-      dragging = false;
-      try { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); } catch (e) { logErr('EH:panel:rmMouse', e); }
-      try { document.removeEventListener('touchmove', onMove); document.removeEventListener('touchend', onUp); } catch (e) { logErr('EH:panel:rmTouch', e); }
-    }
-    handle.addEventListener('mousedown', (e) => {
-      if (panel.classList.contains('collapsed')) return;
-      dragging = true; startX = e.clientX || 0; startW = panel.getBoundingClientRect().width;
-      document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
-      e.preventDefault(); e.stopPropagation();
-    });
-    handle.addEventListener('touchstart', (e) => {
-      if (panel.classList.contains('collapsed')) return;
-      const t = e.touches && e.touches[0]; if (!t) return;
-      dragging = true; startX = t.clientX; startW = panel.getBoundingClientRect().width;
-      document.addEventListener('touchmove', onMove, { passive:false }); document.addEventListener('touchend', onUp);
-      e.preventDefault(); e.stopPropagation();
-    }, { passive:false });
-    // Hide resizer when collapsed
-    const obs = new MutationObserver(() => { handle.style.display = panel.classList.contains('collapsed') ? 'none' : 'block'; });
-    try { obs.observe(panel, { attributes:true, attributeFilter:['class'] }); } catch (e) { logErr('EH:panel:obs', e); }
-    handle.style.display = panel.classList.contains('collapsed') ? 'none' : 'block';
-    window.addEventListener('resize', () => {
-      // Clamp panel width on viewport resize
-      try {
-        const maxW = Math.max(260, window.innerWidth - 80);
-        const cur = panel.getBoundingClientRect().width;
-        if (cur > maxW) { panel.style.width = maxW + 'px'; localStorage.setItem('dw:ui:panelWidth', String(maxW)); }
-      } catch (e) { logErr('EH:panel:clampWidth', e); }
-    });
-  })();
+  // Panel resizer/collapse handled in ui/panel.mjs
 
   // ——————————— Mode and run/pause ———————————
   document.querySelectorAll('input[name="mode"]').forEach(r => {
@@ -416,80 +317,13 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     return Math.atan2(dy, dx);
   }
 
-  // ——————————— Gizmo HUD (temporary) ———————————
-  let _gizmoHudEl = null;
-  let _gizmosSuppressed = false;
-  function ensureGizmoHud() {
-    if (_gizmoHudEl && document.body.contains(_gizmoHudEl)) return _gizmoHudEl;
-    const el = document.createElement('div'); el.id = 'gizmoHud';
-    el.style.position = 'absolute'; el.style.left = '10px'; el.style.top = '32px';
-    el.style.background = 'rgba(10,14,18,0.85)'; el.style.border = '1px solid #1e2a30'; el.style.borderRadius = '6px';
-    el.style.padding = '6px 8px'; el.style.color = '#e3edf3'; el.style.fontSize = '11px'; el.style.fontFamily = 'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
-    el.style.pointerEvents = 'none'; el.style.zIndex = '9999'; el.style.display = 'none';
-    el.textContent = 'Gizmo Live';
-    document.body.appendChild(el); _gizmoHudEl = el; return el;
-  }
-  function setGizmoHudVisible(v) { try { ensureGizmoHud().style.display = v ? 'block' : 'none'; } catch (e) { logErr('EH:setGizmoHudVisible', e); } }
-  function renderGizmoHud({ selCount=0, center=null, deltaDeg=null, pickMode='-' }={}) {
-    try {
-      const el = ensureGizmoHud();
-      const c = center ? { x: Number(center.x||0).toFixed(2), y: Number(center.y||0).toFixed(2), z: Number(center.z||0).toFixed(2) } : { x: '-', y: '-', z: '-' };
-      const d = (deltaDeg == null || !isFinite(deltaDeg)) ? '-' : String(Math.round(deltaDeg));
-      el.innerHTML = `
-        <div style="opacity:0.8; font-weight:600; margin-bottom:2px;">Gizmo Live</div>
-        <div>Sel: ${selCount}</div>
-        <div>Center: ${c.x}, ${c.y}, ${c.z}</div>
-        <div>Δ: ${d}°</div>
-        <div>Mode: ${pickMode}</div>
-      `;
-    } catch (e) { logErr('EH:renderGizmoHud', e); }
-  }
-
-  // ——————————— Gizmo suppression for long ops ———————————
-  function suppressGizmos(on) {
-    _gizmosSuppressed = !!on;
-    if (_gizmosSuppressed) {
-      try { Log.log('GIZMO', 'Suppress on', { reason: 'voxel-op' }); } catch {}
-      try { if (rotWidget) { rotWidget.dragging = false; rotWidget.preDrag = false; rotWidget.axis = null; } } catch {}
-      try { if (moveWidget) { moveWidget.dragging = false; moveWidget.preDrag = false; moveWidget.axis = null; } } catch {}
-      try { disposeMoveWidget(); } catch {}
-      try { disposeRotWidget(); } catch {}
-      try { setGizmoHudVisible(false); } catch {}
-    } else {
-      try { Log.log('GIZMO', 'Suppress off', {}); } catch {}
-      try { ensureRotWidget(); ensureMoveWidget(); } catch {}
-    }
-  }
-  try {
-    window.addEventListener('dw:gizmos:disable', () => suppressGizmos(true));
-    window.addEventListener('dw:gizmos:enable', () => suppressGizmos(false));
-  } catch {}
-
-  // Global enable/disable for gizmos during long operations (merge/bake/fill)
-  function suppressGizmos(on) {
-    _gizmosSuppressed = !!on;
-    if (_gizmosSuppressed) {
-      try { Log.log('GIZMO', 'Suppress on', { reason: 'voxel-op' }); } catch {}
-      // Cancel any in-progress drags
-      try { if (rotWidget) { rotWidget.dragging = false; rotWidget.preDrag = false; rotWidget.axis = null; } } catch {}
-      try { if (moveWidget) { moveWidget.dragging = false; moveWidget.preDrag = false; moveWidget.axis = null; } } catch {}
-      try { disposeMoveWidget(); } catch {}
-      try { disposeRotWidget(); } catch {}
-      try { setGizmoHudVisible(false); } catch {}
-    } else {
-      try { Log.log('GIZMO', 'Suppress off', {}); } catch {}
-      try { ensureRotWidget(); ensureMoveWidget(); } catch {}
-    }
-  }
-  try {
-    window.addEventListener('dw:gizmos:disable', () => suppressGizmos(true));
-    window.addEventListener('dw:gizmos:enable', () => suppressGizmos(false));
-  } catch {}
+  // Gizmo HUD + suppression now provided by handlers/gizmo.mjs
 
   // ——————————— Cavern Mode + Scry Ball ———————————
   // Keep a reference to the scry ball and view state so we can restore War Room View
   state._scry = { ball: null, prev: null, exitObs: null, prevWallOpacity: null, prevRockOpacity: null };
 
+  /* BEGIN moved to handlers/scry.mjs and handlers/cavern.mjs */
   function disposeScryBall() {
     try { state._scry.ball?.dispose?.(); } catch {}
     state._scry.ball = null;
@@ -675,6 +509,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       try { if (state._scry.exitObs) { engine.onBeginFrameObservable.remove(state._scry.exitObs); state._scry.exitObs = null; } } catch {}
     } catch (e) { logErr('EH:exitCavern', e); }
   }
+  /* END moved */
 
   // ——————————— Scryball Mode ———————————
   function voxelValueAtWorld(space, wx, wy, wz) {
@@ -1965,7 +1800,6 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
 
   // Pointer interactions for rotation widget
   let _lastGizmoClick = 0;
-  const _GIZMO_DCLICK_MS = Number(localStorage.getItem('dw:ui:doubleClickMs') || '500') || 500;
   scene.onPointerObservable.add((pi) => {
     // Block gizmo input while suppressed (voxelizing)
     if (_gizmosSuppressed) {
@@ -2924,33 +2758,27 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
 
   // ——————————— Gizmo pre-capture moved to handlers/gizmo.mjs ———————————
   try { initGizmoHandlers({ scene, engine, camera, state }); } catch (e) { logErr('EH:gizmo:init', e); }
-
-  // ——————————— Selection UI side-effects ———————————
-  // Do not re-center camera on selection; only manage highlighting visibility.
+  // Bind transform gizmo API (rotate/move) from module into local names
   try {
-    window.addEventListener('dw:selectionChange', (e) => {
-      try {
-        const sel = (e && e.detail && Array.isArray(e.detail.selection)) ? e.detail.selection : Array.from(state.selection || []);
-        if (!sel || sel.length === 0) {
-          // Empty selection: keep current orbit center and just clear the highlight layer.
-          // Keep the layer enabled to avoid post-process teardown artifacts (black triangle),
-          // and clear again next frame to be extra safe across browsers.
-          try { state.hl?.removeAllMeshes?.(); } catch {}
-          try { requestAnimationFrame(() => { try { state.hl?.removeAllMeshes?.(); } catch {} }); } catch {}
-          try { /* keep highlight layer enabled */ state.hl.isEnabled = true; } catch {}
-          // Ensure all gizmos are torn down when nothing is selected
-          try { disposeMoveWidget(); } catch {}
-          try { disposeRotWidget(); } catch {}
-          return;
-        }
-        // Non-empty selection: ensure highlight layer stays enabled
-        try { state.hl.isEnabled = true; } catch {}
-        // Refresh gizmos to match current selection
-        try { ensureRotWidget(); ensureMoveWidget(); } catch {}
-        // Intentionally leave camera.target unchanged to avoid re-centering on selection
-      } catch {}
-    });
-  } catch {}
+    const giz = initTransformGizmos({ scene, engine, camera, state, renderDbView });
+    // Bind state and core APIs
+    rotWidget = giz.rotWidget; moveWidget = giz.moveWidget;
+    disposeRotWidget = giz.disposeRotWidget; ensureRotWidget = giz.ensureRotWidget;
+    disposeMoveWidget = giz.disposeMoveWidget; ensureMoveWidget = giz.ensureMoveWidget;
+    pickPointOnPlane = giz.pickPointOnPlane; setRingsDim = giz.setRingsDim; setRingActive = giz.setRingActive;
+    updateRotWidgetFromMesh = giz.updateRotWidgetFromMesh; _GIZMO_DCLICK_MS = giz._GIZMO_DCLICK_MS;
+    // Wrap HUD + suppression to keep local suppressed flag in sync
+    const __setGizmoHudVisible = giz.setGizmoHudVisible;
+    const __renderGizmoHud = giz.renderGizmoHud;
+    const __suppressGizmos = giz.suppressGizmos;
+    setGizmoHudVisible = (v) => { try { __setGizmoHudVisible(v); } catch {} };
+    renderGizmoHud = (opts) => { try { __renderGizmoHud(opts||{}); } catch {} };
+    suppressGizmos = (on) => { _gizmosSuppressed = !!on; try { __suppressGizmos(on); } catch {} };
+    try { window.addEventListener('dw:gizmos:disable', () => suppressGizmos(true)); window.addEventListener('dw:gizmos:enable', () => suppressGizmos(false)); } catch {}
+  } catch (e) { logErr('EH:gizmo:bind', e); }
+
+  // Selection UI side-effects moved to handlers/ui/selection.mjs
+  try { initSelectionUI({ state, scene, engine, camera, rebuildHalos, ensureRotWidget, ensureMoveWidget }); } catch {}
 
   // Brush-select: while left mouse held after an initial voxel pick, keep adding voxels under the cursor
   scene.onPointerObservable.add((pi) => {
@@ -3038,40 +2866,17 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       } catch {}
     }
     if (!pick?.hit || !pick.pickedMesh) {
-      // No mesh pick — attempt voxel-level pick only when Cmd is held; otherwise ignore
-      if (isCmd) {
-        try {
-          let best = { t: Infinity, id: null };
-          for (const sp of (state?.barrow?.spaces || [])) {
-            if (!sp || !sp.vox || !sp.vox.size) continue;
-            const hit = voxelHitAtPointerForSpace(sp);
-            if (hit && isFinite(hit.t) && hit.t < best.t) best = { t: hit.t, id: sp.id };
-          }
-          if (best.id) {
-            id = best.id; name = 'space:' + id; // proceed as if mesh pick hit
-          } else {
-            // Cmd-left-click on empty space deselects all
-            try {
-              if (isLeft) {
-                state.selection.clear();
-                sLog('edit:deselectAll', { via: 'cmd-left-empty' });
-                try { inputLog('pointer', 'select:deselectAll', { combo: comboName(ev?.button, modsOf(ev)), via: 'cmd-left-empty' }); } catch {}
-                try { disposeLiveIntersections(); } catch {}
-                try { disposeMoveWidget(); } catch {}
-                try { disposeRotWidget(); } catch {}
-                try { disposeContactShadow(); } catch {}
-                rebuildHalos();
-                try { window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: [] } })); } catch {}
-                try { scene.render(); requestAnimationFrame(() => { try { scene.render(); } catch {} }); } catch {}
-              }
-            } catch {}
-            return;
-          }
-        } catch { return; }
+      // No mesh hit
+      if (isLeft) {
+        // LC on empty: clear selection
+        try { state.selection.clear(); } catch {}
+        try { rebuildHalos(); } catch {}
+        try { window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: [] } })); } catch {}
+        try { inputLog('pointer', 'select:deselectAll', { combo: comboName(ev?.button, modsOf(ev)), via: isCmd ? 'cmd-left-empty' : 'left-empty' }); } catch {}
       } else {
         try { inputLog('pointer', 'noHit:ignore', { combo: comboName(ev?.button, modsOf(ev)) }); } catch {}
-        return;
       }
+      return;
     }
     const pickedName = pick.pickedMesh.name; // space:<id> or cavern:<id> or space:<id>:label
     let id = '';
@@ -3085,27 +2890,21 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       id = pickedName.slice('cavern:'.length);
       name = 'cavern:' + id;
     }
-    // Prefer voxel hit id only when Cmd is held (voxel-precise selection); otherwise keep base mesh pick
-    let cmdVoxelFound = false;
-    if (isCmd) {
-      try {
-        let best = { t: Infinity, id: null };
-        for (const sp of (state?.barrow?.spaces || [])) {
-          if (!sp || !sp.vox || !sp.vox.size) continue;
-          const hit = voxelHitAtPointerForSpace(sp);
-          if (hit && isFinite(hit.t) && hit.t < best.t) best = { t: hit.t, id: sp.id };
+    // Cmd-Click selection (ignore gizmo/PP; operate on spaces)
+    if (isCmd && isLeft) {
+      if (name.startsWith('space:')) {
+        if (isShift) {
+          if (state.selection.has(id)) state.selection.delete(id); else state.selection.add(id);
+        } else {
+          state.selection.clear(); state.selection.add(id);
         }
-        if (best.id) { id = best.id; name = 'space:' + id; cmdVoxelFound = true; }
-      } catch {}
+        try { rebuildHalos(); ensureRotWidget(); ensureMoveWidget(); } catch {}
+        try { window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: Array.from(state.selection) } })); } catch {}
+      }
+      return;
     }
     dPick('selectId', { id, name });
-    // Only compute voxel pick (and emit dw:voxelPick) for Cmd-click; plain left click should not pick voxels
-    if (isCmd) {
-      try {
-        const s = (state?.barrow?.spaces || []).find(x => x && x.id === id);
-        if (s && s.vox && s.vox.size) doVoxelPickAtPointer(s);
-      } catch {}
-    }
+    // Only compute voxel pick for plain LC (Cmd ignored per spec)
     sLog('edit:selectId', { id, name });
     // Double-click detection before handling plain-left voxel selection
     {
@@ -3416,48 +3215,16 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
 
   // ——————————— Tabs setup ———————————
   (function setupTabs() {
-    const panelContent = document.querySelector('.panel-content');
-    if (!panelContent) return;
-    // Create tabs bar and panes
-    const tabsBar = document.createElement('div'); tabsBar.className = 'tabs';
-    const tabEditBtn = document.createElement('button'); tabEditBtn.className = 'tab active'; tabEditBtn.dataset.tab = 'tab-edit'; tabEditBtn.textContent = 'Edit';
-    const tabDbBtn = document.createElement('button'); tabDbBtn.className = 'tab'; tabDbBtn.dataset.tab = 'tab-db'; tabDbBtn.textContent = 'Database';
-    const tabSettingsBtn = document.createElement('button'); tabSettingsBtn.className = 'tab'; tabSettingsBtn.dataset.tab = 'tab-settings'; tabSettingsBtn.textContent = 'Settings';
-    tabsBar.appendChild(tabEditBtn); tabsBar.appendChild(tabDbBtn);
-    tabsBar.appendChild(tabSettingsBtn);
-
-    const editPane = document.createElement('div'); editPane.id = 'tab-edit'; editPane.className = 'tab-pane active';
-    const dbPane = document.createElement('div'); dbPane.id = 'tab-db'; dbPane.className = 'tab-pane';
-    const settingsPane = document.createElement('div'); settingsPane.id = 'tab-settings'; settingsPane.className = 'tab-pane';
-
-    // Move existing children into editPane
-    const existing = Array.from(panelContent.childNodes);
-    panelContent.textContent = '';
-    panelContent.appendChild(tabsBar);
-    panelContent.appendChild(editPane);
-    panelContent.appendChild(dbPane);
-    panelContent.appendChild(settingsPane);
-    for (const node of existing) editPane.appendChild(node);
-
-    // Split the first row: move Reset/Export/Import controls into DB pane
-    const firstRow = editPane.querySelector('.row');
-    if (firstRow) {
-      const dbRow = document.createElement('div'); dbRow.className = 'row';
-      const idsToMove = ['reset','export','import','importFile'];
-      for (const id of idsToMove) {
-        const el = firstRow.querySelector('#' + id) || editPane.querySelector('#' + id);
-        if (el) dbRow.appendChild(el);
-      }
-      if (dbRow.childElementCount > 0) dbPane.appendChild(dbRow);
-    }
-
-    // Add twist-open database view container
-    const dbView = document.createElement('div');
-    dbView.id = 'dbView';
-    dbView.className = 'db-view';
-    dbPane.appendChild(dbView);
-    // Populate the database view now that the container exists
-    try { renderDbView(state.barrow); } catch {}
+    // Delegate creation of tabs/panes to initTabsUI
+    let editPane = null, dbPane = null, settingsPane = null;
+    try {
+      const created = initTabsUI({ renderDbView, state, Log }) || {};
+      editPane = created.editPane || document.getElementById('tab-edit');
+      dbPane = created.dbPane || document.getElementById('tab-db');
+      settingsPane = created.settingsPane || document.getElementById('tab-settings');
+    } catch {}
+    // If panes are missing, nothing to do
+    if (!editPane) return;
 
     // ——— Voxel Operations (Edit tab, bottom section) ———
     (function addVoxelOpsSection(){
@@ -4500,14 +4267,7 @@ function ensureConnectGizmo() {
         try { window.dispatchEvent(new CustomEvent('dw:tabChange', { detail: { id: tabId } })); } catch {}
       } catch {}
     }
-    // Generic delegation: any button with class 'tab' switches panes
-    tabsBar.addEventListener('click', (e) => {
-      const btn = e.target && e.target.closest ? e.target.closest('.tab') : null;
-      if (!btn || !btn.dataset || !btn.dataset.tab) return;
-      activate(btn.dataset.tab);
-    });
-    // Notify others that tabs are ready
-    try { window.dispatchEvent(new CustomEvent('dw:tabsReady', { detail: {} })); } catch {}
+    // Tabs activation handled by initTabsUI
   })();
 
   // ——————————— External transforms (buttons/commands) ———————————
