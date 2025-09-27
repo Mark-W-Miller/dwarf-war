@@ -1,15 +1,18 @@
 // Database-related UI/event handlers split from eventHandler.mjs
 // Initializes listeners for DB edits, selection via DB tree, delete/undo, and open-to-space.
-import { saveBarrow, snapshot, undoLast } from '../../../barrow/store.mjs';
+import { saveBarrow, snapshot, undoLast, loadBarrow, cloneForSave, inflateAfterLoad } from '../../../barrow/store.mjs';
 import { buildSceneFromBarrow, disposeBuilt } from '../../../barrow/builder.mjs';
+import { makeDefaultBarrow, mergeInstructions, layoutBarrow } from '../../../barrow/schema.mjs';
 import { renderDbView } from '../../dbView.mjs';
 import { Log } from '../../../util/log.mjs';
 
 export function initDbUiHandlers(ctx) {
   const { scene, engine, camApi, camera, state, helpers, gizmo } = ctx;
-  const { rebuildScene, rebuildHalos, scheduleGridUpdate, updateHud } = helpers || {};
+  const { rebuildScene, rebuildHalos, scheduleGridUpdate, updateHud, exitCavernMode, exitScryMode } = helpers || {};
   const ensureRotWidget = gizmo && gizmo.ensureRotWidget ? gizmo.ensureRotWidget : (() => {});
   const ensureMoveWidget = gizmo && gizmo.ensureMoveWidget ? gizmo.ensureMoveWidget : (() => {});
+  const disposeRotWidget = gizmo && gizmo.disposeRotWidget ? gizmo.disposeRotWidget : (() => {});
+  const disposeMoveWidget = gizmo && gizmo.disposeMoveWidget ? gizmo.disposeMoveWidget : (() => {});
 
   // Apply live DB edits back into scene and gizmos
   window.addEventListener('dw:dbEdit', (e) => {
@@ -155,4 +158,63 @@ export function initDbUiHandlers(ctx) {
       panel.style.pointerEvents = '';
     }
   }
+
+  // ——————————— Reset/Export/Import ———————————
+  const resetBtn = document.getElementById('reset');
+  const exportBtn = document.getElementById('export');
+  const importBtn = document.getElementById('import');
+  const importFile = document.getElementById('importFile');
+
+  resetBtn?.addEventListener('click', () => {
+    try { disposeMoveWidget(); } catch {}
+    try { disposeRotWidget(); } catch {}
+    try { state.selection.clear(); } catch {}
+    try { state.lockedVoxPick = null; state.lastVoxPick = null; } catch {}
+    try { rebuildHalos(); } catch {}
+    try { window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: [] } })); } catch {}
+    try { window.dispatchEvent(new CustomEvent('dw:debug:clearAll')); } catch {}
+    try { if (state.mode === 'cavern') { try { exitScryMode?.(); } catch {} try { exitCavernMode?.(); } catch {} } } catch {}
+
+    try { disposeBuilt(state.built); } catch {}
+    state.barrow = makeDefaultBarrow();
+    try { layoutBarrow(state.barrow); } catch {}
+    try { state.built = buildSceneFromBarrow(scene, state.barrow); } catch {}
+    try { saveBarrow(state.barrow); snapshot(state.barrow); } catch {}
+    try { renderDbView(state.barrow); } catch {}
+    try { rebuildScene?.(); } catch {}
+    try { updateHud?.(); } catch {}
+    try { camera.target.set(0,0,0); } catch {}
+    try { Log.log('UI', 'Reset barrow', {}); } catch {}
+  });
+
+  exportBtn?.addEventListener('click', () => {
+    try {
+      const toExport = cloneForSave(state.barrow);
+      const blob = new Blob([JSON.stringify(toExport, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = `${state.barrow.id || 'barrow'}.json`; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 500);
+      Log.log('UI', 'Export barrow', { id: state.barrow.id });
+    } catch (e) { Log.log('ERROR', 'Export failed', { error: String(e) }); }
+  });
+
+  importBtn?.addEventListener('click', () => importFile?.click());
+  importFile?.addEventListener('change', async (e) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    const text = await file.text();
+    try {
+      let data = JSON.parse(text);
+      try { data = inflateAfterLoad(data); } catch {}
+      try { disposeBuilt(state.built); } catch {}
+      state.barrow = mergeInstructions(loadBarrow() || makeDefaultBarrow(), data);
+      try { layoutBarrow(state.barrow); } catch {}
+      try { state.built = buildSceneFromBarrow(scene, state.barrow); } catch {}
+      try { saveBarrow(state.barrow); snapshot(state.barrow); } catch {}
+      try { renderDbView(state.barrow); } catch {}
+      try { rebuildScene?.(); } catch {}
+      try { updateHud?.(); } catch {}
+      try { Log.log('UI', 'Import barrow', { size: text.length }); } catch {}
+    } catch (err) { console.error('Import failed', err); }
+    if (importFile) importFile.value = '';
+  });
 }

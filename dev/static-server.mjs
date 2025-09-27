@@ -87,6 +87,6 @@ const server = http.createServer((req, res) => {
   return serveFile(res, full);
 });
 
-server.listen(PORT, () => {
-  console.log(`[live-server] Serving ${ROOT} on http://localhost:${PORT} (default: /app/index.html)`);
+server.listen(PORT, '127.0.0.1', () => {
+  console.log(`[live-server] Serving ${ROOT} on http://127.0.0.1:${PORT} (default: /app/index.html)`);
 });

@@ -216,6 +216,177 @@ export function initTransformGizmos({ scene, engine, camera, state, renderDbView
     } catch {}
   }
 
+  // ——————————— Live intersection preview (selected vs others) ———————————
+  const liveIx = new Map();
+  const ixLastExact = new Map();
+  const ixMat = (() => {
+    try {
+      const m = new BABYLON.StandardMaterial('ixLive:mat', scene);
+      m.diffuseColor = new BABYLON.Color3(0,0,0);
+      m.emissiveColor = new BABYLON.Color3(0.95, 0.9, 0.2);
+      m.alpha = 0.25; m.specularColor = new BABYLON.Color3(0,0,0); m.zOffset = 3;
+      return m;
+    } catch { return null; }
+  })();
+  function disposeLiveIntersections(){
+    try { for (const m of liveIx.values()) { try { state.hl?.removeMesh(m); } catch {}; try { m.dispose(); } catch {} } } catch {}
+    liveIx.clear();
+  }
+  function updateLiveIntersectionsFor(selectedId){
+    try {
+      if (!selectedId) { disposeLiveIntersections(); return; }
+      const builtSpaces = Array.isArray(state?.built?.spaces) ? state.built.spaces : [];
+      const selEntry = builtSpaces.find(x => x.id === selectedId); if (!selEntry?.mesh) { disposeLiveIntersections(); return; }
+      const bba = selEntry.mesh.getBoundingInfo()?.boundingBox; if (!bba) { disposeLiveIntersections(); return; }
+      const amin = bba.minimumWorld, amax = bba.maximumWorld;
+      const seen = new Set();
+      const exactOn = (() => { try { return localStorage.getItem('dw:ui:exactCSG') === '1'; } catch { return false; } })();
+      const canCSG = exactOn && !!(BABYLON && BABYLON.CSG);
+      for (const entry of builtSpaces) {
+        if (!entry || entry.id === selectedId || !entry.mesh) continue;
+        const bbb = entry.mesh.getBoundingInfo()?.boundingBox; if (!bbb) continue;
+        const bmin = bbb.minimumWorld, bmax = bbb.maximumWorld;
+        const ixmin = { x: Math.max(amin.x, bmin.x), y: Math.max(amin.y, bmin.y), z: Math.max(amin.z, bmin.z) };
+        const ixmax = { x: Math.min(amax.x, bmax.x), y: Math.min(amax.y, bmax.y), z: Math.min(amax.z, bmax.z) };
+        const dx = ixmax.x - ixmin.x, dy = ixmax.y - ixmin.y, dz = ixmax.z - ixmin.z;
+        const key = `live:${selectedId}&${entry.id}`;
+        if (dx > 0.001 && dy > 0.001 && dz > 0.001) {
+          seen.add(key);
+          const cx = (ixmin.x + ixmax.x) / 2, cy = (ixmin.y + ixmax.y) / 2, cz = (ixmin.z + ixmax.z) / 2;
+          if (!isFinite(cx) || !isFinite(cy) || !isFinite(cz) || !isFinite(dx) || !isFinite(dy) || !isFinite(dz)) continue;
+
+          let mesh = liveIx.get(key);
+          if (canCSG) {
+            const now = performance.now();
+            const last = ixLastExact.get(key) || 0;
+            const needExact = (!mesh) || (now - last > 220);
+            if (needExact) {
+              try {
+                if (mesh) { try { state.hl?.removeMesh(mesh); } catch {}; try { mesh.dispose(); } catch {}; liveIx.delete(key); }
+                const csgA = BABYLON.CSG.FromMesh(selEntry.mesh);
+                const csgB = BABYLON.CSG.FromMesh(entry.mesh);
+                const inter = csgA.intersect(csgB);
+                const csgMesh = inter.toMesh(key, ixMat || undefined, scene, true);
+                csgMesh.isPickable = false; csgMesh.renderingGroupId = 1;
+                liveIx.set(key, csgMesh);
+                ixLastExact.set(key, now);
+                try { state.hl?.addMesh(csgMesh, new BABYLON.Color3(0.95, 0.9, 0.2)); } catch {}
+              } catch {
+                if (!mesh) {
+                  const box = BABYLON.MeshBuilder.CreateBox(key, { width: dx, height: dy, depth: dz }, scene);
+                  if (ixMat) box.material = ixMat; box.isPickable = false; box.renderingGroupId = 1;
+                  liveIx.set(key, box);
+                  box.position.set(cx, cy, cz);
+                  try { state.hl?.addMesh(box, new BABYLON.Color3(0.95, 0.9, 0.2)); } catch {}
+                }
+              }
+            }
+          } else {
+            // AABB-only preview
+            if (!mesh) {
+              mesh = BABYLON.MeshBuilder.CreateBox(key, { width: dx, height: dy, depth: dz }, scene);
+              if (ixMat) mesh.material = ixMat;
+              mesh.isPickable = false; mesh.renderingGroupId = 1;
+              liveIx.set(key, mesh);
+              mesh.position.set(cx, cy, cz);
+              try { state.hl?.addMesh(mesh, new BABYLON.Color3(0.95, 0.9, 0.2)); } catch {}
+            } else {
+              try { state.hl?.removeMesh(mesh); mesh.dispose(); } catch {}
+              const box = BABYLON.MeshBuilder.CreateBox(key, { width: dx, height: dy, depth: dz }, scene);
+              if (ixMat) box.material = ixMat; box.isPickable = false; box.renderingGroupId = 1;
+              liveIx.set(key, box);
+              box.position.set(cx, cy, cz);
+              try { state.hl?.addMesh(box, new BABYLON.Color3(0.95, 0.9, 0.2)); } catch {}
+            }
+          }
+        } else {
+          if (liveIx.has(key)) { try { const old = liveIx.get(key); state.hl?.removeMesh(old); old?.dispose(); } catch {}; liveIx.delete(key); ixLastExact.delete(key); }
+        }
+      }
+      for (const [k, m] of Array.from(liveIx.entries())) {
+        if (!k.startsWith(`live:${selectedId}&`) || !seen.has(k)) { try { state.hl?.removeMesh(m); m.dispose(); } catch {}; liveIx.delete(k); ixLastExact.delete(k); }
+      }
+    } catch {}
+  }
+
+  // ——————————— Contact shadow (visual aid) ———————————
+  state._contactShadow = state._contactShadow || { mesh: null, ids: [] };
+  function disposeContactShadow() { try { state._contactShadow.mesh?.dispose?.(); } catch {}; state._contactShadow.mesh = null; state._contactShadow.ids = []; }
+  function ensureContactShadow() {
+    try {
+      if (state._contactShadow.mesh && !state._contactShadow.mesh.isDisposed()) return state._contactShadow.mesh;
+      const disc = BABYLON.MeshBuilder.CreateDisc('contactShadow', { radius: 1, tessellation: 64 }, scene);
+      disc.rotation.x = Math.PI / 2; // XZ plane
+      const mat = new BABYLON.StandardMaterial('contactShadow:mat', scene);
+      mat.diffuseColor = new BABYLON.Color3(0.85, 0.80, 0.20);
+      mat.emissiveColor = new BABYLON.Color3(0.35, 0.33, 0.10);
+      mat.alpha = 0.28; mat.specularColor = new BABYLON.Color3(0,0,0);
+      try { mat.backFaceCulling = false; mat.zOffset = 2; mat.disableLighting = false; } catch {}
+      disc.material = mat; disc.isPickable = false; disc.renderingGroupId = 1;
+      state._contactShadow.mesh = disc; return disc;
+    } catch { return null; }
+  }
+  function updateContactShadowPlacement() {
+    try {
+      const ids = Array.from(state.selection || []);
+      if (!ids.length) { disposeContactShadow(); return; }
+      const mesh = ensureContactShadow(); if (!mesh) return;
+      const builtSpaces = (state?.built?.spaces || []);
+      const entries = builtSpaces.filter(x => ids.includes(x.id)); if (!entries.length) { disposeContactShadow(); return; }
+      let minX = Infinity, minY = Infinity, minZ = Infinity, maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+      for (const e of entries) {
+        try { e.mesh.computeWorldMatrix(true); e.mesh.refreshBoundingInfo(); } catch {}
+        const bb = e.mesh.getBoundingInfo()?.boundingBox; if (!bb) continue;
+        const bmin = bb.minimumWorld, bmax = bb.maximumWorld;
+        minX = Math.min(minX, bmin.x); maxX = Math.max(maxX, bmax.x);
+        minY = Math.min(minY, bmin.y); maxY = Math.max(maxY, bmax.y);
+        minZ = Math.min(minZ, bmin.z); maxZ = Math.max(maxZ, bmax.z);
+      }
+      if (!isFinite(minX)) { disposeContactShadow(); return; }
+      const cx = (minX + maxX) / 2, cz = (minZ + maxZ) / 2;
+      const y = 0.0;
+      const rx = Math.max(0.2, (maxX - minX) / 2);
+      const rz = Math.max(0.2, (maxZ - minZ) / 2);
+      const base = Math.max(rx, rz) * 1.5;
+      const minorBase = Math.min(rx, rz) * 1.5;
+      const minor = Math.max(base * 0.6, minorBase);
+      let sx = base, sz = minor; if (rz > rx) { sx = minor; sz = base; }
+      sx = Math.max(3.0, sx); sz = Math.max(3.0, sz);
+      mesh.position.set(cx, y + 0.01, cz);
+      mesh.scaling.x = sx; mesh.scaling.y = sz; mesh.scaling.z = 1;
+      state._contactShadow.ids = ids;
+    } catch {}
+  }
+
+  // Update selection OBB lines live (dispose and rebuild for selected ids)
+  function updateSelectionObbLive() {
+    try {
+      const ids = Array.from(state.selection || []);
+      if (!ids.length) return;
+      const byId = new Map((state.barrow.spaces||[]).map(s => [s.id, s]));
+      for (const id of ids) {
+        const s = byId.get(id); if (!s) continue;
+        try { const prev = state.selObb?.get?.(id); if (prev) { prev.dispose?.(); state.selObb.delete?.(id); } } catch {}
+        const sr = s.res || (state.barrow?.meta?.voxelSize || 1);
+        const w = (s.size?.x||0) * sr, h = (s.size?.y||0) * sr, d = (s.size?.z||0) * sr;
+        const hx = w/2, hy = h/2, hz = d/2;
+        const cx = s.origin?.x||0, cy = s.origin?.y||0, cz = s.origin?.z||0;
+        const rx = (s.rotation && typeof s.rotation.x === 'number') ? s.rotation.x : 0;
+        const ry = (s.rotation && typeof s.rotation.y === 'number') ? s.rotation.y : (typeof s.rotY === 'number' ? s.rotY : 0);
+        const rz = (s.rotation && typeof s.rotation.z === 'number') ? s.rotation.z : 0;
+        const q = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz);
+        const mtx = BABYLON.Matrix.Compose(new BABYLON.Vector3(1,1,1), q, new BABYLON.Vector3(cx,cy,cz));
+        const locals = [ new BABYLON.Vector3(-hx,-hy,-hz), new BABYLON.Vector3(+hx,-hy,-hz), new BABYLON.Vector3(-hx,+hy,-hz), new BABYLON.Vector3(+hx,+hy,-hz), new BABYLON.Vector3(-hx,-hy,+hz), new BABYLON.Vector3(+hx,-hy,+hz), new BABYLON.Vector3(-hx,+hy,+hz), new BABYLON.Vector3(+hx,+hy,+hz) ];
+        const cs = locals.map(v => BABYLON.Vector3.TransformCoordinates(v, mtx));
+        const edges = [ [cs[0], cs[1]], [cs[1], cs[3]], [cs[3], cs[2]], [cs[2], cs[0]], [cs[4], cs[5]], [cs[5], cs[7]], [cs[7], cs[6]], [cs[6], cs[4]], [cs[0], cs[4]], [cs[1], cs[5]], [cs[2], cs[6]], [cs[3], cs[7]] ];
+        const lines = BABYLON.MeshBuilder.CreateLineSystem(`sel:obb:${id}`, { lines: edges }, scene);
+        lines.color = new BABYLON.Color3(0.1, 0.9, 0.9);
+        lines.isPickable = false; lines.renderingGroupId = 3;
+        try { state.selObb?.set?.(id, lines); } catch {}
+      }
+    } catch {}
+  }
+
   scene.onPointerObservable.add((pi) => {
     try {
       // Widget actions only in Edit mode
@@ -593,5 +764,5 @@ export function initTransformGizmos({ scene, engine, camera, state, renderDbView
     } catch {}
   }, { passive: true });
 
-  return { rotWidget, moveWidget, disposeRotWidget, ensureRotWidget, disposeMoveWidget, ensureMoveWidget, pickPointOnPlane, setRingsDim, setRingActive, setGizmoHudVisible, renderGizmoHud, suppressGizmos, updateRotWidgetFromMesh, _GIZMO_DCLICK_MS };
+  return { rotWidget, moveWidget, disposeRotWidget, ensureRotWidget, disposeMoveWidget, ensureMoveWidget, pickPointOnPlane, setRingsDim, setRingActive, setGizmoHudVisible, renderGizmoHud, suppressGizmos, updateRotWidgetFromMesh, updateContactShadowPlacement, updateSelectionObbLive, updateLiveIntersectionsFor, disposeLiveIntersections, _GIZMO_DCLICK_MS };
 }

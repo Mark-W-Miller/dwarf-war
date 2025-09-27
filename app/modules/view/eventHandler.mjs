@@ -1,7 +1,6 @@
-import { makeDefaultBarrow, mergeInstructions, layoutBarrow, worldAabbFromSpace } from '../barrow/schema.mjs';
-import { loadBarrow, saveBarrow, snapshot, cloneForSave, inflateAfterLoad, undoLast } from '../barrow/store.mjs';
-import { buildSceneFromBarrow, disposeBuilt } from '../barrow/builder.mjs';
+import { saveBarrow, snapshot } from '../barrow/store.mjs';
 import { VoxelType, decompressVox } from '../voxels/voxelize.mjs';
+import { initVoxelHandlers } from './handlers/voxel.mjs';
 import { Log } from '../util/log.mjs';
 import { renderDbView } from './dbView.mjs';
 import { initErrorBar } from './errorBar.mjs';
@@ -27,9 +26,14 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
   }
   // Gizmo integration placeholders (populated by handlers/gizmo.mjs)
   let _gizmosSuppressed = false;
+  let _gizmo = null;
   let setGizmoHudVisible = (v) => {};
   let renderGizmoHud = () => {};
   let suppressGizmos = (on) => { _gizmosSuppressed = !!on; };
+  // Move gizmo stubs until gizmo API is bound
+  let moveWidget = { dragging: false, preDrag: false, axis: null };
+  let ensureMoveWidget = () => {};
+  let disposeMoveWidget = () => {};
   let _GIZMO_DCLICK_MS = Number(localStorage.getItem('dw:ui:doubleClickMs') || '500') || 500;
   // ——————————— Error banner ———————————
   try { initErrorBar(Log); } catch {}
@@ -139,10 +143,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
 
   // ——— Controls and elements ———
   const toggleRunBtn = document.getElementById('toggleRun');
-  const resetBtn = document.getElementById('reset');
-  const exportBtn = document.getElementById('export');
-  const importBtn = document.getElementById('import');
-  const importFile = document.getElementById('importFile');
+  // DB tab (reset/export/import) elements are handled in handlers/ui/db.mjs
 
   const tStepEl = document.getElementById('tStep');
   const txMinus = document.getElementById('txMinus');
@@ -513,36 +514,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
 
   // ——————————— Scryball Mode ———————————
   function voxelValueAtWorld(space, wx, wy, wz) {
-    try {
-      if (!space || !space.vox) return VoxelType.Uninstantiated;
-      const vox = decompressVox(space.vox);
-      const nx = Math.max(1, vox.size?.x || 1);
-      const ny = Math.max(1, vox.size?.y || 1);
-      const nz = Math.max(1, vox.size?.z || 1);
-      const res = vox.res || space.res || (state?.barrow?.meta?.voxelSize || 1);
-      const cx = space.origin?.x||0, cy = space.origin?.y||0, cz = space.origin?.z||0;
-      let q = BABYLON.Quaternion.Identity();
-      const worldAligned = !!(space.vox && space.vox.worldAligned);
-      try {
-        if (!worldAligned) {
-          const rx = Number(space.rotation?.x ?? 0) || 0;
-          const ry = (space.rotation && typeof space.rotation.y === 'number') ? Number(space.rotation.y) : Number(space.rotY || 0) || 0;
-          const rz = Number(space.rotation?.z ?? 0) || 0;
-          q = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz);
-        }
-      } catch {}
-      const qInv = BABYLON.Quaternion.Inverse(q);
-      const rotInv = (() => { try { return BABYLON.Matrix.Compose(new BABYLON.Vector3(1,1,1), qInv, BABYLON.Vector3.Zero()); } catch { return BABYLON.Matrix.Identity(); } })();
-      const vLocal = BABYLON.Vector3.TransformCoordinates(new BABYLON.Vector3(wx - cx, wy - cy, wz - cz), rotInv);
-      const minX = -(nx * res) / 2, minY = -(ny * res) / 2, minZ = -(nz * res) / 2;
-      const ix = Math.floor((vLocal.x - minX) / res);
-      const iy = Math.floor((vLocal.y - minY) / res);
-      const iz = Math.floor((vLocal.z - minZ) / res);
-      if (ix < 0 || iy < 0 || iz < 0 || ix >= nx || iy >= ny || iz >= nz) return VoxelType.Uninstantiated;
-      const flat = ix + nx * (iy + ny * iz);
-      const data = Array.isArray(vox.data) ? vox.data : [];
-      return data[flat] ?? VoxelType.Uninstantiated;
-    } catch { return VoxelType.Uninstantiated; }
+    try { return _vox?.voxelValueAtWorld?.(space, wx, wy, wz); } catch { return VoxelType.Uninstantiated; }
   }
 
   // Helper: perform voxel pick at current pointer for a given space and dispatch dw:voxelPick
@@ -935,61 +907,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     Log.log('UI', 'Resize Grid', {});
   });
 
-  // ——————————— Reset/Export/Import ———————————
-  resetBtn?.addEventListener('click', () => {
-    // Clear gizmos, selection, voxel picks, and debug before rebuilding
-    try { disposeMoveWidget(); } catch {}
-    try { disposeRotWidget(); } catch {}
-    try { state.selection.clear(); } catch {}
-    try { state.lockedVoxPick = null; state.lastVoxPick = null; } catch {}
-    try { rebuildHalos(); } catch {}
-    try { window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: [] } })); } catch {}
-    try { window.dispatchEvent(new CustomEvent('dw:debug:clearAll')); } catch {}
-    // Exit cavern/scry modes if active
-    try { if (state.mode === 'cavern') { try { exitScryMode(); } catch {} try { exitCavernMode(); } catch {} } } catch {}
-
-    disposeBuilt(state.built);
-    state.barrow = makeDefaultBarrow();
-    layoutBarrow(state.barrow);
-    state.built = buildSceneFromBarrow(scene, state.barrow);
-    saveBarrow(state.barrow); snapshot(state.barrow);
-    renderDbView(state.barrow);
-    rebuildScene();
-    try { updateHud?.(); } catch (e) { logErr('EH:updateHud:reset', e); }
-    Log.log('UI', 'Reset barrow', {});
-    // After reset, center camera on origin so first new space defaults to (0,0,0)
-    try { camera.target.set(0,0,0); } catch {}
-  });
-
-  exportBtn?.addEventListener('click', () => {
-    // Export a compressed clone for storage parity
-    const toExport = cloneForSave(state.barrow);
-    const blob = new Blob([JSON.stringify(toExport, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = `${state.barrow.id || 'barrow'}.json`; a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 500);
-    Log.log('UI', 'Export barrow', { id: state.barrow.id });
-  });
-
-  importBtn?.addEventListener('click', () => importFile?.click());
-  importFile?.addEventListener('change', async (e) => {
-    const file = e.target.files?.[0]; if (!file) return;
-    const text = await file.text();
-    try {
-      let data = JSON.parse(text);
-      try { data = inflateAfterLoad(data); } catch (e2) { logErr('EH:inflateAfterLoad', e2); }
-      disposeBuilt(state.built);
-      state.barrow = mergeInstructions(loadBarrow() || makeDefaultBarrow(), data);
-      layoutBarrow(state.barrow);
-      state.built = buildSceneFromBarrow(scene, state.barrow);
-      saveBarrow(state.barrow); snapshot(state.barrow);
-      renderDbView(state.barrow);
-      rebuildScene();
-      try { updateHud?.(); } catch (e3) { logErr('EH:updateHud:import', e3); }
-      try { Log.log('UI', 'Import barrow', { size: text.length }); } catch (e4) { logErr('EH:logImport', e4); }
-    } catch (err) { console.error('Import failed', err); }
-    if (importFile) importFile.value = '';
-  });
+  // Reset/Export/Import moved to handlers/ui/db.mjs
 
   // ——————————— Name suggestion and validation ———————————
   function suggestSpaceName(baseType) {
@@ -1221,202 +1139,19 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
 
   // ——————————— Rotation widget (Y-axis) ———————————
   let rotWidget = { meshes: { x: null, y: null, z: null }, mats: { x: null, y: null, z: null }, axis: 'y', activeAxis: null, spaceId: null, dragging: false, preDrag: false, downX: 0, downY: 0, startAngle: 0, startRot: 0, lastRot: 0, baseDiam: { x: 0, y: 0, z: 0 }, startQuat: null, axisLocal: null, refLocal: null, group: false, groupIDs: [], groupCenter: null, groupNode: null, startById: null, axisWorld: null, refWorld: null, groupKey: '', mStartX: 0, mStartY: 0 };
-  let _lastDbRefresh = 0;
-  function disposeRotWidget() {
-    try {
-      for (const k of ['x','y','z']) { try { rotWidget.meshes[k]?.dispose?.(); } catch {} }
-      try { rotWidget.groupNode?.dispose?.(); } catch {}
-      Log.log('GIZMO', 'Dispose rot widget', { id: rotWidget.spaceId });
-    } catch {}
-    rotWidget = { meshes: { x: null, y: null, z: null }, mats: { x: null, y: null, z: null }, axis: 'y', activeAxis: null, spaceId: null, dragging: false, preDrag: false, downX: 0, downY: 0, startAngle: 0, startRot: 0, lastRot: 0, baseDiam: { x: 0, y: 0, z: 0 }, startQuat: null, axisLocal: null, refLocal: null, group: false, groupIDs: [], groupCenter: null, groupNode: null, startById: null, axisWorld: null, refWorld: null, groupKey: '' };
+function disposeRotWidget() {
+    try { _gizmo?.disposeRotWidget?.(); } catch {}
   }
-  function ensureRotWidget() {
-      if (_gizmosSuppressed) { try { disposeRotWidget(); setGizmoHudVisible(false); } catch {} return; }
-      try { if (state.mode === 'cavern') { disposeRotWidget(); setGizmoHudVisible(false); return; } } catch {}
-    try {
-      try { Log.log('GIZMO', 'Ensure widget', { selection: Array.from(state.selection||[]) }); } catch {}
-      // Support single or multi selection
-      const sel = Array.from(state.selection || []).filter(id => (state?.built?.spaces || []).some(x => x.id === id));
-      if (sel.length < 1) { Log.log('GIZMO', 'No widget: empty selection', { count: 0 }); disposeRotWidget(); return; }
-      // Suppress rotation gizmo for voxelized spaces
-      try {
-        const byId = new Map((state.barrow.spaces||[]).map(s => [s.id, s]));
-        const anyVox = sel.some(id => !!byId.get(id)?.vox);
-        if (anyVox) { disposeRotWidget(); Log.log('GIZMO', 'Skip rot widget for voxelized selection', { sel }); return; }
-      } catch {}
-      const isGroup = sel.length > 1;
-      const groupKey = isGroup ? sel.slice().sort().join(',') : sel[0];
-      const builtSpaces = (state?.built?.spaces || []);
-      const entries = builtSpaces.filter(x => sel.includes(x.id));
-      if (entries.length < 1) { disposeRotWidget(); return; }
-      const primary = entries[0];
-      const mesh = primary.mesh;
-      // Compute ring radii from bounds (single or group)
-      let minX = Infinity, minY = Infinity, minZ = Infinity;
-      let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
-      let com = new BABYLON.Vector3(0,0,0); let mass = 0;
-      for (const e of entries) {
-        try { e.mesh.computeWorldMatrix(true); e.mesh.refreshBoundingInfo(); } catch {}
-        const bb = e.mesh.getBoundingInfo()?.boundingBox; if (!bb) continue;
-        const bmin = bb.minimumWorld, bmax = bb.maximumWorld;
-        minX = Math.min(minX, bmin.x); minY = Math.min(minY, bmin.y); minZ = Math.min(minZ, bmin.z);
-        maxX = Math.max(maxX, bmax.x); maxY = Math.max(maxY, bmax.y); maxZ = Math.max(maxZ, bmax.z);
-        const cx = (bmin.x + bmax.x) / 2, cy = (bmin.y + bmax.y) / 2, cz = (bmin.z + bmax.z) / 2;
-        const dx = (bmax.x - bmin.x), dy = (bmax.y - bmin.y), dz = (bmax.z - bmin.z);
-        const m = Math.max(1e-6, dx * dy * dz);
-        com.x += cx * m; com.y += cy * m; com.z += cz * m; mass += m;
-      }
-      if (!isFinite(minX) || !isFinite(maxX)) { disposeRotWidget(); return; }
-      if (mass > 0) { com.x /= mass; com.y /= mass; com.z /= mass; }
-      const halfX = Math.max(0.1, (maxX - minX) / 2);
-      const halfY = Math.max(0.1, (maxY - minY) / 2);
-      const halfZ = Math.max(0.1, (maxZ - minZ) / 2);
-      // Apply user scale to gizmo diameters
-      const scalePct = Number(localStorage.getItem('dw:ui:gizmoScale') || '100') || 100;
-      const gScale = Math.max(0.1, scalePct / 100);
-      const radY = Math.max(halfX, halfZ) * 1.05 * gScale; // ring in XZ plane => rotate around Y
-      const radX = Math.max(halfY, halfZ) * 1.05 * gScale; // ring in YZ plane => rotate around X
-      const radZ = Math.max(halfX, halfY) * 1.05 * gScale; // ring in XY plane => rotate around Z
-      // Slimmer axis rings: thickness = radius / 16 (~6.25%)
-      const thicknessY = Math.max(0.08, radY * 0.0625);
-      const thicknessX = Math.max(0.08, radX * 0.0625);
-      const thicknessZ = Math.max(0.08, radZ * 0.0625);
-      // Rebuild if missing or different target
-      const id = primary.id;
-      if (!rotWidget.meshes.y || rotWidget.group !== isGroup || rotWidget.groupKey !== groupKey || (rotWidget.meshes.y.isDisposed && rotWidget.meshes.y.isDisposed())) {
-        disposeRotWidget();
-        // Y ring (base ring, will orient to surface axis if provided)
-        const diamY = radY * 2;
-        const ringY = BABYLON.MeshBuilder.CreateTorus(`rotGizmo:Y:${isGroup ? 'group' : id}`, { diameter: diamY, thickness: thicknessY, tessellation: 96 }, scene);
-        const matY = new BABYLON.StandardMaterial(`rotGizmo:Y:${id}:mat`, scene);
-        const baseY = new BABYLON.Color3(0.2, 0.9, 0.2); // green
-        matY.diffuseColor = new BABYLON.Color3(0.2, 0.2, 0.05);
-        matY.emissiveColor = baseY.clone();
-        try { matY.metadata = { baseColor: baseY.clone() }; } catch {}
-        matY.specularColor = new BABYLON.Color3(0,0,0);
-        matY.zOffset = 4;
-        ringY.material = matY; ringY.isPickable = true; ringY.alwaysSelectAsActiveMesh = true; ringY.renderingGroupId = 2;
-        // X ring
-        const diamX = radX * 2;
-        const ringX = BABYLON.MeshBuilder.CreateTorus(`rotGizmo:X:${isGroup ? 'group' : id}`, { diameter: diamX, thickness: thicknessX, tessellation: 96 }, scene);
-        const matX = new BABYLON.StandardMaterial(`rotGizmo:X:${id}:mat`, scene);
-        const baseX = new BABYLON.Color3(0.95, 0.1, 0.1); // red
-        matX.diffuseColor = new BABYLON.Color3(0.2, 0.05, 0.05);
-        matX.emissiveColor = baseX.clone();
-        try { matX.metadata = { baseColor: baseX.clone() }; } catch {}
-        matX.specularColor = new BABYLON.Color3(0,0,0);
-        matX.zOffset = 4;
-        ringX.rotation.z = Math.PI / 2; // plane YZ
-        ringX.material = matX; ringX.isPickable = true; ringX.alwaysSelectAsActiveMesh = true; ringX.renderingGroupId = 2;
-        // Z ring
-        const diamZ = radZ * 2;
-        const ringZ = BABYLON.MeshBuilder.CreateTorus(`rotGizmo:Z:${isGroup ? 'group' : id}`, { diameter: diamZ, thickness: thicknessZ, tessellation: 96 }, scene);
-        const matZ = new BABYLON.StandardMaterial(`rotGizmo:Z:${id}:mat`, scene);
-        const baseZ = new BABYLON.Color3(0.1, 0.1, 0.95); // blue
-        matZ.diffuseColor = new BABYLON.Color3(0.05, 0.05, 0.2);
-        matZ.emissiveColor = baseZ.clone();
-        try { matZ.metadata = { baseColor: baseZ.clone() }; } catch {}
-        matZ.specularColor = new BABYLON.Color3(0,0,0);
-        matZ.zOffset = 4;
-        ringZ.rotation.x = Math.PI / 2; // plane XY
-        ringZ.material = matZ; ringZ.isPickable = true; ringZ.alwaysSelectAsActiveMesh = true; ringZ.renderingGroupId = 2;
-        // Parent rings
-        if (isGroup) {
-          const group = new BABYLON.TransformNode(`rotGizmoGroup`, scene);
-          group.position.copyFrom(com);
-          ringX.parent = group; ringY.parent = group; ringZ.parent = group;
-          rotWidget.groupNode = group;
-        } else {
-          try { ringX.parent = mesh; ringY.parent = mesh; ringZ.parent = mesh; ringX.position.set(0,0,0); ringY.position.set(0,0,0); ringZ.position.set(0,0,0); } catch {}
-        }
-        // Assign
-        rotWidget.meshes = { x: ringX, y: ringY, z: ringZ };
-        rotWidget.mats = { x: matX, y: matY, z: matZ };
-        rotWidget.baseDiam = { x: diamX, y: diamY, z: diamZ };
-        rotWidget.spaceId = isGroup ? 'group' : id;
-        rotWidget.group = isGroup; rotWidget.groupIDs = sel.slice(); rotWidget.groupCenter = com; rotWidget.groupKey = groupKey;
-        Log.log('GIZMO', 'Create rot widget', { id: rotWidget.spaceId, radius: { x: radX, y: radY, z: radZ }, diameter: { x: diamX, y: diamY, z: diamZ } });
-      }
-      // Update size and position for all rings
-      try {
-        const desiredX = Math.max(0.001, radX * 2);
-        const desiredY = Math.max(0.001, radY * 2);
-        const desiredZ = Math.max(0.001, radZ * 2);
-        const sx = Math.max(0.001, desiredX / (rotWidget.baseDiam.x || desiredX));
-        const sy = Math.max(0.001, desiredY / (rotWidget.baseDiam.y || desiredY));
-        const sz = Math.max(0.001, desiredZ / (rotWidget.baseDiam.z || desiredZ));
-        rotWidget.meshes.x.scaling.set(sx, sx, sx);
-        rotWidget.meshes.y.scaling.set(sy, sy, sy);
-        rotWidget.meshes.z.scaling.set(sz, sz, sz);
-        if (isGroup) {
-          try { rotWidget.groupNode.position.copyFrom(com); } catch {}
-          try { rotWidget.meshes.x.position.set(0,0,0); rotWidget.meshes.y.position.set(0,0,0); rotWidget.meshes.z.position.set(0,0,0); } catch {}
-        } else {
-          try { rotWidget.meshes.x.position.set(0,0,0); rotWidget.meshes.y.position.set(0,0,0); rotWidget.meshes.z.position.set(0,0,0); } catch {}
-        }
-      } catch {}
-      // Default visual: all rings dim
-      try { setRingsDim(); } catch {}
-    } catch (e) { try { disposeRotWidget(); } catch {} }
+function ensureRotWidget() {
+      try { _gizmo?.ensureRotWidget?.(); } catch {}
   }
 
-  function updateRotWidgetFromMesh(mesh) {
-    if (!rotWidget?.meshes?.y || !mesh) return;
-    // Avoid resizing during active drag to prevent visual jumps
-    if (rotWidget.dragging) return;
-    try {
-      const bb = mesh.getBoundingInfo()?.boundingBox; if (!bb) return;
-      const min = bb.minimumWorld, max = bb.maximumWorld;
-      const halfX = Math.max(0.1, (max.x - min.x) / 2);
-      const halfY = Math.max(0.1, (max.y - min.y) / 2);
-      const halfZ = Math.max(0.1, (max.z - min.z) / 2);
-      const radY = Math.max(halfX, halfZ) * 1.05;
-      const radX = Math.max(halfY, halfZ) * 1.05;
-      const radZ = Math.max(halfX, halfY) * 1.05;
-      const desiredX = Math.max(0.001, radX * 2);
-      const desiredY = Math.max(0.001, radY * 2);
-      const desiredZ = Math.max(0.001, radZ * 2);
-      const sx = Math.max(0.001, desiredX / (rotWidget.baseDiam.x || desiredX));
-      const sy = Math.max(0.001, desiredY / (rotWidget.baseDiam.y || desiredY));
-      const sz = Math.max(0.001, desiredZ / (rotWidget.baseDiam.z || desiredZ));
-      rotWidget.meshes.x.scaling.set(sx, sx, sx);
-      rotWidget.meshes.y.scaling.set(sy, sy, sy);
-      rotWidget.meshes.z.scaling.set(sz, sz, sz);
-      try { rotWidget.meshes.x.position.set(0,0,0); rotWidget.meshes.y.position.set(0,0,0); rotWidget.meshes.z.position.set(0,0,0); } catch {}
-    } catch {}
+function updateRotWidgetFromMesh(mesh) {
+    try { _gizmo?.updateRotWidgetFromMesh?.(mesh); } catch {}
   }
-  // no global canvas event blocking; we detach only camera pointer input during gizmo drag
-  let _lastPickMissLog = 0;
   function pickPointOnYPlane(y) { return pickPointOnPlane(new BABYLON.Vector3(1e-30,1,1e-30), new BABYLON.Vector3(0,y,0)); }
-  function pickPointOnPlane(normal, point) {
-    try {
-      let n = normal.clone(); n.normalize();
-      const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), camera);
-      const ro = ray.origin, rd = ray.direction;
-      const eps = 1e-6;
-      let denom = BABYLON.Vector3.Dot(n, rd);
-      if (Math.abs(denom) < eps) {
-        // Nudge plane normal slightly towards camera to avoid parallel cases
-        try {
-          const fwd = camera.getForwardRay()?.direction || new BABYLON.Vector3(0,0,1);
-          n = n.add(fwd.scale(0.001)); n.normalize();
-          denom = BABYLON.Vector3.Dot(n, rd);
-        } catch {}
-      }
-      if (Math.abs(denom) < eps) {
-        const now = performance.now();
-        if (now - _lastPickMissLog > 120) { _lastPickMissLog = now; try { Log.log('GIZMO', 'Pick miss: ray parallel to plane', { normal: n.asArray() }); } catch {} }
-        return null;
-      }
-      const t = BABYLON.Vector3.Dot(point.subtract(ro), n) / denom;
-      if (!isFinite(t) || t < 0) {
-        const now = performance.now();
-        if (now - _lastPickMissLog > 120) { _lastPickMissLog = now; try { Log.log('GIZMO', 'Pick miss: behind origin', { t }); } catch {} }
-        return null;
-      }
-      const pt = ro.add(rd.scale(t));
-      return pt;
-    } catch (e) { try { Log.log('GIZMO', 'Pick error', { err: String(e) }); } catch {}; return null; }
+function pickPointOnPlane(normal, point) {
+    try { return _gizmo?.pickPointOnPlane?.(normal, point) || null; } catch { return null; }
   }
   function getSelectedSpaceAndMesh() {
     const sel = Array.from(state.selection || []);
@@ -1427,87 +1162,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     return { space, mesh, id };
   }
 
-  // ——————————— Live intersection preview (selected vs others) ———————————
-  const liveIx = new Map(); // key -> mesh
-  const ixLastExact = new Map(); // key -> last CSG timestamp
-  const ixMat = (() => {
-    try {
-      const m = new BABYLON.StandardMaterial('ixLive:mat', scene);
-      m.diffuseColor = new BABYLON.Color3(0,0,0);
-      m.emissiveColor = new BABYLON.Color3(0.95, 0.9, 0.2);
-      m.alpha = 0.25; m.specularColor = new BABYLON.Color3(0,0,0); m.zOffset = 3;
-      return m;
-    } catch { return null; }
-  })();
-
-  // ——————————— Contact shadow (visual aid) ———————————
-  state._contactShadow = state._contactShadow || { mesh: null, ids: [] };
-  function disposeContactShadow() {
-    try { state._contactShadow.mesh?.dispose?.(); } catch {}
-    state._contactShadow.mesh = null; state._contactShadow.ids = [];
-  }
-  function ensureContactShadow() {
-    try {
-      if (state._contactShadow.mesh && !state._contactShadow.mesh.isDisposed()) return state._contactShadow.mesh;
-      const disc = BABYLON.MeshBuilder.CreateDisc('contactShadow', { radius: 1, tessellation: 64 }, scene);
-      disc.rotation.x = Math.PI / 2; // XZ plane
-      const mat = new BABYLON.StandardMaterial('contactShadow:mat', scene);
-      // Artificial, light-independent, yellow "shadow" — toned down
-      mat.diffuseColor = new BABYLON.Color3(0.85, 0.80, 0.20);
-      mat.emissiveColor = new BABYLON.Color3(0.35, 0.33, 0.10);
-      mat.alpha = 0.28; // subtler
-      try { mat.backFaceCulling = false; } catch {}
-      try { mat.zOffset = 2; } catch {}
-      try { mat.disableLighting = false; } catch {}
-      mat.specularColor = new BABYLON.Color3(0,0,0);
-      disc.material = mat; disc.isPickable = false; disc.renderingGroupId = 1;
-      state._contactShadow.mesh = disc; return disc;
-    } catch { return null; }
-  }
-  function updateContactShadowPlacement() {
-    try {
-      const ids = Array.from(state.selection || []);
-      if (!ids.length) { disposeContactShadow(); return; }
-      const mesh = ensureContactShadow(); if (!mesh) return;
-      const builtSpaces = (state?.built?.spaces || []);
-      const entries = builtSpaces.filter(x => ids.includes(x.id)); if (!entries.length) { disposeContactShadow(); return; }
-      // Aggregate AABB over selection
-      let minX = Infinity, minY = Infinity, minZ = Infinity, maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
-      for (const e of entries) {
-        try { e.mesh.computeWorldMatrix(true); e.mesh.refreshBoundingInfo(); } catch {}
-        const bb = e.mesh.getBoundingInfo()?.boundingBox; if (!bb) continue;
-        const bmin = bb.minimumWorld, bmax = bb.maximumWorld;
-        minX = Math.min(minX, bmin.x); maxX = Math.max(maxX, bmax.x);
-        minY = Math.min(minY, bmin.y); maxY = Math.max(maxY, bmax.y);
-        minZ = Math.min(minZ, bmin.z); maxZ = Math.max(maxZ, bmax.z);
-      }
-      if (!isFinite(minX)) { disposeContactShadow(); return; }
-      const cx = (minX + maxX) / 2, cz = (minZ + maxZ) / 2;
-      // Always sit on the ground plane (y≈0), independent of light
-      const y = 0.0;
-      const rx = Math.max(0.2, (maxX - minX) / 2);
-      const rz = Math.max(0.2, (maxZ - minZ) / 2);
-      // Footprint sizing: prefer a broad elliptical pad, clamp aspect to avoid toothpick
-      const base = Math.max(rx, rz) * 1.5; // major radius
-      const minorBase = Math.min(rx, rz) * 1.5;
-      const minor = Math.max(base * 0.6, minorBase); // ensure at least 60% of major
-      let sx = base, sz = minor;
-      if (rz > rx) { sx = minor; sz = base; }
-      // Enforce a minimum size
-      sx = Math.max(3.0, sx);
-      sz = Math.max(3.0, sz);
-      mesh.position.set(cx, y + 0.01, cz);
-      // Disc is built in XY; scale x/y for X/Z footprint; keep z=1
-      mesh.scaling.x = sx;
-      mesh.scaling.y = sz;
-      mesh.scaling.z = 1;
-      state._contactShadow.ids = ids;
-    } catch {}
-  }
-  function disposeLiveIntersections(){
-    try { for (const m of liveIx.values()) { try { state.hl?.removeMesh(m); } catch {}; try { m.dispose(); } catch {} } } catch {}
-    liveIx.clear();
-  }
+  // Utility: axis-aligned bounds for a space in world coordinates
   function aabbForSpace(space) {
     const res = (space?.res || (state.barrow?.meta?.voxelSize || 1));
     const w = Math.max(0, (space?.size?.x || 0) * res);
@@ -1516,287 +1171,22 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     const cx = space?.origin?.x || 0, cy = space?.origin?.y || 0, cz = space?.origin?.z || 0;
     return { min:{x:cx-w/2,y:cy-h/2,z:cz-d/2}, max:{x:cx+w/2,y:cy+h/2,z:cz+d/2} };
   }
-  function updateLiveIntersectionsFor(selectedId){
-    try {
-      if (!selectedId) { disposeLiveIntersections(); return; }
-      const builtSpaces = Array.isArray(state?.built?.spaces) ? state.built.spaces : [];
-      const selEntry = builtSpaces.find(x => x.id === selectedId); if (!selEntry?.mesh) { disposeLiveIntersections(); return; }
-      const bba = selEntry.mesh.getBoundingInfo()?.boundingBox; if (!bba) { disposeLiveIntersections(); return; }
-      const amin = bba.minimumWorld, amax = bba.maximumWorld;
-      const seen = new Set();
-      const exactOn = (() => { try { return localStorage.getItem('dw:ui:exactCSG') === '1'; } catch { return false; } })();
-      const canCSG = exactOn && !!(BABYLON && BABYLON.CSG);
-      for (const entry of builtSpaces) {
-        if (!entry || entry.id === selectedId || !entry.mesh) continue;
-        const bbb = entry.mesh.getBoundingInfo()?.boundingBox; if (!bbb) continue;
-        const bmin = bbb.minimumWorld, bmax = bbb.maximumWorld;
-        const ixmin = { x: Math.max(amin.x, bmin.x), y: Math.max(amin.y, bmin.y), z: Math.max(amin.z, bmin.z) };
-        const ixmax = { x: Math.min(amax.x, bmax.x), y: Math.min(amax.y, bmax.y), z: Math.min(amax.z, bmax.z) };
-        const dx = ixmax.x - ixmin.x, dy = ixmax.y - ixmin.y, dz = ixmax.z - ixmin.z;
-        const key = `live:${selectedId}&${entry.id}`;
-        if (dx > 0.001 && dy > 0.001 && dz > 0.001) {
-          seen.add(key);
-          const cx = (ixmin.x + ixmax.x) / 2, cy = (ixmin.y + ixmax.y) / 2, cz = (ixmin.z + ixmax.z) / 2;
-          if (!isFinite(cx) || !isFinite(cy) || !isFinite(cz) || !isFinite(dx) || !isFinite(dy) || !isFinite(dz)) continue;
 
-          let mesh = liveIx.get(key);
-          if (canCSG) {
-            const now = performance.now();
-            const last = ixLastExact.get(key) || 0;
-            const needExact = (!mesh) || (now - last > 220);
-            if (needExact) {
-              try {
-                if (mesh) { try { state.hl?.removeMesh(mesh); } catch {}; try { mesh.dispose(); } catch {}; liveIx.delete(key); }
-                const csgA = BABYLON.CSG.FromMesh(selEntry.mesh);
-                const csgB = BABYLON.CSG.FromMesh(entry.mesh);
-                const inter = csgA.intersect(csgB);
-                const csgMesh = inter.toMesh(key, ixMat || undefined, scene, true);
-                csgMesh.isPickable = false; csgMesh.renderingGroupId = 1;
-                liveIx.set(key, csgMesh);
-                ixLastExact.set(key, now);
-                try { state.hl?.addMesh(csgMesh, new BABYLON.Color3(0.95, 0.9, 0.2)); } catch {}
-              } catch {
-                // If exact fails on first pass, fallback to AABB to show something
-                if (!mesh) {
-                  const box = BABYLON.MeshBuilder.CreateBox(key, { width: dx, height: dy, depth: dz }, scene);
-                  if (ixMat) box.material = ixMat; box.isPickable = false; box.renderingGroupId = 1;
-                  liveIx.set(key, box);
-                  box.position.set(cx, cy, cz);
-                  try { state.hl?.addMesh(box, new BABYLON.Color3(0.95, 0.9, 0.2)); } catch {}
-                }
-              }
-            } else {
-              // keep existing CSG mesh until next exact tick (no AABB toggling)
-            }
-          } else {
-            // AABB-only preview
-            if (!mesh) {
-              mesh = BABYLON.MeshBuilder.CreateBox(key, { width: dx, height: dy, depth: dz }, scene);
-              if (ixMat) mesh.material = ixMat;
-              mesh.isPickable = false; mesh.renderingGroupId = 1;
-              liveIx.set(key, mesh);
-              mesh.position.set(cx, cy, cz);
-              try { state.hl?.addMesh(mesh, new BABYLON.Color3(0.95, 0.9, 0.2)); } catch {}
-            } else {
-              try { state.hl?.removeMesh(mesh); mesh.dispose(); } catch {}
-              const box = BABYLON.MeshBuilder.CreateBox(key, { width: dx, height: dy, depth: dz }, scene);
-              if (ixMat) box.material = ixMat; box.isPickable = false; box.renderingGroupId = 1;
-              liveIx.set(key, box);
-              box.position.set(cx, cy, cz);
-              try { state.hl?.addMesh(box, new BABYLON.Color3(0.95, 0.9, 0.2)); } catch {}
-            }
-          }
-        } else {
-          // remove if existed
-          if (liveIx.has(key)) { try { const old = liveIx.get(key); state.hl?.removeMesh(old); old?.dispose(); } catch {}; liveIx.delete(key); ixLastExact.delete(key); }
-        }
-      }
-      // cleanup any not seen
-      for (const [k, m] of Array.from(liveIx.entries())) {
-        if (!k.startsWith(`live:${selectedId}&`) || !seen.has(k)) { try { state.hl?.removeMesh(m); m.dispose(); } catch {}; liveIx.delete(k); ixLastExact.delete(k); }
-      }
-    } catch {}
-  }
+  // ——————————— Live intersection preview moved to gizmo ———————————
+
+  // ——————————— Contact shadow (moved to gizmo) ———————————
+  function updateContactShadowPlacement() { try { _gizmo?.updateContactShadowPlacement?.(); } catch {} }
+  function disposeContactShadow() { try { _gizmo?.disposeContactShadow?.(); } catch {} }
+  function disposeLiveIntersections(){ try { _gizmo?.disposeLiveIntersections?.(); } catch {} }
+  function updateLiveIntersectionsFor(selectedId){ try { _gizmo?.updateLiveIntersectionsFor?.(selectedId); } catch {} }
 
   // Update selection OBB lines live (dispose and rebuild for selected ids)
-  function updateSelectionObbLive() {
-    try {
-      const ids = Array.from(state.selection || []);
-      if (!ids.length) return;
-      const byId = new Map((state.barrow.spaces||[]).map(s => [s.id, s]));
-      for (const id of ids) {
-        const s = byId.get(id); if (!s) continue;
-        // dispose old
-        try { const prev = state.selObb?.get?.(id); if (prev) { prev.dispose?.(); state.selObb.delete?.(id); } } catch {}
-        const sr = s.res || (state.barrow?.meta?.voxelSize || 1);
-        const w = (s.size?.x||0) * sr, h = (s.size?.y||0) * sr, d = (s.size?.z||0) * sr;
-        const hx = w/2, hy = h/2, hz = d/2;
-        const cx = s.origin?.x||0, cy = s.origin?.y||0, cz = s.origin?.z||0;
-        const rx = (s.rotation && typeof s.rotation.x === 'number') ? s.rotation.x : 0;
-        const ry = (s.rotation && typeof s.rotation.y === 'number') ? s.rotation.y : (typeof s.rotY === 'number' ? s.rotY : 0);
-        const rz = (s.rotation && typeof s.rotation.z === 'number') ? s.rotation.z : 0;
-        const q = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz);
-        const mtx = BABYLON.Matrix.Compose(new BABYLON.Vector3(1,1,1), q, new BABYLON.Vector3(cx,cy,cz));
-        const locals = [
-          new BABYLON.Vector3(-hx,-hy,-hz), new BABYLON.Vector3(+hx,-hy,-hz),
-          new BABYLON.Vector3(-hx,+hy,-hz), new BABYLON.Vector3(+hx,+hy,-hz),
-          new BABYLON.Vector3(-hx,-hy,+hz), new BABYLON.Vector3(+hx,-hy,+hz),
-          new BABYLON.Vector3(-hx,+hy,+hz), new BABYLON.Vector3(+hx,+hy,+hz)
-        ];
-        const cs = locals.map(v => BABYLON.Vector3.TransformCoordinates(v, mtx));
-        const edges = [
-          [cs[0], cs[1]], [cs[1], cs[3]], [cs[3], cs[2]], [cs[2], cs[0]],
-          [cs[4], cs[5]], [cs[5], cs[7]], [cs[7], cs[6]], [cs[6], cs[4]],
-          [cs[0], cs[4]], [cs[1], cs[5]], [cs[2], cs[6]], [cs[3], cs[7]]
-        ];
-        const lines = BABYLON.MeshBuilder.CreateLineSystem(`sel:obb:${id}`, { lines: edges }, scene);
-        lines.color = new BABYLON.Color3(0.1, 0.9, 0.9);
-        lines.isPickable = false; lines.renderingGroupId = 3;
-        try { state.selObb?.set?.(id, lines); } catch {}
-      }
-    } catch {}
-  }
+  function updateSelectionObbLive() { try { _gizmo?.updateSelectionObbLive?.(); } catch {} }
 
   // Update move disc position to follow current selection bottom and center
-  function updateMoveDiscPlacement() {
-    try {
-      if (!moveWidget?.disc) return;
-      // Do not change the drag plane while dragging; keep disc on the locked plane
-      if (moveWidget.dragging) {
-        const ids = Array.from(state.selection || []);
-        if (!ids.length) return;
-        const center = moveWidget.group ? (moveWidget.groupCenter || new BABYLON.Vector3(0,0,0)) : ((state?.built?.spaces||[]).find(x => ids.includes(x.id))?.mesh?.position || new BABYLON.Vector3(0,0,0));
-        moveWidget.disc.position.x = center.x;
-        moveWidget.disc.position.z = center.z;
-        const yLocked = (moveWidget.dragPlaneY != null) ? moveWidget.dragPlaneY : moveWidget.planeY;
-        moveWidget.disc.position.y = yLocked;
-        return;
-      }
-      const ids = Array.from(state.selection || []);
-      if (!ids.length) return;
-      const byId = new Map((state.barrow.spaces||[]).map(s => [s.id, s]));
-      let minY = Infinity;
-      for (const id of ids) {
-        const s = byId.get(id); if (!s) continue;
-        const sr = s.res || (state.barrow?.meta?.voxelSize || 1);
-        const y0 = (s.origin?.y||0) - ((s.size?.y||0) * sr)/2;
-        if (y0 < minY) minY = y0;
-      }
-      if (!isFinite(minY)) minY = 0;
-      const center = moveWidget.group ? (moveWidget.groupCenter || new BABYLON.Vector3(0,0,0)) : ((state?.built?.spaces||[]).find(x => ids.includes(x.id))?.mesh?.position || new BABYLON.Vector3(0,0,0));
-      moveWidget.disc.position.x = center.x;
-      moveWidget.disc.position.z = center.z;
-      moveWidget.disc.position.y = minY;
-      moveWidget.planeY = minY;
-    } catch {}
-  }
+  // updateMoveDiscPlacement is now internal to gizmo
 
-  // ——————————— Move widget (drag on XZ plane) ———————————
-  let moveWidget = { mesh: null, root: null, arrowMeshes: [], disc: null, spaceId: null, dragging: false, preDrag: false, mode: 'axis', downX: 0, downY: 0, startPoint: null, startOrigin: null, offsetVec: null, planeNormal: null, planeY: 0, group: false, groupIDs: [], groupCenter: null, startCenter: null, startById: null, groupKey: '', axis: null, axisStart: 0 };
-  function disposeMoveWidget() {
-    try {
-      try { for (const m of moveWidget.arrowMeshes || []) { try { m.dispose(); } catch {} } } catch {}
-      moveWidget.arrowMeshes = [];
-      try { moveWidget.disc?.dispose?.(); } catch {}
-      if (moveWidget.root) { try { moveWidget.root.dispose(); } catch {} }
-      // Fallback cleanup by name in case references were lost
-      try { (scene.meshes||[]).filter(m => (m?.name||'').startsWith('moveGizmo:')).forEach(m => { try { m.dispose(); } catch {} }); } catch {}
-    } catch {}
-    moveWidget = { mesh: null, root: null, arrowMeshes: [], disc: null, spaceId: null, dragging: false, preDrag: false, mode: 'axis', downX: 0, downY: 0, startPoint: null, startOrigin: null, offsetVec: null, planeNormal: null, planeY: 0, group: false, groupIDs: [], groupCenter: null, startCenter: null, startById: null, groupKey: '', axis: null, axisStart: 0 };
-  }
-  function ensureMoveWidget() {
-      if (_gizmosSuppressed) { try { disposeMoveWidget(); } catch {} return; }
-      try { if (state.mode === 'cavern') { disposeMoveWidget(); return; } } catch {}
-    try {
-      const sel = Array.from(state.selection || []);
-      const builtSpaces = (state?.built?.spaces || []);
-      const entries = builtSpaces.filter(x => sel.includes(x.id));
-      if (entries.length < 1) { disposeMoveWidget(); return; }
-      // Allow move gizmo for voxelized and non-voxelized spaces alike
-      const isGroup = sel.length > 1;
-      const groupKey = isGroup ? sel.slice().sort().join(',') : sel[0];
-      let id = entries[0].id;
-      let rad = 1; let center = null;
-      let planeY = 0;
-      if (isGroup) {
-        // Compute group bbox and center of mass for radius and position
-        let minX = Infinity, minY = Infinity, minZ = Infinity; let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
-        let cx = 0, cy = 0, cz = 0, mass = 0;
-        for (const e of entries) {
-          try { e.mesh.computeWorldMatrix(true); e.mesh.refreshBoundingInfo(); } catch {}
-          const bb = e.mesh.getBoundingInfo()?.boundingBox; if (!bb) continue;
-          const bmin = bb.minimumWorld, bmax = bb.maximumWorld;
-          minX = Math.min(minX, bmin.x); maxX = Math.max(maxX, bmax.x);
-          minY = Math.min(minY, bmin.y); maxY = Math.max(maxY, bmax.y);
-          minZ = Math.min(minZ, bmin.z); maxZ = Math.max(maxZ, bmax.z);
-          const cxi = (bmin.x + bmax.x) / 2, cyi = (bmin.y + bmax.y) / 2, czi = (bmin.z + bmax.z) / 2;
-          const dx = (bmax.x - bmin.x), dy = (bmax.y - bmin.y), dz = (bmax.z - bmin.z);
-          const m = Math.max(1e-6, dx * dy * dz);
-          cx += cxi * m; cy += cyi * m; cz += czi * m; mass += m;
-        }
-        if (mass > 0) { cx /= mass; cy /= mass; cz /= mass; }
-        center = new BABYLON.Vector3(cx, cy, cz);
-        const halfX = Math.max(0.1, (maxX - minX) / 2);
-        const halfZ = Math.max(0.1, (maxZ - minZ) / 2);
-        rad = Math.max(halfX, halfZ) * 0.9;
-        planeY = isFinite(minY) ? minY : 0;
-        id = 'group';
-      } else {
-        const mesh = entries[0].mesh;
-        const bb = mesh.getBoundingInfo()?.boundingBox; if (!bb) { disposeMoveWidget(); return; }
-        const min = bb.minimumWorld, max = bb.maximumWorld;
-        const halfX = Math.max(0.1, (max.x - min.x) / 2);
-        const halfZ = Math.max(0.1, (max.z - min.z) / 2);
-        rad = Math.max(halfX, halfZ) * 0.9; // slightly inside
-        center = new BABYLON.Vector3((min.x+max.x)/2, (min.y+max.y)/2, (min.z+max.z)/2);
-        planeY = min.y;
-      }
-      try {
-        const byId = new Map((state?.barrow?.spaces||[]).map(s => [s.id, s]));
-        const voxed = sel.map(id => ({ id, vox: !!byId.get(id)?.vox }));
-        mLog('widget:build', { isGroup, ids: sel, planeY, center: { x:center.x, y:center.y, z:center.z }, rad, voxed });
-      } catch {}
-      if (!moveWidget.root || moveWidget.group !== isGroup || moveWidget.groupKey !== groupKey || (moveWidget.root.isDisposed && moveWidget.root.isDisposed())) {
-        disposeMoveWidget();
-        const scalePct = Number(localStorage.getItem('dw:ui:gizmoScale') || '100') || 100;
-        const gScale = Math.max(0.1, scalePct / 100);
-        const len = Math.max(0.8, rad * 1.2 * gScale);
-        const shaft = Math.max(0.04, len * 0.05);
-        const tipLen = Math.max(0.08, len * 0.18);
-        const tipDia = shaft * 2.2;
-        const root = new BABYLON.TransformNode(`moveGizmo:root:${id}`, scene);
-        const mkArrow = (axis, color) => {
-          const name = `moveGizmo:${axis}:${id}`;
-          const shaftMesh = BABYLON.MeshBuilder.CreateCylinder(`${name}:shaft`, { height: len - tipLen, diameter: shaft }, scene);
-          const tipMesh = BABYLON.MeshBuilder.CreateCylinder(`${name}:tip`, { height: tipLen, diameterTop: 0, diameterBottom: tipDia, tessellation: 24 }, scene);
-          const mat = new BABYLON.StandardMaterial(`${name}:mat`, scene);
-          mat.diffuseColor = color.scale(0.25); mat.emissiveColor = color.clone(); mat.specularColor = new BABYLON.Color3(0,0,0);
-          shaftMesh.material = mat; tipMesh.material = mat;
-          shaftMesh.isPickable = true; tipMesh.isPickable = true; shaftMesh.alwaysSelectAsActiveMesh = true; tipMesh.alwaysSelectAsActiveMesh = true;
-          shaftMesh.renderingGroupId = 2; tipMesh.renderingGroupId = 2;
-          shaftMesh.parent = root; tipMesh.parent = root;
-          if (axis === 'x') { shaftMesh.rotation.z = -Math.PI/2; tipMesh.rotation.z = -Math.PI/2; shaftMesh.position.x = (len - tipLen)/2; tipMesh.position.x = len - tipLen/2; }
-          else if (axis === 'y') { shaftMesh.position.y = (len - tipLen)/2; tipMesh.position.y = len - tipLen/2; }
-          else { shaftMesh.rotation.x = Math.PI/2; tipMesh.rotation.x = Math.PI/2; shaftMesh.position.z = (len - tipLen)/2; tipMesh.position.z = len - tipLen/2; }
-          shaftMesh.name = name; tipMesh.name = name;
-          try { moveWidget.arrowMeshes.push(shaftMesh, tipMesh); } catch {}
-        };
-        moveWidget.root = root; moveWidget.mesh = root; moveWidget.spaceId = id; moveWidget.group = isGroup; moveWidget.groupIDs = sel.slice(); moveWidget.groupKey = groupKey;
-        // Only keep Y arrow (green) — remove X (red) and Z (blue)
-        mkArrow('y', new BABYLON.Color3(0.2, 0.95, 0.2));
-        // Ground-plane drag disc (XZ plane)
-        try {
-          const discR = Math.max(0.6, rad * 0.9 * gScale);
-          const disc = BABYLON.MeshBuilder.CreateDisc(`moveGizmo:disc:${id}`, { radius: discR, tessellation: 64 }, scene);
-          const dmat = new BABYLON.StandardMaterial(`moveGizmo:disc:${id}:mat`, scene);
-          dmat.diffuseColor = new BABYLON.Color3(0.15, 0.5, 0.95); dmat.emissiveColor = new BABYLON.Color3(0.12, 0.42, 0.85); dmat.alpha = 0.18; dmat.specularColor = new BABYLON.Color3(0,0,0);
-          disc.material = dmat; disc.isPickable = true; disc.alwaysSelectAsActiveMesh = true; disc.renderingGroupId = 2;
-          disc.rotation.x = Math.PI / 2; // lie on XZ
-          moveWidget.disc = disc;
-        } catch {}
-      }
-      // Position root
-      if (isGroup) {
-        try { moveWidget.root.parent = null; } catch {}
-        try { moveWidget.root.position.copyFrom(center); } catch {}
-        moveWidget.groupCenter = center;
-        moveWidget.startCenter = null;
-      } else {
-        const mesh = entries[0].mesh;
-        try { moveWidget.root.parent = null; } catch {}
-        try { mesh.computeWorldMatrix(true); mesh.refreshBoundingInfo(); } catch {}
-        const bb = mesh.getBoundingInfo()?.boundingBox; const min = bb?.minimumWorld, max = bb?.maximumWorld;
-        const c = (min && max) ? new BABYLON.Vector3((min.x+max.x)/2, (min.y+max.y)/2, (min.z+max.z)/2) : mesh.position.clone();
-        try { moveWidget.root.position.copyFrom(c); } catch {}
-      }
-      // Position the plane disc over XZ at lowest AABB Y, centered in XZ on current gizmo center
-      try {
-        const p = isGroup ? center : (entries[0]?.mesh?.position || center);
-        moveWidget.planeY = planeY || 0;
-        if (moveWidget.disc) { moveWidget.disc.position.x = p.x; moveWidget.disc.position.y = moveWidget.planeY; moveWidget.disc.position.z = p.z; }
-      } catch {}
-    } catch { try { disposeMoveWidget(); } catch {} }
-  }
+  // ——————————— Move widget moved to gizmo ———————————
 
   // Pointer interactions for rotation widget
   let _lastGizmoClick = 0;
@@ -1929,627 +1319,11 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     if (state.mode !== 'edit') return;
     // Widget interactions (edit mode) are now handled in handlers/gizmo.mjs
     return;
-    const type = pi.type;
-    if (type === BABYLON.PointerEventTypes.POINTERDOWN) {
-      const pick = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('rotGizmo:'));
-      if (pick?.hit && pick.pickedMesh) {
-        const nm = String(pick.pickedMesh.name || '');
-        const mY = rotWidget.meshes?.y, mX = rotWidget.meshes?.x, mZ = rotWidget.meshes?.z;
-        let axis = null;
-        if (nm.startsWith('rotGizmo:Y:') && pick.pickedMesh === mY) axis = 'y';
-        else if (nm.startsWith('rotGizmo:X:') && pick.pickedMesh === mX) axis = 'x';
-        else if (nm.startsWith('rotGizmo:Z:') && pick.pickedMesh === mZ) axis = 'z';
-        if (axis) {
-          try { pi.event?.stopImmediatePropagation?.(); pi.event?.stopPropagation?.(); pi.event?.preventDefault?.(); pi.skipOnPointerObservable = true; } catch {}
-          rotWidget.axis = axis;
-          rotWidget.preDrag = false;
-          rotWidget.downX = scene.pointerX; rotWidget.downY = scene.pointerY;
-          dPick('preDrag:rot', { axis, x: rotWidget.downX, y: rotWidget.downY });
-          try { setRingActive(axis); } catch {}
-          // Initialize local-axis rotation baseline and start dragging immediately
-          try {
-            const ax = rotWidget.axis || 'y';
-            const sel = Array.from(state.selection || []);
-            const isGroup = (sel.length > 1);
-            if (isGroup) {
-              // Group baseline: world axis and center-of-mass
-              const axisWorld = (ax === 'x') ? new BABYLON.Vector3(1,0,0) : (ax === 'y') ? new BABYLON.Vector3(0,1,0) : new BABYLON.Vector3(0,0,1);
-              rotWidget.axisWorld = axisWorld.clone();
-              const center = rotWidget.groupCenter || new BABYLON.Vector3(0,0,0);
-              const p0 = pickPointOnPlane(axisWorld, center) || center.clone();
-              let ref = p0.subtract(center);
-              ref = ref.subtract(axisWorld.scale(BABYLON.Vector3.Dot(ref, axisWorld)));
-              if (ref.lengthSquared() < 1e-6) ref = new BABYLON.Vector3(1,0,0); else ref.normalize();
-              rotWidget.refWorld = ref;
-              // Screen-space baseline angle around the projected center (robust if plane pick fails)
-              try { rotWidget.startAngle = angleToPointerFrom(center); } catch {}
-              rotWidget.mStartX = scene.pointerX; rotWidget.mStartY = scene.pointerY;
-              // Snapshot starts for each selected mesh
-              const map = new Map();
-              for (const id of rotWidget.groupIDs || []) {
-                const m = (state?.built?.spaces || []).find(x => x.id === id)?.mesh; if (!m) continue;
-                try { if (!m.rotationQuaternion) m.rotationQuaternion = BABYLON.Quaternion.FromEulerAngles(m.rotation.x||0, m.rotation.y||0, m.rotation.z||0); } catch {}
-                map.set(id, { q: m.rotationQuaternion?.clone ? m.rotationQuaternion.clone() : null, p: m.position?.clone ? m.position.clone() : new BABYLON.Vector3(m.position.x, m.position.y, m.position.z) });
-              }
-              rotWidget.startById = map; rotWidget.dragging = true;
-            } else {
-              // Single baseline: local axis
-              const { space, mesh } = getSelectedSpaceAndMesh(); if (!mesh) return;
-              const center = mesh.position.clone();
-              const axisLocal = (ax === 'x') ? new BABYLON.Vector3(1,0,0) : (ax === 'y') ? new BABYLON.Vector3(0,1,0) : new BABYLON.Vector3(0,0,1);
-              rotWidget.axisLocal = axisLocal.clone();
-              if (!mesh.rotationQuaternion) {
-                mesh.rotationQuaternion = BABYLON.Quaternion.FromEulerAngles(mesh.rotation.x || 0, mesh.rotation.y || 0, mesh.rotation.z || 0);
-              }
-              rotWidget.startQuat = mesh.rotationQuaternion.clone();
-              const wm = mesh.getWorldMatrix();
-              const nWorld = BABYLON.Vector3.TransformNormal(axisLocal, wm).normalize();
-              const p0 = pickPointOnPlane(nWorld, center) || center.clone();
-              const inv = BABYLON.Matrix.Invert(wm);
-              const p0Local = BABYLON.Vector3.TransformCoordinates(p0, inv);
-              let refLocal = p0Local.subtract(axisLocal.scale(BABYLON.Vector3.Dot(p0Local, axisLocal)));
-              if (refLocal.lengthSquared() < 1e-6) refLocal = new BABYLON.Vector3(1,0,0); else refLocal.normalize();
-              rotWidget.refLocal = refLocal; rotWidget.dragging = true;
-            }
-            const canvas = engine.getRenderingCanvas();
-            camera.inputs?.attached?.pointers?.detachControl(canvas);
-            try { const pe = pi.event; if (pe && pe.pointerId != null && canvas.setPointerCapture) canvas.setPointerCapture(pe.pointerId); } catch {}
-          } catch {}
-          // Gizmo double-click opens DB for selected space
-          try {
-            const now = performance.now();
-            if (now - _lastGizmoClick <= _GIZMO_DCLICK_MS) {
-              const { id } = getSelectedSpaceAndMesh();
-              if (id) window.dispatchEvent(new CustomEvent('dw:showDbForSpace', { detail: { id } }));
-            }
-            _lastGizmoClick = now;
-          } catch {}
-        }
-      }
-      // Move widget start
-      // Prefer the ground-plane disc if under the cursor to ensure plane moves
-      let pick2 = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('moveGizmo:disc:'));
-      if (!pick2?.hit) {
-        pick2 = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('moveGizmo:'));
-      }
-      if (pick2?.hit && pick2.pickedMesh && String(pick2.pickedMesh.name||'').startsWith('moveGizmo:')) {
-        try { pi.event?.stopImmediatePropagation?.(); pi.event?.stopPropagation?.(); pi.event?.preventDefault?.(); pi.skipOnPointerObservable = true; } catch {}
-        // Prepare possible drag
-        moveWidget.preDrag = true;
-        moveWidget.downX = scene.pointerX; moveWidget.downY = scene.pointerY;
-        const _nm = String(pick2.pickedMesh.name||'');
-        try { const m = _nm.match(/^moveGizmo:(y):/i); moveWidget.axis = m ? m[1].toLowerCase() : null; } catch { moveWidget.axis = null; }
-        moveWidget.mode = _nm.startsWith('moveGizmo:disc:') ? 'plane' : 'axis';
-        dPick('preDrag:move', { x: moveWidget.downX, y: moveWidget.downY, mode: moveWidget.mode, axis: moveWidget.axis });
-        mLog('press', { picked: _nm, mode: moveWidget.mode, axis: moveWidget.axis });
-      }
-    } else if (type === BABYLON.PointerEventTypes.POINTERUP) {
-      if (rotWidget.dragging) {
-        rotWidget.dragging = false;
-        try {
-          const canvas = engine.getRenderingCanvas();
-          camera.inputs?.attached?.pointers?.attachControl(canvas, true);
-          try { const pe = pi.event; if (pe && pe.pointerId != null && canvas.releasePointerCapture) canvas.releasePointerCapture(pe.pointerId); } catch {}
-          Log.log('GIZMO', 'Drag end', { id: rotWidget.spaceId, action: 'attachCameraPointers' });
-        } catch {}
-        // Persist rotation using quaternion → Euler
-        try {
-          const { space, mesh } = getSelectedSpaceAndMesh();
-          if (space && mesh) {
-            if (!space.rotation || typeof space.rotation !== 'object') space.rotation = { x: 0, y: 0, z: 0 };
-            try {
-              const e = mesh.rotationQuaternion?.toEulerAngles ? mesh.rotationQuaternion.toEulerAngles() : new BABYLON.Vector3(mesh.rotation.x||0, mesh.rotation.y||0, mesh.rotation.z||0);
-              space.rotation.x = e.x; space.rotation.y = e.y; space.rotation.z = e.z; space.rotY = e.y;
-              const deg = Math.round((e.y * 180 / Math.PI) * 10) / 10;
-              Log.log('GIZMO', 'Persist rotation', { id: rotWidget.spaceId, euler: { x: e.x, y: e.y, z: e.z }, degY: deg });
-            } catch {}
-            saveBarrow(state.barrow); snapshot(state.barrow);
-            renderDbView(state.barrow);
-            scheduleGridUpdate();
-            try { disposeLiveIntersections(); rebuildScene(); ensureRotWidget(); ensureMoveWidget(); } catch {}
-          }
-        } catch {}
-        try { setRingsDim(); } catch {}
-      }
-      // Clear pending pre-drag state on mouse up
-      rotWidget.preDrag = false;
-      moveWidget.preDrag = false;
-      if (moveWidget.dragging) {
-        moveWidget.dragging = false;
-        try { const canvas = engine.getRenderingCanvas(); camera.inputs?.attached?.pointers?.attachControl(canvas, true); const pe = pi.event; if (pe && pe.pointerId != null && canvas.releasePointerCapture) canvas.releasePointerCapture(pe.pointerId); Log.log('GIZMO', 'Move end', { id: moveWidget.spaceId }); } catch {}
-        try {
-          const selNow = Array.from(state.selection || []);
-          const isGroup = selNow.length > 1;
-          if (isGroup) {
-            const byId = new Map((state.barrow.spaces||[]).map(s => [s.id, s]));
-            for (const id2 of moveWidget.groupIDs || []) {
-              const m2 = (state?.built?.spaces || []).find(x => x.id === id2)?.mesh; if (!m2) continue;
-              const sp = byId.get(id2); if (!sp) continue;
-              sp.origin = { x: m2.position.x, y: m2.position.y, z: m2.position.z };
-            }
-            saveBarrow(state.barrow); snapshot(state.barrow);
-            renderDbView(state.barrow);
-            scheduleGridUpdate();
-            try { disposeLiveIntersections(); rebuildScene(); ensureRotWidget(); ensureMoveWidget(); } catch {}
-          } else {
-            const { space, mesh } = getSelectedSpaceAndMesh();
-            if (space && mesh) {
-              // Persist origin
-              space.origin = space.origin || { x: 0, y: 0, z: 0 };
-              space.origin.x = mesh.position.x;
-              space.origin.y = mesh.position.y;
-              space.origin.z = mesh.position.z;
-              Log.log('GIZMO', 'Persist move', { id: moveWidget.spaceId, origin: space.origin });
-              saveBarrow(state.barrow); snapshot(state.barrow);
-              renderDbView(state.barrow);
-              scheduleGridUpdate();
-              try { disposeLiveIntersections(); rebuildScene(); ensureRotWidget(); ensureMoveWidget(); } catch {}
-            }
-          }
-        } catch {}
-        try { setRingsDim(); } catch {}
-      }
-    } else if (type === BABYLON.PointerEventTypes.POINTERMOVE) {
-      const selNowGlobal = Array.from(state.selection || []);
-      const isGroupGlobal = selNowGlobal.length > 1;
-      const { space, mesh, id } = getSelectedSpaceAndMesh(); if (!isGroupGlobal && !mesh) return;
-      // Hover highlight for rotation rings when not dragging/pre-dragging any gizmo
-      try {
-        if (!rotWidget.dragging && !rotWidget.preDrag && !moveWidget.dragging && !moveWidget.preDrag) {
-          const hp = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('rotGizmo:'));
-          let hAxis = null;
-          if (hp?.hit && hp.pickedMesh) {
-            const n = String(hp.pickedMesh.name || '');
-            if (n.startsWith('rotGizmo:Y:') && rotWidget.meshes?.y && hp.pickedMesh === rotWidget.meshes.y) hAxis = 'y';
-            else if (n.startsWith('rotGizmo:X:') && rotWidget.meshes?.x && hp.pickedMesh === rotWidget.meshes.x) hAxis = 'x';
-            else if (n.startsWith('rotGizmo:Z:') && rotWidget.meshes?.z && hp.pickedMesh === rotWidget.meshes.z) hAxis = 'z';
-          }
-          if (hAxis) {
-            if (rotWidget.activeAxis !== hAxis) { try { setRingActive(hAxis); } catch {} }
-          } else {
-            if (rotWidget.activeAxis) { try { setRingsDim(); } catch {} }
-          }
-        }
-      } catch {}
-      const dragThreshold = 6; // pixels
-      // Possibly start rotation drag if moved enough after pressing ring
-      if (!rotWidget.dragging && rotWidget.preDrag) {
-        const dx = (scene.pointerX - rotWidget.downX); const dy = (scene.pointerY - rotWidget.downY);
-        if (Math.hypot(dx, dy) >= dragThreshold) {
-          try { pi.event?.stopImmediatePropagation?.(); pi.event?.stopPropagation?.(); pi.event?.preventDefault?.(); pi.skipOnPointerObservable = true; } catch {}
-          const ax = rotWidget.axis || 'y';
-          const center = mesh.position.clone();
-          // Local axis unit vector
-          const axisLocal = (ax === 'x') ? new BABYLON.Vector3(1,0,0) : (ax === 'y') ? new BABYLON.Vector3(0,1,0) : new BABYLON.Vector3(0,0,1);
-          rotWidget.axisLocal = axisLocal.clone();
-          // Ensure quaternion use
-          try {
-            if (!mesh.rotationQuaternion) {
-              mesh.rotationQuaternion = BABYLON.Quaternion.FromEulerAngles(mesh.rotation.x || 0, mesh.rotation.y || 0, mesh.rotation.z || 0);
-            }
-          } catch {}
-          rotWidget.startQuat = (mesh.rotationQuaternion && mesh.rotationQuaternion.clone) ? mesh.rotationQuaternion.clone() : null;
-          // World plane normal from current local axis
-          const wm = mesh.getWorldMatrix();
-          const nWorld = BABYLON.Vector3.TransformNormal(axisLocal, wm).normalize();
-          const p0 = pickPointOnPlane(nWorld, center) || center.clone();
-          // Build reference vector in LOCAL space (project p0 to local plane)
-          const inv = BABYLON.Matrix.Invert(wm);
-          const p0Local = BABYLON.Vector3.TransformCoordinates(p0, inv);
-          let refLocal = p0Local.subtract(axisLocal.scale(BABYLON.Vector3.Dot(p0Local, axisLocal)));
-          if (refLocal.lengthSquared() < 1e-6) refLocal = new BABYLON.Vector3(1,0,0);
-          else refLocal.normalize();
-          rotWidget.refLocal = refLocal;
-          rotWidget.dragging = true; rotWidget.preDrag = false;
-          try {
-            const canvas = engine.getRenderingCanvas();
-            camera.inputs?.attached?.pointers?.detachControl(canvas);
-            Log.log('GIZMO', 'Drag start', { id: rotWidget.spaceId, axis: ax, startAngle: rotWidget.startAngle, startRot: rotWidget.startRot, action: 'detachCameraPointers' });
-          } catch {}
-          dPick('dragStart:rot', {});
-          // Hide built intersections during drag to avoid stale boxes
-          try { for (const x of state?.built?.intersections || []) { try { state.hl?.removeMesh(x.mesh); } catch {}; x.mesh?.setEnabled(false); } } catch {}
-          // Sync DB view immediately with current values
-          try {
-            if (space) {
-              if (!space.rotation || typeof space.rotation !== 'object') space.rotation = { x: 0, y: 0, z: 0 };
-              try { const e = mesh.rotationQuaternion?.toEulerAngles ? mesh.rotationQuaternion.toEulerAngles() : new BABYLON.Vector3(mesh.rotation.x||0, mesh.rotation.y||0, mesh.rotation.z||0); space.rotation.x = e.x; space.rotation.y = e.y; space.rotation.z = e.z; space.rotY = e.y; } catch {}
-              renderDbView(state.barrow);
-            }
-          } catch {}
-        }
-      }
-      // Rotation drag
-      if (rotWidget.dragging) {
-        try { pi.event?.stopImmediatePropagation?.(); pi.event?.stopPropagation?.(); pi.event?.preventDefault?.(); pi.skipOnPointerObservable = true; } catch {}
-        const ax = rotWidget.axis || 'y';
-        const sel = Array.from(state.selection || []);
-        const isGroup = (sel.length > 1);
-        let delta = 0;
-        if (isGroup) {
-          // Screen-space angle delta around projected center (stable across camera angles)
-          const center = rotWidget.groupCenter || new BABYLON.Vector3(0,0,0);
-          let ok = true;
-          try {
-            const angNow = angleToPointerFrom(center);
-            const ang0 = rotWidget.startAngle || angNow;
-            delta = angNow - ang0;
-          } catch { ok = false; }
-          // Fallback: derive delta from mouse movement if projection fails
-          if (!isFinite(delta) || Math.abs(delta) < 1e-6 || ok === false) {
-            const dx = (scene.pointerX - rotWidget.mStartX);
-            const sens2 = (() => { try { return Math.max(0.0005, Math.min(0.01, Number(localStorage.getItem('dw:ui:rotSens') || '0.008')/100)); } catch { return 0.008/100; } })();
-            delta = dx * sens2 * Math.PI; // screen pixels to radians
-          }
-          // normalize to [-pi, pi]
-          if (delta > Math.PI) delta -= 2*Math.PI; else if (delta < -Math.PI) delta += 2*Math.PI;
-          // Apply to each selected mesh
-          const sens = (() => { try { return Math.max(0.1, Math.min(2.0, Number(localStorage.getItem('dw:ui:rotSens') || '0.8'))); } catch { return 0.8; } })();
-          const nWorld = rotWidget.axisWorld || new BABYLON.Vector3(0,1,0);
-          const qRot = BABYLON.Quaternion.RotationAxis(nWorld, sens * delta);
-          // Build rotation matrix from axis/angle (avoid Matrix.FromQuaternion which may not exist in CDN build)
-          const mRot = BABYLON.Matrix.RotationAxis(nWorld, sens * delta);
-          for (const id of rotWidget.groupIDs || []) {
-            const entry = (state?.built?.spaces || []).find(x => x.id === id); if (!entry?.mesh) continue;
-            const start = rotWidget.startById?.get?.(id);
-            if (!start) continue;
-            const m = entry.mesh;
-            // Position
-            const p0 = start.p || m.position;
-            const rel = p0.subtract(center);
-            const relRot = BABYLON.Vector3.TransformCoordinates(rel, mRot);
-            const pNew = center.add(relRot);
-            m.position.copyFrom(pNew);
-            // Orientation (world axis pre-multiply)
-            try {
-              const q0 = start.q || m.rotationQuaternion || BABYLON.Quaternion.FromEulerAngles(m.rotation.x||0, m.rotation.y||0, m.rotation.z||0);
-              m.rotationQuaternion = qRot.multiply ? qRot.multiply(q0) : q0;
-              m.rotation.set(0,0,0);
-            } catch {}
-            try { m.computeWorldMatrix(true); m.refreshBoundingInfo(); } catch {}
-          }
-          rotWidget.lastRot = delta;
-          try { renderGizmoHud({ selCount: sel.length, center, deltaDeg: (delta*180/Math.PI), pickMode: 'screen|mouse' }); } catch {}
-        } else {
-          // Single: local space delta
-          const center = mesh.position.clone();
-          const axisLocal = rotWidget.axisLocal || ((ax === 'x') ? new BABYLON.Vector3(1,0,0) : (ax === 'y') ? new BABYLON.Vector3(0,1,0) : new BABYLON.Vector3(0,0,1));
-          const wm = mesh.getWorldMatrix();
-          const nWorld = BABYLON.Vector3.TransformNormal(axisLocal, wm).normalize();
-          const p = pickPointOnPlane(nWorld, center); if (!p) return;
-          const inv = BABYLON.Matrix.Invert(wm);
-          const pLocal = BABYLON.Vector3.TransformCoordinates(p, inv);
-          let curLocal = pLocal.subtract(axisLocal.scale(BABYLON.Vector3.Dot(pLocal, axisLocal)));
-          if (curLocal.lengthSquared() < 1e-8) return; curLocal.normalize();
-          const refLocal = rotWidget.refLocal || new BABYLON.Vector3(1,0,0);
-          const crossL = BABYLON.Vector3.Cross(refLocal, curLocal);
-          const s = BABYLON.Vector3.Dot(axisLocal, crossL);
-          const c = BABYLON.Vector3.Dot(refLocal, curLocal);
-          delta = Math.atan2(s, c);
-          try {
-            const qStart = rotWidget.startQuat || mesh.rotationQuaternion || BABYLON.Quaternion.FromEulerAngles(mesh.rotation.x||0, mesh.rotation.y||0, mesh.rotation.z||0);
-            mesh.rotationQuaternion = (qStart.clone ? qStart.clone() : qStart);
-            const sens = (() => { try { return Math.max(0.1, Math.min(2.0, Number(localStorage.getItem('dw:ui:rotSens') || '0.8'))); } catch { return 0.8; } })();
-            mesh.rotate(axisLocal, sens * delta, BABYLON.Space.LOCAL);
-            mesh.rotation.set(0,0,0);
-          } catch {}
-          try { mesh.computeWorldMatrix(true); mesh.refreshBoundingInfo(); } catch {}
-          rotWidget.lastRot = delta;
-          try { renderGizmoHud({ selCount: 1, center, deltaDeg: (delta*180/Math.PI), pickMode: 'plane' }); } catch {}
-        }
-        try { updateRotWidgetFromMesh(mesh); } catch {}
-        // Live update model rotation and DB (throttled), and always log drag update for visibility
-        try {
-          const selLive = Array.from(state.selection || []);
-          const isGroupLive = selLive.length > 1;
-          if (isGroupLive) {
-            const byId = new Map((state.barrow.spaces||[]).map(s => [s.id, s]));
-            for (const id2 of selLive) {
-              const m2 = (state?.built?.spaces || []).find(x => x.id === id2)?.mesh; if (!m2) continue;
-              const sp = byId.get(id2); if (!sp) continue;
-              const e = m2.rotationQuaternion?.toEulerAngles ? m2.rotationQuaternion.toEulerAngles() : new BABYLON.Vector3(m2.rotation.x||0, m2.rotation.y||0, m2.rotation.z||0);
-              sp.rotation = { x: e.x, y: e.y, z: e.z }; sp.rotY = e.y;
-            }
-          } else if (space && mesh) {
-            if (!space.rotation || typeof space.rotation !== 'object') space.rotation = { x: 0, y: 0, z: 0 };
-            const e = mesh.rotationQuaternion?.toEulerAngles ? mesh.rotationQuaternion.toEulerAngles() : new BABYLON.Vector3(mesh.rotation.x||0, mesh.rotation.y||0, mesh.rotation.z||0);
-            space.rotation.x = e.x; space.rotation.y = e.y; space.rotation.z = e.z; space.rotY = e.y;
-          }
-          const now = performance.now();
-          if (now - _lastDbRefresh > 60) {
-            _lastDbRefresh = now;
-            const deg = (delta * 180 / Math.PI);
-            Log.log('GIZMO', 'Drag update', { id: rotWidget.spaceId, axis: ax, delta, deg: isFinite(deg) ? Math.round(deg*10)/10 : null });
-            try { renderDbView(state.barrow); } catch {}
-          }
-          // Live intersection preview (use any id in selection for highlight updates)
-          try { if (!isGroupLive) updateLiveIntersectionsFor(id); else if (selLive.length) updateLiveIntersectionsFor(selLive[0]); } catch {}
-        } catch {}
-        return;
-      }
-      // Possibly start move drag if moved enough after pressing gizmo
-      if (!moveWidget.dragging && moveWidget.preDrag) {
-        const dx = (scene.pointerX - moveWidget.downX); const dy = (scene.pointerY - moveWidget.downY);
-        if (Math.hypot(dx, dy) >= dragThreshold) {
-          try { pi.event?.stopImmediatePropagation?.(); pi.event?.stopPropagation?.(); pi.event?.preventDefault?.(); pi.skipOnPointerObservable = true; } catch {}
-          const selNow = Array.from(state.selection || []);
-          const isGroup = selNow.length > 1;
-          const isPlane = (moveWidget.mode === 'plane');
-          const axis = (moveWidget.axis === 'x') ? new BABYLON.Vector3(1,0,0) : (moveWidget.axis === 'y') ? new BABYLON.Vector3(0,1,0) : new BABYLON.Vector3(0,0,1);
-          const view = camera.getForwardRay().direction.clone();
-          let n = isPlane ? new BABYLON.Vector3(0,1,0) : BABYLON.Vector3.Cross(axis, BABYLON.Vector3.Cross(view, axis));
-          if (!isPlane) {
-            if (n.lengthSquared() < 1e-4) n = BABYLON.Vector3.Cross(axis, new BABYLON.Vector3(0,1,0));
-            if (n.lengthSquared() < 1e-4) n = BABYLON.Vector3.Cross(axis, new BABYLON.Vector3(1,0,0));
-          }
-          try { n.normalize(); } catch {}
-          mLog('drag:init', { isGroup, isPlane, axis: moveWidget.axis, planeY: moveWidget.planeY, dragPlaneY: moveWidget.dragPlaneY, n: { x: n.x, y: n.y, z: n.z } });
-          if (isGroup) {
-            const center = moveWidget.groupCenter || new BABYLON.Vector3(0,0,0);
-            // Lock plane Y at drag start
-            if (isPlane && (moveWidget.dragPlaneY == null)) moveWidget.dragPlaneY = moveWidget.planeY || 0;
-            const base0 = isPlane ? new BABYLON.Vector3(0, (moveWidget.dragPlaneY != null ? moveWidget.dragPlaneY : (moveWidget.planeY || 0)), 0) : center;
-            const p0 = pickPointOnPlane(n, base0) || base0.clone();
-            moveWidget.axisStart = isPlane ? 0 : BABYLON.Vector3.Dot(p0, axis);
-            moveWidget.startPoint = p0.clone();
-            moveWidget.startCenter = center.clone ? center.clone() : new BABYLON.Vector3(center.x, center.y, center.z);
-            moveWidget.startById = new Map();
-            moveWidget.groupIDs = selNow.slice();
-            for (const id2 of moveWidget.groupIDs) {
-              const m2 = (state?.built?.spaces || []).find(x => x.id === id2)?.mesh; if (!m2) continue;
-              moveWidget.startById.set(id2, m2.position?.clone ? m2.position.clone() : new BABYLON.Vector3(m2.position.x, m2.position.y, m2.position.z));
-            }
-            moveWidget.planeNormal = n.clone();
-            moveWidget.dragging = true; moveWidget.preDrag = false;
-            try { const canvas = engine.getRenderingCanvas(); camera.inputs?.attached?.pointers?.detachControl(canvas); const pe = pi.event; if (pe && pe.pointerId != null && canvas.setPointerCapture) canvas.setPointerCapture(pe.pointerId); Log.log('GIZMO', isPlane ? 'Group Plane Move start' : 'Group Move start', { ids: moveWidget.groupIDs, mode: moveWidget.mode, axis: moveWidget.axis }); } catch {}
-          } else {
-            const mref = (state?.built?.spaces || []).find(x => x.id === selNow[0])?.mesh; if (!mref) return;
-            const center = mref.position.clone();
-            if (isPlane && (moveWidget.dragPlaneY == null)) moveWidget.dragPlaneY = moveWidget.planeY || 0;
-            const base0 = isPlane ? new BABYLON.Vector3(0, (moveWidget.dragPlaneY != null ? moveWidget.dragPlaneY : (moveWidget.planeY || 0)), 0) : center;
-            const p0 = pickPointOnPlane(n, base0) || base0.clone();
-            moveWidget.axisStart = isPlane ? 0 : BABYLON.Vector3.Dot(p0, axis);
-            moveWidget.startPoint = p0.clone();
-            moveWidget.startCenter = center.clone();
-            moveWidget.planeNormal = n.clone();
-            moveWidget.dragging = true; moveWidget.preDrag = false;
-            try { const canvas = engine.getRenderingCanvas(); camera.inputs?.attached?.pointers?.detachControl(canvas); const pe = pi.event; if (pe && pe.pointerId != null && canvas.setPointerCapture) canvas.setPointerCapture(pe.pointerId); Log.log('GIZMO', isPlane ? 'Plane Move start' : 'Move start', { id: moveWidget.spaceId, mode: moveWidget.mode, axis: moveWidget.axis, start: center }); } catch {}
-          }
-          dPick('dragStart:move', {});
-          try { mLog('drag:start', { mode: moveWidget.mode, axis: moveWidget.axis, startPoint: { x: moveWidget.startPoint.x, y: moveWidget.startPoint.y, z: moveWidget.startPoint.z }, startCenter: { x: moveWidget.startCenter.x, y: moveWidget.startCenter.y, z: moveWidget.startCenter.z }, axisStart: moveWidget.axisStart }); } catch {}
-          // Hide built intersections during drag to avoid stale boxes
-          try { for (const x of state?.built?.intersections || []) { try { state.hl?.removeMesh(x.mesh); } catch {}; x.mesh?.setEnabled(false); } } catch {}
-        }
-      }
-      // Move drag
-      if (moveWidget.dragging) {
-        try { pi.event?.stopImmediatePropagation?.(); pi.event?.stopPropagation?.(); pi.event?.preventDefault?.(); pi.skipOnPointerObservable = true; } catch {}
-        const selNow = Array.from(state.selection || []);
-        const isGroup = selNow.length > 1;
-        const isPlane = (moveWidget.mode === 'plane');
-        const axis = (moveWidget.axis === 'x') ? new BABYLON.Vector3(1,0,0) : (moveWidget.axis === 'y') ? new BABYLON.Vector3(0,1,0) : new BABYLON.Vector3(0,0,1);
-        if (isGroup) {
-          const n = moveWidget.planeNormal || new BABYLON.Vector3(0,1,0);
-          const basePt = isPlane ? new BABYLON.Vector3(0, (moveWidget.dragPlaneY != null ? moveWidget.dragPlaneY : (moveWidget.planeY || 0)), 0) : (moveWidget.startCenter || new BABYLON.Vector3(0,0,0));
-          const p = pickPointOnPlane(n, basePt); if (!p) return;
-          let deltaScalar = 0; let deltaVec = null;
-          if (isPlane) { deltaVec = p.subtract(moveWidget.startPoint || basePt); }
-          else { const s = BABYLON.Vector3.Dot(p, axis); deltaScalar = s - (moveWidget.axisStart || 0); }
-          // Helper: snap to voxel grid (per space)
-          const snapVal = (v, res) => {
-            const r = Math.max(1e-6, Number(res) || 0);
-            return Math.round(v / r) * r;
-          };
-          for (const id2 of moveWidget.groupIDs || []) {
-            const entry = (state?.built?.spaces || []).find(x => x.id === id2); if (!entry?.mesh) continue;
-            const startPos = moveWidget.startById?.get?.(id2); if (!startPos) continue;
-            const targetPos = isPlane ? startPos.add(deltaVec) : startPos.add(axis.scale(deltaScalar));
-            // Snap if the space is voxelized
-            try {
-              const sp2 = (state?.barrow?.spaces || []).find(x => x && x.id === id2);
-              const hasVox = !!(sp2 && sp2.vox && sp2.vox.size);
-              if (hasVox) {
-                const resV = sp2.vox?.res || sp2.res || (state?.barrow?.meta?.voxelSize || 1);
-                targetPos.x = snapVal(targetPos.x, resV);
-                targetPos.y = snapVal(targetPos.y, resV);
-                targetPos.z = snapVal(targetPos.z, resV);
-              }
-            } catch {}
-            const m2 = entry.mesh; m2.position.copyFrom(targetPos);
-            try { m2.computeWorldMatrix(true); m2.refreshBoundingInfo(); } catch {}
-          }
-          const targetCenter = isPlane ? (moveWidget.startCenter || new BABYLON.Vector3(0,0,0)).add(deltaVec) : (moveWidget.startCenter || new BABYLON.Vector3(0,0,0)).add(axis.scale(deltaScalar));
-          try { moveWidget.root.position.copyFrom(targetCenter); } catch {}
-          try { updateMoveDiscPlacement(); } catch {}
-          try { updateContactShadowPlacement(); } catch {}
-          moveWidget.groupCenter = targetCenter;
-          // Keep rotation gizmo (group rings) following
-          try { if (rotWidget.group && rotWidget.groupNode) rotWidget.groupNode.position.copyFrom(targetCenter); } catch {}
-          // Persist model origins live (throttled with DB refresh debounce)
-          try {
-            const byId = new Map((state.barrow.spaces||[]).map(s => [s.id, s]));
-            for (const id2 of moveWidget.groupIDs || []) {
-              const m2 = (state?.built?.spaces || []).find(x => x.id === id2)?.mesh; if (!m2) continue;
-              const sp = byId.get(id2); if (!sp) continue;
-              sp.origin = { x: m2.position.x, y: m2.position.y, z: m2.position.z };
-            }
-            const now = performance.now();
-            if (now - _lastDbRefresh > 60) {
-              _lastDbRefresh = now;
-              Log.log('GIZMO', isPlane ? 'Group Plane Move update' : 'Group Move update', { ids: moveWidget.groupIDs, mode: moveWidget.mode, axis: moveWidget.axis });
-              try { renderDbView(state.barrow); } catch {}
-              try { updateSelectionObbLive(); } catch {}
-            }
-          } catch {}
-        } else {
-          const n = moveWidget.planeNormal || new BABYLON.Vector3(0,1,0);
-          const basePt = isPlane ? new BABYLON.Vector3(0, (moveWidget.dragPlaneY != null ? moveWidget.dragPlaneY : (moveWidget.planeY || 0)), 0) : (moveWidget.startCenter || mesh.position || new BABYLON.Vector3(0,0,0));
-          const p = pickPointOnPlane(n, basePt); if (!p) return;
-          let target;
-          if (isPlane) {
-            const deltaVec = p.subtract(moveWidget.startPoint || basePt);
-            target = (moveWidget.startCenter || mesh.position).add(deltaVec);
-          } else {
-            const s = BABYLON.Vector3.Dot(p, axis);
-            const deltaScalar = s - (moveWidget.axisStart || 0);
-            target = (moveWidget.startCenter || mesh.position).add(axis.scale(deltaScalar));
-          }
-          // Snap to voxel grid if this space is voxelized
-          try {
-            const sp = (state?.barrow?.spaces || []).find(x => x && x.id === moveWidget.spaceId);
-            const hasVox = !!(sp && sp.vox && sp.vox.size);
-            if (hasVox) {
-              const resV = sp.vox?.res || sp.res || (state?.barrow?.meta?.voxelSize || 1);
-              const snapVal = (v, r) => { r = Math.max(1e-6, Number(r)||0); return Math.round(v / r) * r; };
-              target.x = snapVal(target.x, resV);
-              target.y = snapVal(target.y, resV);
-              target.z = snapVal(target.z, resV);
-            }
-          } catch {}
-          try {
-            const now = performance.now();
-            moveWidget._lastLog = moveWidget._lastLog || 0;
-            if (now - moveWidget._lastLog > 100) {
-              moveWidget._lastLog = now;
-              mLog('drag:update', { isPlane, basePt: { x: basePt.x, y: basePt.y, z: basePt.z }, target: { x: target.x, y: target.y, z: target.z }, dragPlaneY: moveWidget.dragPlaneY });
-            }
-          } catch {}
-          mesh.position.copyFrom(target);
-          try { mesh.computeWorldMatrix(true); mesh.refreshBoundingInfo(); } catch {}
-          try { if (moveWidget.root) moveWidget.root.position.copyFrom(target); } catch {}
-          try { updateMoveDiscPlacement(); } catch {}
-          try { updateContactShadowPlacement(); } catch {}
-          try { updateRotWidgetFromMesh(mesh); } catch {}
-          try {
-            if (space) {
-              space.origin = space.origin || { x: 0, y: 0, z: 0 };
-              space.origin.x = mesh.position.x; space.origin.y = mesh.position.y; space.origin.z = mesh.position.z;
-              const now = performance.now();
-              if (now - _lastDbRefresh > 60) { _lastDbRefresh = now; Log.log('GIZMO', isPlane ? 'Plane Move update' : 'Move update', { id: moveWidget.spaceId, mode: moveWidget.mode, axis: moveWidget.axis, origin: space.origin }); try { renderDbView(state.barrow); } catch {} }
-              try { updateLiveIntersectionsFor(id); } catch {}
-            }
-          } catch {}
-          try { updateSelectionObbLive(); } catch {}
-        }
-      }
-      }
+    
   });
 
-  // Live voxel hover selection on mouse move
-  (function setupVoxelHover(){
-    let _lastMoveAt = 0;
-    scene.onPointerObservable.add((pi) => {
-      try {
-        if (pi.type !== BABYLON.PointerEventTypes.POINTERMOVE) return;
-        // Gate hover-based voxel picking (default off)
-        try { if (localStorage.getItem('dw:ui:hoverVoxel') !== '1') return; } catch {}
-        if (rotWidget.dragging || moveWidget.dragging) return;
-        // Active space: prefer current selection (single), else space under pointer, else cavern focus
-        let s = null;
-        const sel = Array.from(state.selection || []);
-        if (sel.length === 1) {
-          s = (state?.barrow?.spaces || []).find(x => x && x.id === sel[0]);
-        }
-        // If nothing selected, try the space under the pointer
-        if (!s) {
-          try {
-            const sp = scene.pick(scene.pointerX, scene.pointerY, (m) => m && typeof m.name === 'string' && m.name.startsWith('space:'));
-            if (sp?.hit && sp.pickedMesh) {
-              const pickedName = String(sp.pickedMesh.name||'');
-              const id = pickedName.slice('space:'.length).split(':')[0];
-              s = (state?.barrow?.spaces || []).find(x => x && x.id === id) || null;
-            }
-          } catch {}
-        }
-        // Cavern focus fallback (while in cavern)
-        if (!s && state.mode === 'cavern' && state._scry?.spaceId) {
-          s = (state?.barrow?.spaces || []).find(x => x && x.id === state._scry.spaceId) || null;
-        }
-        if (!s) return;
-        // Only proceed if voxelized
-        if (!s.vox || !s.vox.size) return;
-        // If voxel selection is locked for this space, do not update on hover
-        if (state.lockedVoxPick && state.lockedVoxPick.id === s.id) return;
-        const now = performance.now ? performance.now() : Date.now();
-        if (now - _lastMoveAt < 25) return; // throttle ~40 Hz
-        _lastMoveAt = now;
-        // DDA pick identical to click path
-        const vox = decompressVox(s.vox);
-        const nx = Math.max(1, vox.size?.x || 1);
-        const ny = Math.max(1, vox.size?.y || 1);
-        const nz = Math.max(1, vox.size?.z || 1);
-        const res = vox.res || s.res || (state?.barrow?.meta?.voxelSize || 1);
-        const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), camera);
-        const roW = ray.origin.clone(), rdW = ray.direction.clone();
-        const cx = s.origin?.x||0, cy = s.origin?.y||0, cz = s.origin?.z||0;
-        let q = BABYLON.Quaternion.Identity();
-        const worldAligned = !!(s.vox && s.vox.worldAligned);
-        try {
-          if (!worldAligned) {
-            const rx = Number(s.rotation?.x ?? 0) || 0;
-            const ry = (s.rotation && typeof s.rotation.y === 'number') ? Number(s.rotation.y) : Number(s.rotY || 0) || 0;
-            const rz = Number(s.rotation?.z ?? 0) || 0;
-            q = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz);
-          }
-        } catch {}
-        const qInv = BABYLON.Quaternion.Inverse(q);
-        const rotInv = (() => { try { return BABYLON.Matrix.Compose(new BABYLON.Vector3(1,1,1), qInv, BABYLON.Vector3.Zero()); } catch { return BABYLON.Matrix.Identity(); } })();
-        const roL = BABYLON.Vector3.TransformCoordinates(roW.subtract(new BABYLON.Vector3(cx, cy, cz)), rotInv);
-        const rdL = BABYLON.Vector3.TransformNormal(rdW, rotInv);
-        const minX = -(nx * res) / 2, maxX = +(nx * res) / 2;
-        const minY = -(ny * res) / 2, maxY = +(ny * res) / 2;
-        const minZ = -(nz * res) / 2, maxZ = +(nz * res) / 2;
-        const inv = (v) => (Math.abs(v) < 1e-12 ? Infinity : 1 / v);
-        const tx1 = (minX - roL.x) * inv(rdL.x), tx2 = (maxX - roL.x) * inv(rdL.x);
-        const ty1 = (minY - roL.y) * inv(rdL.y), ty2 = (maxY - roL.y) * inv(rdL.y);
-        const tz1 = (minZ - roL.z) * inv(rdL.z), tz2 = (maxZ - roL.z) * inv(rdL.z);
-        const tmin = Math.max(Math.min(tx1, tx2), Math.min(ty1, ty2), Math.min(tz1, tz2));
-        const tmax = Math.min(Math.max(tx1, tx2), Math.max(ty1, ty2), Math.max(tz1, tz2));
-        if (!(tmax >= Math.max(0, tmin))) return;
-        const EPS = 1e-6; let t = Math.max(tmin, 0) + EPS;
-        const toIdx = (x, y, z) => ({
-          ix: Math.min(nx-1, Math.max(0, Math.floor((x - minX) / res))),
-          iy: Math.min(ny-1, Math.max(0, Math.floor((y - minY) / res))),
-          iz: Math.min(nz-1, Math.max(0, Math.floor((z - minZ) / res))),
-        });
-        let pos = new BABYLON.Vector3(roL.x + rdL.x * t, roL.y + rdL.y * t, roL.z + rdL.z * t);
-        let { ix, iy, iz } = toIdx(pos.x, pos.y, pos.z);
-        const stepX = (rdL.x > 0) ? 1 : (rdL.x < 0 ? -1 : 0);
-        const stepY = (rdL.y > 0) ? 1 : (rdL.y < 0 ? -1 : 0);
-        const stepZ = (rdL.z > 0) ? 1 : (rdL.z < 0 ? -1 : 0);
-        const nextBound = (i, step, min) => min + (i + (step > 0 ? 1 : 0)) * res;
-        let tMaxX = (stepX !== 0) ? (nextBound(ix, stepX, minX) - roL.x) / rdL.x : Infinity;
-        let tMaxY = (stepY !== 0) ? (nextBound(iy, stepY, minY) - roL.y) / rdL.y : Infinity;
-        let tMaxZ = (stepZ !== 0) ? (nextBound(iz, stepZ, minZ) - roL.z) / rdL.z : Infinity;
-        const tDeltaX = (stepX !== 0) ? Math.abs(res / rdL.x) : Infinity;
-        const tDeltaY = (stepY !== 0) ? Math.abs(res / rdL.y) : Infinity;
-        const tDeltaZ = (stepZ !== 0) ? Math.abs(res / rdL.z) : Infinity;
-        let hideTop = 0; try { hideTop = Math.max(0, Math.min(ny, Math.floor(Number(s.voxExposeTop || 0) || 0))); } catch {}
-        const yCut = ny - hideTop;
-        const data = Array.isArray(vox.data) ? vox.data : [];
-        let guard = 0, guardMax = (nx + ny + nz) * 3 + 10;
-        let changed = false;
-        while (t <= tmax + EPS && ix >= 0 && iy >= 0 && iz >= 0 && ix < nx && iy < ny && iz < nz && guard++ < guardMax) {
-          if (iy < yCut) {
-            const flat = ix + nx * (iy + ny * iz);
-            const v = data[flat] ?? VoxelType.Uninstantiated;
-            if (v !== VoxelType.Uninstantiated && v !== VoxelType.Empty) {
-              const prev = s.voxPick;
-              if (!prev || prev.x !== ix || prev.y !== iy || prev.z !== iz) changed = true;
-              s.voxPick = { x: ix, y: iy, z: iz, v };
-              break;
-            }
-          }
-          if (tMaxX <= tMaxY && tMaxX <= tMaxZ) { ix += stepX; t = tMaxX + EPS; tMaxX += tDeltaX; }
-          else if (tMaxY <= tMaxX && tMaxY <= tMaxZ) { iy += stepY; t = tMaxY + EPS; tMaxY += tDeltaY; }
-          else { iz += stepZ; t = tMaxZ + EPS; tMaxZ += tDeltaZ; }
-        }
-        if (changed) {
-          try { window.dispatchEvent(new CustomEvent('dw:voxelPick', { detail: { id: s.id, i: s.voxPick.x, j: s.voxPick.y, k: s.voxPick.z, v: s.voxPick.v } })); } catch {}
-        }
-      } catch {}
-    });
-  })();
+  // Live voxel hover moved to handlers/voxel.mjs; legacy listener disabled
+  // Live voxel hover handled in voxel handlers (legacy removed)
 
   // Global pointerup failsafe (release outside canvas) — only handles voxel brush here
   window.addEventListener('pointerup', () => {
@@ -2570,33 +1344,8 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
   // Voxel brush-drag state (left mouse held while painting voxels)
   const _VOX_BRUSH_THROTTLE_MS = 16; // ~60 Hz
   let voxBrush = { active: false, lastAt: 0, pointerId: null };
-  function setRingsDim() {
-    try {
-      const mats = rotWidget?.mats || {};
-      const dims = 0.35;
-      for (const k of ['x','y','z']) {
-        const m = mats[k]; if (!m) continue;
-        const base = (m.metadata && m.metadata.baseColor) ? m.metadata.baseColor : (m.emissiveColor || new BABYLON.Color3(1,1,1));
-        m.emissiveColor = base.scale(dims);
-        m.diffuseColor = base.scale(0.05 + 0.15 * dims);
-      }
-      rotWidget.activeAxis = null;
-    } catch {}
-  }
-  function setRingActive(axis) {
-    try {
-      const mats = rotWidget?.mats || {};
-      const kActive = 1.1, kDim = 0.35;
-      for (const k of ['x','y','z']) {
-        const m = mats[k]; if (!m) continue;
-        const base = (m.metadata && m.metadata.baseColor) ? m.metadata.baseColor : (m.emissiveColor || new BABYLON.Color3(1,1,1));
-        const kf = (k === axis) ? kActive : kDim;
-        m.emissiveColor = base.scale(kf);
-        m.diffuseColor = base.scale(0.05 + 0.15 * kf);
-      }
-      rotWidget.activeAxis = axis;
-    } catch {}
-  }
+function setRingsDim() { try { _gizmo?.setRingsDim?.(); } catch {} }
+function setRingActive(axis) { try { _gizmo?.setRingActive?.(axis); } catch {} }
 
   // Keyboard logging (arrows + modifiers) without changing behavior
   ;(function setupKeyboardLogging(){
@@ -2714,6 +1463,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       helpers: { updateContactShadowPlacement, updateSelectionObbLive, updateLiveIntersectionsFor }
     });
     // Bind state and core APIs
+    _gizmo = giz;
     rotWidget = giz.rotWidget; moveWidget = giz.moveWidget;
     disposeRotWidget = giz.disposeRotWidget; ensureRotWidget = giz.ensureRotWidget;
     disposeMoveWidget = giz.disposeMoveWidget; ensureMoveWidget = giz.ensureMoveWidget;
@@ -2728,6 +1478,13 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     suppressGizmos = (on) => { _gizmosSuppressed = !!on; try { __suppressGizmos(on); } catch {} };
     try { window.addEventListener('dw:gizmos:disable', () => suppressGizmos(true)); window.addEventListener('dw:gizmos:enable', () => suppressGizmos(false)); } catch {}
   } catch (e) { logErr('EH:gizmo:bind', e); }
+
+  // ——————————— Voxel helpers init (hover + helpers) ———————————
+  let _vox = null;
+  try {
+    _vox = initVoxelHandlers({ scene, engine, camera, state });
+    _vox.initVoxelHover({ isGizmoBusy: () => { try { return !!(rotWidget?.dragging || moveWidget?.dragging); } catch { return false; } } });
+  } catch (e) { logErr('EH:voxel:init', e); }
 
   // Selection UI side-effects moved to handlers/ui/selection.mjs
   try { initSelectionUI({ state, scene, engine, camera, rebuildHalos, ensureRotWidget, ensureMoveWidget }); } catch {}
@@ -4228,5 +2985,11 @@ function ensureConnectGizmo() {
   });
 
   // ——————————— DB UI handlers moved to handlers/ui/db.mjs ———————————
-  try { initDbUiHandlers({ scene, engine, camApi, camera, state, helpers, gizmo: { ensureRotWidget, ensureMoveWidget } }); } catch (e) { logErr('EH:dbUi:init', e); }
+  try {
+    initDbUiHandlers({
+      scene, engine, camApi, camera, state,
+      helpers: { ...helpers, exitCavernMode, exitScryMode },
+      gizmo: { ensureRotWidget, ensureMoveWidget, disposeRotWidget, disposeMoveWidget }
+    });
+  } catch (e) { logErr('EH:dbUi:init', e); }
 }

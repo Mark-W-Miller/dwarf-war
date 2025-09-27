@@ -122,8 +122,8 @@ const server = http.createServer((req, res) => {
   res.writeHead(404); return res.end('not found');
 });
 
-server.listen(PORT, () => {
-  console.log(`[error-reporter] listening on http://localhost:${PORT}/log, writing to ${LOG_PATH}`);
+server.listen(PORT, '127.0.0.1', () => {
+  console.log(`[error-reporter] listening on http://127.0.0.1:${PORT}/log, writing to ${LOG_PATH}`);
   // Optional: truncate on startup to avoid stale logs (no marker)
   try { fs.writeFileSync(LOG_PATH, ''); } catch (e) { console.error('truncate failed', e); }
 });
