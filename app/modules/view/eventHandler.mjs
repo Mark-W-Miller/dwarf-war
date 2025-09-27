@@ -1,11 +1,13 @@
 import { saveBarrow, snapshot } from '../barrow/store.mjs';
 import { VoxelType, decompressVox } from '../voxels/voxelize.mjs';
 import { initVoxelHandlers } from './handlers/voxel.mjs';
+import { initScryApi } from './handlers/scry.mjs';
 import { Log } from '../util/log.mjs';
 import { renderDbView } from './dbView.mjs';
 import { initErrorBar } from './errorBar.mjs';
 import { initDbUiHandlers } from './handlers/ui/db.mjs';
 import { initGizmoHandlers, initTransformGizmos } from './handlers/gizmo.mjs';
+import { initCavernApi } from './handlers/cavern.mjs';
 import { initViewManipulations } from './handlers/view.mjs';
 import { initPanelUI } from './handlers/ui/panel.mjs';
 import { initSelectionUI } from './handlers/ui/selection.mjs';
@@ -27,6 +29,8 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
   // Gizmo integration placeholders (populated by handlers/gizmo.mjs)
   let _gizmosSuppressed = false;
   let _gizmo = null;
+  let _scryApi = null;
+  let _cavernApi = null;
   let setGizmoHudVisible = (v) => {};
   let renderGizmoHud = () => {};
   let suppressGizmos = (on) => { _gizmosSuppressed = !!on; };
@@ -319,198 +323,22 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
   }
 
   // Gizmo HUD + suppression now provided by handlers/gizmo.mjs
+  // Initialize Scry API
+  try { _scryApi = initScryApi({ scene, engine, camera, state, Log }); } catch (e) { logErr('EH:scry:init', e); }
 
   // ——————————— Cavern Mode + Scry Ball ———————————
   // Keep a reference to the scry ball and view state so we can restore War Room View
   state._scry = { ball: null, prev: null, exitObs: null, prevWallOpacity: null, prevRockOpacity: null };
 
-  /* BEGIN moved to handlers/scry.mjs and handlers/cavern.mjs */
-  function disposeScryBall() {
-    try { state._scry.ball?.dispose?.(); } catch {}
-    state._scry.ball = null;
-  }
+  function disposeScryBall() { try { _scryApi?.disposeScryBall?.(); } catch {} }
 
-  function findScryWorldPosForSpace(space) {
-    try {
-      const s = space; if (!s) return null;
-      const res = s.res || (state?.barrow?.meta?.voxelSize || 1);
-      if (!s.vox || !s.vox.size) {
-        // No voxels yet: use the geometric center
-        return new BABYLON.Vector3(s.origin?.x||0, s.origin?.y||0, s.origin?.z||0);
-      }
-      const vox = decompressVox(s.vox);
-      const nx = Math.max(1, vox.size?.x|0), ny = Math.max(1, vox.size?.y|0), nz = Math.max(1, vox.size?.z|0);
-      const nTot = nx*ny*nz;
-      const data = Array.isArray(vox.data) ? vox.data : [];
-      const cxr = (nx * res) / 2, cyr = (ny * res) / 2, czr = (nz * res) / 2; // center in local units
-      const idx = (x,y,z) => x + nx*(y + ny*z);
-      let bestEmpty = { i:-1, d2: Infinity, x:0, y:0, z:0 };
-      let bestSolid = { i:-1, d2: Infinity, x:0, y:0, z:0 };
-      for (let z = 0; z < nz; z++) {
-        for (let y = 0; y < ny; y++) {
-          for (let x = 0; x < nx; x++) {
-            const i = idx(x,y,z);
-            const v = data[i];
-            if (v == null) continue;
-            const lx = (x + 0.5) * res - cxr;
-            const ly = (y + 0.5) * res - cyr;
-            const lz = (z + 0.5) * res - czr;
-            const d2 = lx*lx + ly*ly + lz*lz;
-            if (v === VoxelType.Empty) {
-              if (d2 < bestEmpty.d2) bestEmpty = { i, d2, x, y, z };
-            } else if (v === VoxelType.Rock || v === VoxelType.Wall) {
-              if (d2 < bestSolid.d2) bestSolid = { i, d2, x, y, z };
-            }
-          }
-        }
-      }
-      const pick = (bestEmpty.i >= 0) ? bestEmpty : (bestSolid.i >= 0 ? bestSolid : null);
-      if (!pick) return new BABYLON.Vector3(s.origin?.x||0, s.origin?.y||0, s.origin?.z||0);
-      // Convert local offset to world
-      const local = new BABYLON.Vector3((pick.x + 0.5) * res - cxr, (pick.y + 0.5) * res - cyr, (pick.z + 0.5) * res - czr);
-      const worldAligned = !!(s.vox && s.vox.worldAligned);
-      let qMesh = BABYLON.Quaternion.Identity();
-      try {
-        if (!worldAligned) {
-          const rx = Number(s.rotation?.x ?? 0) || 0;
-          const ry = (s.rotation && typeof s.rotation.y === 'number') ? Number(s.rotation.y) : Number(s.rotY || 0) || 0;
-          const rz = Number(s.rotation?.z ?? 0) || 0;
-          qMesh = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz);
-        }
-      } catch {}
-      const rotM = (() => { try { return BABYLON.Matrix.Compose(new BABYLON.Vector3(1,1,1), qMesh, BABYLON.Vector3.Zero()); } catch { return BABYLON.Matrix.Identity(); } })();
-      const localAfterRot = BABYLON.Vector3.TransformCoordinates(local, rotM);
-      const origin = new BABYLON.Vector3(s.origin?.x||0, s.origin?.y||0, s.origin?.z||0);
-      return origin.add(localAfterRot);
-    } catch (e) { logErr('EH:findScryWorldPosForSpace', e); return null; }
-  }
+  function findScryWorldPosForSpace(space) { try { return _scryApi?.findScryWorldPosForSpace?.(space) || null; } catch { return null; } }
 
-  function ensureScryBallAt(pos, diameter) {
-    try {
-      if (!pos) return null;
-      if (state._scry.ball && !state._scry.ball.isDisposed()) {
-        state._scry.ball.position.copyFrom(pos);
-        return state._scry.ball;
-      }
-      const dia = Math.max(0.1, Number(diameter) || 1);
-      const m = BABYLON.MeshBuilder.CreateSphere('scryBall', { diameter: dia, segments: 16 }, scene);
-      const mat = new BABYLON.StandardMaterial('scryBall:mat', scene);
-      mat.diffuseColor = new BABYLON.Color3(0.3, 0.6, 0.9);
-      mat.emissiveColor = new BABYLON.Color3(0.15, 0.35, 0.65);
-      mat.specularColor = new BABYLON.Color3(0,0,0);
-      mat.alpha = 0.35; // misty translucent
-      m.material = mat; m.isPickable = true; m.renderingGroupId = 3;
-      m.position.copyFrom(pos);
-      state._scry.ball = m;
-      return m;
-    } catch (e) { logErr('EH:ensureScryBallAt', e); return null; }
-  }
+  function ensureScryBallAt(pos, diameter) { try { return _scryApi?.ensureScryBallAt?.(pos, diameter) || null; } catch { return null; } }
 
-  function enterCavernModeForSpace(spaceId) {
-    try {
-      const s = (state?.barrow?.spaces || []).find(x => x && x.id === spaceId);
-      if (!s) return;
-      state._scry.spaceId = s.id;
-      sLog('cm:enter', { id: s.id });
-      // Save War Room view
-      try {
-        state._scry.prev = {
-          target: camera.target.clone(),
-          radius: camera.radius,
-          upper: camera.upperRadiusLimit,
-          alpha: camera.alpha,
-          beta: camera.beta,
-          mode: state.mode,
-        };
-      } catch {}
-      // Place scry ball: prefer saved position for this space, else center-most empty voxel (or solid fallback)
-      let pos = null;
-      try {
-        const key = 'dw:scry:pos:' + s.id;
-        const saved = localStorage.getItem(key);
-        if (saved) {
-          const o = JSON.parse(saved);
-          if (o && isFinite(o.x) && isFinite(o.y) && isFinite(o.z)) pos = new BABYLON.Vector3(o.x, o.y, o.z);
-        }
-      } catch {}
-      if (!pos) pos = findScryWorldPosForSpace(s) || new BABYLON.Vector3(s.origin?.x||0, s.origin?.y||0, s.origin?.z||0);
-      const res = s.res || (state?.barrow?.meta?.voxelSize || 1);
-      ensureScryBallAt(pos, res * 0.8);
-      // Switch materials to cavern style (opaque + textured)
-      try {
-        state._scry.prevWallOpacity = localStorage.getItem('dw:ui:wallOpacity');
-        state._scry.prevRockOpacity = localStorage.getItem('dw:ui:rockOpacity');
-      } catch {}
-      try { localStorage.setItem('dw:viewMode', 'cavern'); } catch {}
-      try { localStorage.setItem('dw:ui:wallOpacity', '100'); } catch {}
-      try { localStorage.setItem('dw:ui:rockOpacity', '100'); } catch {}
-      try { rebuildScene(); } catch (e) { logErr('EH:rebuildScene:cavern', e); }
-      // Focus camera on scry ball, level with floor, much closer, no max constraint
-      try {
-        camera.target.copyFrom(pos);
-        const vx = (s.size?.x||1) * res, vy = (s.size?.y||1) * res, vz = (s.size?.z||1) * res;
-        const span = Math.max(vx, vy, vz);
-        // Close-in radius: quarter of span, clamped to 2..12 voxels approx
-        const rClose = Math.max(2*res, Math.min(12*res, span * 0.25));
-        camera.radius = rClose;
-        // Keep current yaw, ensure level with the floor
-        camera.beta = Math.max(0.12, Math.min(Math.PI - 0.12, Math.PI/2));
-        // Do not alter upperRadiusLimit; wheel acts as normal
-      } catch {}
-      try { setMode('cavern'); } catch {}
-      // Remove gizmos in Cavern Mode
-      try { disposeMoveWidget(); } catch {}
-      try { disposeRotWidget(); } catch {}
-      try { setGizmoHudVisible(false); } catch {}
-      // Do not auto-exit cavern mode; only Escape key exits
-    } catch (e) { logErr('EH:enterCavern', e); }
-  }
+  function enterCavernModeForSpace(spaceId) { try { _cavernApi?.enterCavernModeForSpace?.(spaceId); } catch {} }
 
-  function exitCavernMode() {
-    try {
-      // Exit scryball mode if active
-      try { exitScryMode(); } catch {}
-      sLog('cm:exit', {});
-      // Restore opacities and view mode
-      try {
-        const defWall = '60', defRock = '85';
-        const prevWall = (state._scry.prevWallOpacity != null) ? state._scry.prevWallOpacity : defWall;
-        const prevRock = (state._scry.prevRockOpacity != null) ? state._scry.prevRockOpacity : defRock;
-        localStorage.setItem('dw:ui:wallOpacity', prevWall);
-        localStorage.setItem('dw:ui:rockOpacity', prevRock);
-      } catch {}
-      try { localStorage.setItem('dw:viewMode', 'war'); } catch {}
-      try { rebuildScene(); } catch (e) { logErr('EH:rebuildScene:war', e); }
-      // Clear saved prevs to avoid leaking across sessions
-      try { state._scry.prevWallOpacity = null; state._scry.prevRockOpacity = null; } catch {}
-      // Restore camera to the exact view when the space was double-clicked
-      try {
-        const p = state._scry.prev;
-        if (p) {
-          camera.target.copyFrom(p.target);
-          camera.radius = p.radius;
-          camera.upperRadiusLimit = (p.upper != null) ? p.upper : camera.upperRadiusLimit;
-          camera.alpha = (p.alpha != null) ? p.alpha : camera.alpha;
-          camera.beta = (p.beta != null) ? p.beta : camera.beta;
-        }
-      } catch {}
-      // Clear selection when returning to War Room
-      try {
-        state.selection.clear();
-        rebuildHalos();
-        try { disposeMoveWidget(); } catch {}
-        try { disposeRotWidget(); } catch {}
-        window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: [] } }));
-        Log.log('UI', 'Deselect all on WRM return', {});
-      } catch {}
-      disposeScryBall();
-      try { state.lockedVoxPick = null; } catch {}
-      try { setMode(state._scry?.prev?.mode || 'edit'); } catch {}
-      // Remove observer
-      try { if (state._scry.exitObs) { engine.onBeginFrameObservable.remove(state._scry.exitObs); state._scry.exitObs = null; } } catch {}
-    } catch (e) { logErr('EH:exitCavern', e); }
-  }
-  /* END moved */
+  function exitCavernMode() { try { _cavernApi?.exitCavernMode?.(); } catch {} }
 
   // ——————————— Scryball Mode ———————————
   function voxelValueAtWorld(space, wx, wy, wz) {
@@ -518,376 +346,13 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
   }
 
   // Helper: perform voxel pick at current pointer for a given space and dispatch dw:voxelPick
-  function doVoxelPickAtPointer(s) {
-    try {
-      if (!s || !s.vox || !s.vox.size) return;
-      const vox = decompressVox(s.vox);
-      const nx = Math.max(1, vox.size?.x || 1);
-      const ny = Math.max(1, vox.size?.y || 1);
-      const nz = Math.max(1, vox.size?.z || 1);
-      const res = vox.res || s.res || (state?.barrow?.meta?.voxelSize || 1);
-      const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), camera);
-      const roW = ray.origin.clone(), rdW = ray.direction.clone();
-      const cx = s.origin?.x||0, cy = s.origin?.y||0, cz = s.origin?.z||0;
-      let q = BABYLON.Quaternion.Identity();
-      const worldAligned = !!(s.vox && s.vox.worldAligned);
-      try {
-        if (!worldAligned) {
-          const rx = Number(s.rotation?.x ?? 0) || 0;
-          const ry = (s.rotation && typeof s.rotation.y === 'number') ? Number(s.rotation.y) : Number(s.rotY || 0) || 0;
-          const rz = Number(s.rotation?.z ?? 0) || 0;
-          q = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz);
-        }
-      } catch {}
-      const qInv = BABYLON.Quaternion.Inverse(q);
-      const rotInv = (() => { try { return BABYLON.Matrix.Compose(new BABYLON.Vector3(1,1,1), qInv, BABYLON.Vector3.Zero()); } catch { return BABYLON.Matrix.Identity(); } })();
-      const roL = BABYLON.Vector3.TransformCoordinates(roW.subtract(new BABYLON.Vector3(cx, cy, cz)), rotInv);
-      const rdL = BABYLON.Vector3.TransformNormal(rdW, rotInv);
-      const minX = -(nx * res) / 2, maxX = +(nx * res) / 2;
-      const minY = -(ny * res) / 2, maxY = +(ny * res) / 2;
-      const minZ = -(nz * res) / 2, maxZ = +(nz * res) / 2;
-      const inv = (v) => (Math.abs(v) < 1e-12 ? Infinity : 1 / v);
-      const tx1 = (minX - roL.x) * inv(rdL.x), tx2 = (maxX - roL.x) * inv(rdL.x);
-      const ty1 = (minY - roL.y) * inv(rdL.y), ty2 = (maxY - roL.y) * inv(rdL.y);
-      const tz1 = (minZ - roL.z) * inv(rdL.z), tz2 = (maxZ - roL.z) * inv(rdL.z);
-      const tmin = Math.max(Math.min(tx1, tx2), Math.min(ty1, ty2), Math.min(tz1, tz2));
-      const tmax = Math.min(Math.max(tx1, tx2), Math.max(ty1, ty2), Math.max(tz1, tz2));
-      if (!(tmax >= Math.max(0, tmin))) return;
-      const EPS = 1e-6; let t = Math.max(tmin, 0) + EPS;
-      const pos = new BABYLON.Vector3(roL.x + rdL.x * t, roL.y + rdL.y * t, roL.z + rdL.z * t);
-      const toIdx = (x, y, z) => ({
-        ix: Math.min(nx-1, Math.max(0, Math.floor((x - minX) / res))),
-        iy: Math.min(ny-1, Math.max(0, Math.floor((y - minY) / res))),
-        iz: Math.min(nz-1, Math.max(0, Math.floor((z - minZ) / res))),
-      });
-      let { ix, iy, iz } = toIdx(pos.x, pos.y, pos.z);
-      const stepX = (rdL.x > 0) ? 1 : (rdL.x < 0 ? -1 : 0);
-      const stepY = (rdL.y > 0) ? 1 : (rdL.y < 0 ? -1 : 0);
-      const stepZ = (rdL.z > 0) ? 1 : (rdL.z < 0 ? -1 : 0);
-      const nextBound = (i, step, min) => min + (i + (step > 0 ? 1 : 0)) * res;
-      let tMaxX = (stepX !== 0) ? (nextBound(ix, stepX, minX) - roL.x) / rdL.x : Infinity;
-      let tMaxY = (stepY !== 0) ? (nextBound(iy, stepY, minY) - roL.y) / rdL.y : Infinity;
-      let tMaxZ = (stepZ !== 0) ? (nextBound(iz, stepZ, minZ) - roL.z) / rdL.z : Infinity;
-      const tDeltaX = (stepX !== 0) ? Math.abs(res / rdL.x) : Infinity;
-      const tDeltaY = (stepY !== 0) ? Math.abs(res / rdL.y) : Infinity;
-      const tDeltaZ = (stepZ !== 0) ? Math.abs(res / rdL.z) : Infinity;
-      let hideTop = 0; try { hideTop = Math.max(0, Math.min(ny, Math.floor(Number(s.voxExposeTop || 0) || 0))); } catch {}
-      const yCut = ny - hideTop;
-      const data = Array.isArray(vox.data) ? vox.data : [];
-      let guard = 0, guardMax = (nx + ny + nz) * 3 + 10;
-      while (t <= tmax + EPS && ix >= 0 && iy >= 0 && iz >= 0 && ix < nx && iy < ny && iz < nz && guard++ < guardMax) {
-        if (iy < yCut) {
-          const flat = ix + nx * (iy + ny * iz);
-          const v = data[flat] ?? VoxelType.Uninstantiated;
-          if (v !== VoxelType.Uninstantiated && v !== VoxelType.Empty) {
-            try { s.voxPick = { x: ix, y: iy, z: iz, v }; } catch {}
-            try {
-              const worldAligned = !!(s.vox && s.vox.worldAligned);
-              const rx = Number(s.rotation?.x || 0), ry = (typeof s.rotation?.y === 'number') ? Number(s.rotation.y) : Number(s.rotY || 0) || 0, rz = Number(s.rotation?.z || 0);
-              const centerX = (nx * res) / 2, centerY = (ny * res) / 2, centerZ = (nz * res) / 2;
-              const lx = (ix + 0.5) * res - centerX;
-              const ly = (iy + 0.5) * res - centerY;
-              const lz = (iz + 0.5) * res - centerZ;
-              sLog('voxelPick:hit', { id: s.id, i: ix, j: iy, k: iz, v, worldAligned, rot: { rx, ry, rz }, local: { lx, ly, lz } });
-            } catch {}
-            try { window.dispatchEvent(new CustomEvent('dw:voxelPick', { detail: { id: s.id, i: ix, j: iy, k: iz, v } })); } catch {}
-            return;
-          }
-        }
-        if (tMaxX <= tMaxY && tMaxX <= tMaxZ) { ix += stepX; t = tMaxX + EPS; tMaxX += tDeltaX; }
-        else if (tMaxY <= tMaxX && tMaxY <= tMaxZ) { iy += stepY; t = tMaxY + EPS; tMaxY += tDeltaY; }
-        else { iz += stepZ; t = tMaxZ + EPS; tMaxZ += tDeltaZ; }
-      }
-    } catch (e) { logErr('EH:doVoxelPick', e); }
-  }
+  function doVoxelPickAtPointer(s) { try { _vox?.doVoxelPickAtPointer?.(s); } catch {} }
 
   // Helper: compute first solid voxel hit under current pointer for space (without side effects)
   // Returns { hit:true, t, ix, iy, iz, v } or null
-  function voxelHitAtPointerForSpace(s) {
-    try {
-      if (!s || !s.vox || !s.vox.size) return null;
-      const vox = decompressVox(s.vox);
-      const nx = Math.max(1, vox.size?.x || 1);
-      const ny = Math.max(1, vox.size?.y || 1);
-      const nz = Math.max(1, vox.size?.z || 1);
-      const res = vox.res || s.res || (state?.barrow?.meta?.voxelSize || 1);
-      const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), camera);
-      const roW = ray.origin.clone(), rdW = ray.direction.clone();
-      const cx = s.origin?.x||0, cy = s.origin?.y||0, cz = s.origin?.z||0;
-      let q = BABYLON.Quaternion.Identity();
-      const worldAligned = !!(s.vox && s.vox.worldAligned);
-      try {
-        if (!worldAligned) {
-          const rx = Number(s.rotation?.x ?? 0) || 0;
-          const ry = (s.rotation && typeof s.rotation.y === 'number') ? Number(s.rotation.y) : Number(s.rotY || 0) || 0;
-          const rz = Number(s.rotation?.z ?? 0) || 0;
-          q = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz);
-        }
-      } catch {}
-      const qInv = BABYLON.Quaternion.Inverse(q);
-      const rotInv = (() => { try { return BABYLON.Matrix.Compose(new BABYLON.Vector3(1,1,1), qInv, BABYLON.Vector3.Zero()); } catch { return BABYLON.Matrix.Identity(); } })();
-      const roL = BABYLON.Vector3.TransformCoordinates(roW.subtract(new BABYLON.Vector3(cx, cy, cz)), rotInv);
-      const rdL = BABYLON.Vector3.TransformNormal(rdW, rotInv);
-      const minX = -(nx * res) / 2, maxX = +(nx * res) / 2;
-      const minY = -(ny * res) / 2, maxY = +(ny * res) / 2;
-      const minZ = -(nz * res) / 2, maxZ = +(nz * res) / 2;
-      const inv = (v) => (Math.abs(v) < 1e-12 ? Infinity : 1 / v);
-      const tx1 = (minX - roL.x) * inv(rdL.x), tx2 = (maxX - roL.x) * inv(rdL.x);
-      const ty1 = (minY - roL.y) * inv(rdL.y), ty2 = (maxY - roL.y) * inv(rdL.y);
-      const tz1 = (minZ - roL.z) * inv(rdL.z), tz2 = (maxZ - roL.z) * inv(rdL.z);
-      const tmin = Math.max(Math.min(tx1, tx2), Math.min(ty1, ty2), Math.min(tz1, tz2));
-      const tmax = Math.min(Math.max(tx1, tx2), Math.max(ty1, ty2), Math.max(tz1, tz2));
-      if (!(tmax >= Math.max(0, tmin))) return null;
-      const EPS = 1e-6; let t = Math.max(tmin, 0) + EPS;
-      const toIdx = (x, y, z) => ({
-        ix: Math.min(nx-1, Math.max(0, Math.floor((x - minX) / res))),
-        iy: Math.min(ny-1, Math.max(0, Math.floor((y - minY) / res))),
-        iz: Math.min(nz-1, Math.max(0, Math.floor((z - minZ) / res))),
-      });
-      let pos = new BABYLON.Vector3(roL.x + rdL.x * t, roL.y + rdL.y * t, roL.z + rdL.z * t);
-      let { ix, iy, iz } = toIdx(pos.x, pos.y, pos.z);
-      const stepX = (rdL.x > 0) ? 1 : (rdL.x < 0 ? -1 : 0);
-      const stepY = (rdL.y > 0) ? 1 : (rdL.y < 0 ? -1 : 0);
-      const stepZ = (rdL.z > 0) ? 1 : (rdL.z < 0 ? -1 : 0);
-      const nextBound = (i, step, min) => min + (i + (step > 0 ? 1 : 0)) * res;
-      let tMaxX = (stepX !== 0) ? (nextBound(ix, stepX, minX) - roL.x) / rdL.x : Infinity;
-      let tMaxY = (stepY !== 0) ? (nextBound(iy, stepY, minY) - roL.y) / rdL.y : Infinity;
-      let tMaxZ = (stepZ !== 0) ? (nextBound(iz, stepZ, minZ) - roL.z) / rdL.z : Infinity;
-      const tDeltaX = (stepX !== 0) ? Math.abs(res / rdL.x) : Infinity;
-      const tDeltaY = (stepY !== 0) ? Math.abs(res / rdL.y) : Infinity;
-      const tDeltaZ = (stepZ !== 0) ? Math.abs(res / rdL.z) : Infinity;
-      let hideTop = 0; try { hideTop = Math.max(0, Math.min(ny, Math.floor(Number(s.voxExposeTop || 0) || 0))); } catch {}
-      const yCut = ny - hideTop;
-      const data = Array.isArray(vox.data) ? vox.data : [];
-      let guard = 0, guardMax = (nx + ny + nz) * 3 + 10;
-      while (t <= tmax + EPS && ix >= 0 && iy >= 0 && iz >= 0 && ix < nx && iy < ny && iz < nz && guard++ < guardMax) {
-        if (iy < yCut) {
-          const flat = ix + nx * (iy + ny * iz);
-          const v = data[flat] ?? VoxelType.Uninstantiated;
-          if (v !== VoxelType.Uninstantiated && v !== VoxelType.Empty) {
-            return { hit: true, t, ix, iy, iz, v };
-          }
-        }
-        if (tMaxX <= tMaxY && tMaxX <= tMaxZ) { ix += stepX; t = tMaxX + EPS; tMaxX += tDeltaX; }
-        else if (tMaxY <= tMaxX && tMaxY <= tMaxZ) { iy += stepY; t = tMaxY + EPS; tMaxY += tDeltaY; }
-        else { iz += stepZ; t = tMaxZ + EPS; tMaxZ += tDeltaZ; }
-      }
-      return null;
-    } catch { return null; }
-  }
-
-  function enterScryMode() {
-    try {
-      if (state.mode !== 'cavern') return;
-      const ball = state._scry?.ball; if (!ball) return;
-      state._scry.scryMode = true;
-      Log.log('SCRY', 'enter', {});
-      // Disable camera keyboard controls so arrows don't tilt/rotate the camera
-      try {
-        state._scry._camKeys = {
-          up: (camera.keysUp || []).slice(),
-          down: (camera.keysDown || []).slice(),
-          left: (camera.keysLeft || []).slice(),
-          right: (camera.keysRight || []).slice()
-        };
-        camera.keysUp = [];
-        camera.keysDown = [];
-        camera.keysLeft = [];
-        camera.keysRight = [];
-      } catch {}
-      // Visual glow via highlight layer + outline
-      try { if (state.hl && state._scry?.ball) { state.hl.addMesh(state._scry.ball, new BABYLON.Color3(0.4, 0.85, 1.0)); } } catch {}
-      try {
-        if (state._scry?.ball) {
-          state._scry.ball.outlineColor = new BABYLON.Color3(0.35, 0.9, 1.0);
-          state._scry.ball.outlineWidth = 0.02;
-          state._scry.ball.renderOutline = true;
-        }
-      } catch {}
-      // Keep camera locked to the scry ball
-      try {
-        if (state._scry.scryObs) { engine.onBeginFrameObservable.remove(state._scry.scryObs); state._scry.scryObs = null; }
-        state._scry.scryObs = engine.onBeginFrameObservable.add(() => {
-          try {
-            if (state._scry?.ball) {
-              // Lock camera on scry ball
-              camera.target.copyFrom(state._scry.ball.position);
-              // Apply rotate + move per frame based on keyState
-              try {
-                const ks = state._scry.keyState || {};
-                const dt = (engine.getDeltaTime ? engine.getDeltaTime()/1000 : 1/60);
-                const s = (state?.barrow?.spaces || []).find(x => x && x.id === state._scry.spaceId);
-                if (s) {
-                  // Rotation
-                  if (ks.left || ks.right) {
-                    const degPerSec = ks.shift ? 120 : 60;
-                    const dirYaw = ks.left ? 1 : -1; // CCW for left
-                    const delta = (degPerSec * Math.PI / 180) * dirYaw * dt;
-                    camera.alpha = (camera.alpha + delta) % (Math.PI * 2);
-                    if (camera.alpha < 0) camera.alpha += Math.PI * 2;
-                  }
-                  // Movement (Meta+Up/Down = vertical Y, Up/Down = ground-plane forward/back)
-                  const moveSign = (ks.up ? 1 : 0) + (ks.down ? -1 : 0);
-                  if (moveSign !== 0) {
-                    const ball2 = state._scry.ball;
-                    const pos = ball2.position.clone();
-                    const isVert = !!ks.meta;
-                    let dir;
-                    if (isVert) {
-                      dir = new BABYLON.Vector3(0, moveSign, 0);
-                    } else {
-                      const fwd = camera.getForwardRay()?.direction.clone() || new BABYLON.Vector3(0,0,1);
-                      fwd.y = 0; try { fwd.normalize(); } catch {}
-                      dir = fwd.scale(moveSign);
-                    }
-                    const res = s.res || (state?.barrow?.meta?.voxelSize || 1);
-                    let scryMult = 1.0; try { const raw = Number(localStorage.getItem('dw:ui:scrySpeed') || '100'); if (isFinite(raw) && raw > 0) scryMult = (raw > 5) ? (raw/100) : raw; } catch {}
-                    const base = (isVert ? Math.max(0.06, res * 0.6) : Math.max(0.1, res * 0.9) * 2) * (ks.shift ? 2.0 : 1.0) * scryMult;
-                    const dist = base * Math.max(0.016, dt) * (isVert ? 3 : 6);
-                    const seg  = Math.max(isVert ? 0.04 : 0.08, res * (isVert ? 0.15 : 0.25));
-                    const radius = Math.max(0.15, (res * 0.8) / 2);
-                    const nSteps = Math.max(1, Math.ceil(dist / seg));
-                    const inc = dir.scale(dist / nSteps);
-                    function canOccupy(px, py, pz) {
-                      const offsets = [ {x:0,z:0}, {x:radius*0.5,z:0}, {x:-radius*0.5,z:0}, {x:0,z:radius*0.5}, {x:0,z:-radius*0.5} ];
-                      for (const o of offsets) {
-                        const hit = (() => { try { const spaces = Array.isArray(state?.barrow?.spaces) ? state.barrow.spaces : []; for (const sp of spaces) { if (!sp || !sp.vox) continue; const v = voxelValueAtWorld(sp, px + o.x, py, pz + o.z); if (v === VoxelType.Rock || v === VoxelType.Wall) return true; } return false; } catch { return false; } })();
-                        if (hit) return false;
-                      }
-                      return true;
-                    }
-                    let next = pos.clone(); let blocked = false;
-                    for (let i = 0; i < nSteps; i++) {
-                      const cand = next.add(inc);
-                      if (canOccupy(cand.x, cand.y, cand.z)) { next.copyFrom(cand); }
-                      else { blocked = true; break; }
-                    }
-                    if (!next.equals(pos)) {
-                      ball2.position.copyFrom(next); camera.target.copyFrom(next);
-                      // Persist per-space scry position (throttled)
-                      try {
-                        const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-                        const lastT = state._scry._lastSaveT || 0;
-                        if (now - lastT > 120) {
-                          state._scry._lastSaveT = now;
-                          const key = 'dw:scry:pos:' + state._scry.spaceId;
-                          localStorage.setItem(key, JSON.stringify({ x: next.x, y: next.y, z: next.z }));
-                        }
-                      } catch {}
-                    }
-                    if (blocked) { try { Log.log('COLLIDE', 'scry:block', { from: pos, to: next, vert: isVert }); } catch {} }
-                  }
-                }
-              } catch {}
-              // Constrain camera position by walls/rock in the active space
-              const s = (state?.barrow?.spaces || []).find(x => x && x.id === state._scry.spaceId);
-              if (s && s.vox) {
-                const t = camera.target;
-                const cp = camera.position.clone();
-                const v = cp.subtract(t);
-                const dist = v.length();
-                if (dist > 1e-3) {
-                  v.scaleInPlace(1 / dist); // v = dir from target to camera
-                  const res = s.res || (state?.barrow?.meta?.voxelSize || 1);
-                  const step = Math.max(0.15, res * 0.25);
-                  let maxFree = dist;
-                  let hit = false;
-                  for (let d = step; d <= dist; d += step) {
-                    const p = new BABYLON.Vector3(t.x + v.x * d, t.y + v.y * d, t.z + v.z * d);
-                    // Clamp if any space has solid at this sample point
-                    let hitAny = false; try { const spaces = Array.isArray(state?.barrow?.spaces) ? state.barrow.spaces : []; for (const sp of spaces) { if (!sp || !sp.vox) continue; const vv = voxelValueAtWorld(sp, p.x, p.y, p.z); if (vv === VoxelType.Rock || vv === VoxelType.Wall) { hitAny = true; break; } } } catch {}
-                    if (hitAny) {
-                      hit = true; maxFree = Math.max(step * 0.5, d - step * 0.6); break;
-                    }
-                  }
-                  if (hit && maxFree < dist - 1e-3) {
-                    camera.inertialRadiusOffset = 0;
-                    camera.radius = Math.max(0.5, maxFree);
-                    // Throttled collision log
-                    try {
-                      const now = performance.now ? performance.now() : Date.now();
-                      state._scry._collLogT = state._scry._collLogT || 0;
-                      if (now - state._scry._collLogT > 180) {
-                        state._scry._collLogT = now;
-                        Log.log('COLLIDE', 'cam:clamp', { desired: dist, clamped: camera.radius, step });
-                      }
-                    } catch {}
-                  }
-                }
-              }
-            }
-          } catch {}
-        });
-      } catch {}
-      // Track keys for simultaneous rotate + move; handled per-frame in scryObs
-      state._scry.keyState = { up:false, down:false, left:false, right:false, shift:false, meta:false };
-      try { if (state._scry.scryKeys) window.removeEventListener('keydown', state._scry.scryKeys); } catch {}
-      try { if (state._scry.scryKeysUp) window.removeEventListener('keyup', state._scry.scryKeysUp); } catch {}
-      state._scry.scryKeys = (e) => {
-        if (!state._scry?.scryMode) return;
-        const k = e.key;
-        if (k === 'ArrowUp' || k === 'ArrowDown' || k === 'ArrowLeft' || k === 'ArrowRight' || k === 'Shift' || k === 'Meta') {
-          e.preventDefault(); e.stopPropagation();
-          if (k === 'ArrowUp') state._scry.keyState.up = true;
-          if (k === 'ArrowDown') state._scry.keyState.down = true;
-          if (k === 'ArrowLeft') state._scry.keyState.left = true;
-          if (k === 'ArrowRight') state._scry.keyState.right = true;
-          if (k === 'Shift') state._scry.keyState.shift = true;
-          if (k === 'Meta') state._scry.keyState.meta = true;
-        }
-      };
-      state._scry.scryKeysUp = (e) => {
-        if (!state._scry?.scryMode) return;
-        const k = e.key;
-        if (k === 'ArrowUp') state._scry.keyState.up = false;
-        if (k === 'ArrowDown') state._scry.keyState.down = false;
-        if (k === 'ArrowLeft') state._scry.keyState.left = false;
-        if (k === 'ArrowRight') state._scry.keyState.right = false;
-        if (k === 'Shift') state._scry.keyState.shift = false;
-        if (k === 'Meta') { state._scry.keyState.meta = false; state._scry.keyState.up = false; state._scry.keyState.down = false; }
-      };
-      window.addEventListener('keydown', state._scry.scryKeys, { passive:false });
-      window.addEventListener('keyup', state._scry.scryKeysUp, { passive:false });
-      // Safety: clear modifier/key state on window blur to avoid sticky movement
-      try {
-        if (state._scry._onBlur) window.removeEventListener('blur', state._scry._onBlur);
-        state._scry._onBlur = () => { try { state._scry.keyState = { up:false, down:false, left:false, right:false, shift:false, meta:false }; } catch {} };
-        window.addEventListener('blur', state._scry._onBlur);
-      } catch {}
-    } catch (e) { logErr('EH:enterScry', e); }
-  }
-
-  function exitScryMode() {
-    try {
-      if (!state._scry?.scryMode) return;
-      // Persist final scry position for this space
-      try {
-        const id = state._scry.spaceId;
-        const b = state._scry.ball;
-        if (id && b && !b.isDisposed()) {
-          const key = 'dw:scry:pos:' + id;
-          localStorage.setItem(key, JSON.stringify({ x: b.position.x, y: b.position.y, z: b.position.z }));
-        }
-      } catch {}
-      state._scry.scryMode = false;
-      try { if (state._scry.scryObs) { engine.onBeginFrameObservable.remove(state._scry.scryObs); state._scry.scryObs = null; } } catch {}
-      try { if (state._scry.scryKeys) { window.removeEventListener('keydown', state._scry.scryKeys); state._scry.scryKeys = null; } } catch {}
-      // Restore camera keyboard controls
-      try {
-        if (state._scry._camKeys) {
-          camera.keysUp = state._scry._camKeys.up || camera.keysUp;
-          camera.keysDown = state._scry._camKeys.down || camera.keysDown;
-          camera.keysLeft = state._scry._camKeys.left || camera.keysLeft;
-          camera.keysRight = state._scry._camKeys.right || camera.keysRight;
-          state._scry._camKeys = null;
-        }
-      } catch {}
-      // Remove glow
-      try { if (state.hl && state._scry?.ball) state.hl.removeMesh(state._scry.ball); } catch {}
-      try { if (state._scry?.ball) state._scry.ball.renderOutline = false; } catch {}
-      Log.log('SCRY', 'exit', {});
-    } catch (e) { logErr('EH:exitScry', e); }
-  }
+  function voxelHitAtPointerForSpace(s) { try { return _vox?.voxelHitAtPointerForSpace?.(s) || null; } catch { return null; } }
+  function enterScryMode() { try { _scryApi?.enterScryMode?.(); } catch {} }
+  function exitScryMode() { try { _scryApi?.exitScryMode?.(); } catch {} }
 
   // Double-click on scry ball enters scry mode
   try {
@@ -907,7 +372,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     Log.log('UI', 'Resize Grid', {});
   });
 
-  // Reset/Export/Import moved to handlers/ui/db.mjs
+  // Reset/Export/Import handled in handlers/ui/db.mjs
 
   // ——————————— Name suggestion and validation ———————————
   function suggestSpaceName(baseType) {
@@ -1172,9 +637,7 @@ function pickPointOnPlane(normal, point) {
     return { min:{x:cx-w/2,y:cy-h/2,z:cz-d/2}, max:{x:cx+w/2,y:cy+h/2,z:cz+d/2} };
   }
 
-  // ——————————— Live intersection preview moved to gizmo ———————————
-
-  // ——————————— Contact shadow (moved to gizmo) ———————————
+  // ——————————— Contact shadow helpers ———————————
   function updateContactShadowPlacement() { try { _gizmo?.updateContactShadowPlacement?.(); } catch {} }
   function disposeContactShadow() { try { _gizmo?.disposeContactShadow?.(); } catch {} }
   function disposeLiveIntersections(){ try { _gizmo?.disposeLiveIntersections?.(); } catch {} }
@@ -1186,7 +649,7 @@ function pickPointOnPlane(normal, point) {
   // Update move disc position to follow current selection bottom and center
   // updateMoveDiscPlacement is now internal to gizmo
 
-  // ——————————— Move widget moved to gizmo ———————————
+  // ——————————— Move widget ———————————
 
   // Pointer interactions for rotation widget
   let _lastGizmoClick = 0;
@@ -1322,8 +785,7 @@ function pickPointOnPlane(normal, point) {
     
   });
 
-  // Live voxel hover moved to handlers/voxel.mjs; legacy listener disabled
-  // Live voxel hover handled in voxel handlers (legacy removed)
+  // Live voxel hover handled in voxel handlers
 
   // Global pointerup failsafe (release outside canvas) — only handles voxel brush here
   window.addEventListener('pointerup', () => {
@@ -1449,10 +911,10 @@ function setRingActive(axis) { try { _gizmo?.setRingActive?.(axis); } catch {} }
     } catch {}
   })();
 
-  // ——————————— View (camera) manipulations moved to handlers/view.mjs ———————————
+  // ——————————— View (camera) manipulations ———————————
   try { initViewManipulations({ scene, engine, camera, state, helpers: { getSelectionCenter, getVoxelPickWorldCenter } }); } catch (e) { logErr('EH:view:init', e); }
 
-  // ——————————— Gizmo pre-capture moved to handlers/gizmo.mjs ———————————
+  // ——————————— Gizmo pre-capture ———————————
   try { initGizmoHandlers({ scene, engine, camera, state }); } catch (e) { logErr('EH:gizmo:init', e); }
   // Bind transform gizmo API (rotate/move) from module into local names
   try {
@@ -1479,6 +941,16 @@ function setRingActive(axis) { try { _gizmo?.setRingActive?.(axis); } catch {} }
     try { window.addEventListener('dw:gizmos:disable', () => suppressGizmos(true)); window.addEventListener('dw:gizmos:enable', () => suppressGizmos(false)); } catch {}
   } catch (e) { logErr('EH:gizmo:bind', e); }
 
+  // Initialize Cavern API now that gizmo callbacks are bound
+  try {
+    _cavernApi = initCavernApi({
+      scene, engine, camera, state,
+      helpers: { rebuildScene, rebuildHalos, setMode, setGizmoHudVisible, disposeMoveWidget, disposeRotWidget },
+      scryApi: _scryApi,
+      Log,
+    });
+  } catch (e) { logErr('EH:cavern:init', e); }
+
   // ——————————— Voxel helpers init (hover + helpers) ———————————
   let _vox = null;
   try {
@@ -1486,7 +958,7 @@ function setRingActive(axis) { try { _gizmo?.setRingActive?.(axis); } catch {} }
     _vox.initVoxelHover({ isGizmoBusy: () => { try { return !!(rotWidget?.dragging || moveWidget?.dragging); } catch { return false; } } });
   } catch (e) { logErr('EH:voxel:init', e); }
 
-  // Selection UI side-effects moved to handlers/ui/selection.mjs
+  // Selection UI side-effects
   try { initSelectionUI({ state, scene, engine, camera, rebuildHalos, ensureRotWidget, ensureMoveWidget }); } catch {}
 
   // Brush-select: while left mouse held after an initial voxel pick, keep adding voxels under the cursor
@@ -2825,7 +2297,7 @@ function ensureConnectGizmo() {
                       state._connect.path = path; updateProposalMeshes(); ensureConnectGizmo(); pi.skipOnPointerObservable = true; return;
                     }
                   }
-                  // Drag by direct selection on ground plane (legacy XZ drag)
+                  // Drag by direct selection on ground plane (XZ drag)
                   if (!drag.active) return;
                   const cur = pickPointOnPlaneY(drag.planeY); if (!cur || !drag.startPt) return;
                   const dx = cur.x - drag.startPt.x; const dz = cur.z - drag.startPt.z;
@@ -2984,7 +2456,7 @@ function ensureConnectGizmo() {
     try { ensureRotWidget(); ensureMoveWidget(); rebuildHalos(); } catch {}
   });
 
-  // ——————————— DB UI handlers moved to handlers/ui/db.mjs ———————————
+  // ——————————— DB UI handlers ———————————
   try {
     initDbUiHandlers({
       scene, engine, camApi, camera, state,

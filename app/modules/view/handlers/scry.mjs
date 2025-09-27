@@ -96,12 +96,111 @@ export function initScryApi({ scene, engine, camera, state, Log }) {
       try { camera.keysUp = []; camera.keysDown = []; camera.keysLeft = []; camera.keysRight = []; } catch {}
       try { if (state.hl && ball) { state.hl.addMesh(ball, new BABYLON.Color3(0.4, 0.85, 1.0)); } } catch {}
       try { if (ball) { ball.outlineColor = new BABYLON.Color3(0.35, 0.9, 1.0); ball.outlineWidth = 0.02; ball.renderOutline = true; } } catch {}
-      // Per-frame lock to scry ball and handle arrows/movement saved below
+
+      // Track keys for simultaneous rotate + move
+      state._scry.keyState = { up:false, down:false, left:false, right:false, shift:false, meta:false };
+      try { if (state._scry.scryKeys) window.removeEventListener('keydown', state._scry.scryKeys); } catch {}
+      try { if (state._scry.scryKeysUp) window.removeEventListener('keyup', state._scry.scryKeysUp); } catch {}
+      state._scry.scryKeys = (e) => {
+        if (!state._scry?.scryMode) return;
+        const k = e.key;
+        if (k === 'ArrowUp' || k === 'ArrowDown' || k === 'ArrowLeft' || k === 'ArrowRight' || k === 'Shift' || k === 'Meta') {
+          try { e.preventDefault(); e.stopPropagation(); } catch {}
+          if (k === 'ArrowUp') state._scry.keyState.up = true;
+          if (k === 'ArrowDown') state._scry.keyState.down = true;
+          if (k === 'ArrowLeft') state._scry.keyState.left = true;
+          if (k === 'ArrowRight') state._scry.keyState.right = true;
+          if (k === 'Shift') state._scry.keyState.shift = true;
+          if (k === 'Meta') state._scry.keyState.meta = true;
+        }
+      };
+      state._scry.scryKeysUp = (e) => {
+        if (!state._scry?.scryMode) return;
+        const k = e.key;
+        if (k === 'ArrowUp') state._scry.keyState.up = false;
+        if (k === 'ArrowDown') state._scry.keyState.down = false;
+        if (k === 'ArrowLeft') state._scry.keyState.left = false;
+        if (k === 'ArrowRight') state._scry.keyState.right = false;
+        if (k === 'Shift') state._scry.keyState.shift = false;
+        if (k === 'Meta') { state._scry.keyState.meta = false; state._scry.keyState.up = false; state._scry.keyState.down = false; }
+      };
+      try { window.addEventListener('keydown', state._scry.scryKeys, { passive:false }); } catch {}
+      try { window.addEventListener('keyup', state._scry.scryKeysUp, { passive:false }); } catch {}
+      // Safety: clear modifier/key state on blur
+      try {
+        if (state._scry._onBlur) window.removeEventListener('blur', state._scry._onBlur);
+        state._scry._onBlur = () => { try { state._scry.keyState = { up:false, down:false, left:false, right:false, shift:false, meta:false }; } catch {} };
+        window.addEventListener('blur', state._scry._onBlur);
+      } catch {}
+
+      // Per-frame: keep target locked and drive rotation/movement
       if (state._scry.scryObs) { try { engine.onBeginFrameObservable.remove(state._scry.scryObs); } catch {} state._scry.scryObs = null; }
       state._scry.scryObs = engine.onBeginFrameObservable.add(() => {
         try {
           if (!state._scry?.scryMode) return;
-          if (state._scry?.ball) camera.target.copyFrom(state._scry.ball.position);
+          const ball2 = state._scry?.ball; if (ball2) camera.target.copyFrom(ball2.position);
+          const ks = state._scry.keyState || {};
+          const dt = (engine.getDeltaTime ? engine.getDeltaTime()/1000 : 1/60);
+          const s = (state?.barrow?.spaces || []).find(x => x && x.id === state._scry.spaceId);
+          if (!s) return;
+          // Rotate camera yaw with left/right
+          if (ks.left || ks.right) {
+            const degPerSec = ks.shift ? 120 : 60;
+            const dirYaw = ks.left ? 1 : -1; // CCW for left
+            const delta = (degPerSec * Math.PI / 180) * dirYaw * dt;
+            camera.alpha = (camera.alpha + delta) % (Math.PI * 2);
+            if (camera.alpha < 0) camera.alpha += Math.PI * 2;
+          }
+          // Move scryball with up/down (Meta=vertical)
+          const moveSign = (ks.up ? 1 : 0) + (ks.down ? -1 : 0);
+          if (moveSign !== 0 && ball2) {
+            const pos = ball2.position.clone();
+            const isVert = !!ks.meta;
+            let dir;
+            if (isVert) {
+              dir = new BABYLON.Vector3(0, moveSign, 0);
+            } else {
+              const fwd = camera.getForwardRay()?.direction.clone() || new BABYLON.Vector3(0,0,1);
+              fwd.y = 0; try { fwd.normalize(); } catch {}
+              dir = fwd.scale(moveSign);
+            }
+            const res = s.res || (state?.barrow?.meta?.voxelSize || 1);
+            let scryMult = 1.0; try { const raw = Number(localStorage.getItem('dw:ui:scrySpeed') || '100'); if (isFinite(raw) && raw > 0) scryMult = (raw > 5) ? (raw/100) : raw; } catch {}
+            const base = (isVert ? Math.max(0.06, res * 0.6) : Math.max(0.1, res * 0.9) * 2) * (ks.shift ? 2.0 : 1.0) * scryMult;
+            const dist = base * Math.max(0.016, dt) * (isVert ? 3 : 6);
+            const seg  = Math.max(isVert ? 0.04 : 0.08, res * (isVert ? 0.15 : 0.25));
+            const radius = Math.max(0.15, (res * 0.8) / 2);
+            const nSteps = Math.max(1, Math.ceil(dist / seg));
+            const inc = dir.scale(dist / nSteps);
+            function canOccupy(px, py, pz) {
+              const offsets = [ {x:0,z:0}, {x:radius*0.5,z:0}, {x:-radius*0.5,z:0}, {x:0,z:radius*0.5}, {x:0,z:-radius*0.5} ];
+              for (const o of offsets) {
+                const hit = (() => { try { const spaces = Array.isArray(state?.barrow?.spaces) ? state.barrow.spaces : []; for (const sp of spaces) { if (!sp || !sp.vox) continue; const v = voxelValueAtWorld(sp, px + o.x, py, pz + o.z); if (v === VoxelType.Rock || v === VoxelType.Wall) return true; } return false; } catch { return false; } })();
+                if (hit) return false;
+              }
+              return true;
+            }
+            let next = pos.clone(); let blocked = false;
+            for (let i = 0; i < nSteps; i++) {
+              const cand = next.add(inc);
+              if (canOccupy(cand.x, cand.y, cand.z)) { next.copyFrom(cand); }
+              else { blocked = true; break; }
+            }
+            if (!next.equals(pos)) {
+              ball2.position.copyFrom(next); camera.target.copyFrom(next);
+              // Persist per-space scry position (throttled)
+              try {
+                const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+                const lastT = state._scry._lastSaveT || 0;
+                if (now - lastT > 120) {
+                  state._scry._lastSaveT = now;
+                  const key = 'dw:scry:pos:' + state._scry.spaceId;
+                  localStorage.setItem(key, JSON.stringify({ x: next.x, y: next.y, z: next.z }));
+                }
+              } catch {}
+            }
+            try { if (blocked) Log?.log('COLLIDE', 'scry:block', { from: pos, to: next, vert: isVert }); } catch {}
+          }
         } catch {}
       });
     } catch (e) { try { Log?.log('ERROR', 'EH:enterScry', { error: String(e) }); } catch {} }
@@ -113,6 +212,9 @@ export function initScryApi({ scene, engine, camera, state, Log }) {
       try { const id = state._scry.spaceId; const b = state._scry.ball; if (id && b && !b.isDisposed()) localStorage.setItem('dw:scry:pos:'+id, JSON.stringify({ x: b.position.x, y: b.position.y, z:b.position.z })); } catch {}
       state._scry.scryMode = false;
       try { if (state._scry.scryObs) { engine.onBeginFrameObservable.remove(state._scry.scryObs); state._scry.scryObs = null; } } catch {}
+      try { if (state._scry.scryKeys) { window.removeEventListener('keydown', state._scry.scryKeys); state._scry.scryKeys = null; } } catch {}
+      try { if (state._scry.scryKeysUp) { window.removeEventListener('keyup', state._scry.scryKeysUp); state._scry.scryKeysUp = null; } } catch {}
+      try { if (state._scry._onBlur) { window.removeEventListener('blur', state._scry._onBlur); state._scry._onBlur = null; } } catch {}
       try { if (state._scry._camKeys) { camera.keysUp = state._scry._camKeys.up || camera.keysUp; camera.keysDown = state._scry._camKeys.down || camera.keysDown; camera.keysLeft = state._scry._camKeys.left || camera.keysLeft; camera.keysRight = state._scry._camKeys.right || camera.keysRight; state._scry._camKeys = null; } } catch {}
       try { if (state.hl && state._scry?.ball) state.hl.removeMesh(state._scry.ball); } catch {}
       try { if (state._scry?.ball) state._scry.ball.renderOutline = false; } catch {}
@@ -122,4 +224,3 @@ export function initScryApi({ scene, engine, camera, state, Log }) {
 
   return { disposeScryBall, voxelValueAtWorld, findScryWorldPosForSpace, ensureScryBallAt, enterScryMode, exitScryMode };
 }
-
