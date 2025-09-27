@@ -45,7 +45,7 @@ export function initGizmoHandlers({ scene, engine, camera, state }) {
 }
 
 // Transform gizmos (rotate/move) — build/teardown and helpers
-export function initTransformGizmos({ scene, engine, camera, state, renderDbView }) {
+export function initTransformGizmos({ scene, engine, camera, state, renderDbView, saveBarrow, snapshot, scheduleGridUpdate, rebuildScene, helpers = {} }) {
   // HUD helpers
   let _gizmoHudEl = null;
   function ensureGizmoHud() {
@@ -178,6 +178,420 @@ export function initTransformGizmos({ scene, engine, camera, state, renderDbView
   }
 
   const _GIZMO_DCLICK_MS = Number(localStorage.getItem('dw:ui:doubleClickMs') || '500') || 500;
+
+  // ——————————— Widget pointer actions (moved from eventHandler) ———————————
+  let _lastDbRefresh = 0;
+  let _lastGizmoClick = 0;
+  const dragThreshold = 6; // pixels
+  function dPick(event, data) { try { Log.log('PICK', event, data); } catch {} }
+  function mLog(event, data) { try { Log.log('MOVE', event, data); } catch {} }
+  function getSelectedSpaceAndMesh() {
+    const sel = Array.from(state.selection || []);
+    if (sel.length !== 1) return { space: null, mesh: null, id: null };
+    const id = sel[0];
+    const mesh = (state?.built?.spaces || []).find(x => x.id === id)?.mesh || null;
+    const space = (state?.barrow?.spaces || []).find(x => x.id === id) || null;
+    return { space, mesh, id };
+  }
+  function updateMoveDiscPlacement() {
+    try {
+      if (!moveWidget?.disc) return;
+      const ids = Array.from(state.selection || []);
+      if (!ids.length) return;
+      const spaces = Array.isArray(state?.barrow?.spaces) ? state.barrow.spaces : [];
+      let minY = Infinity;
+      for (const id of ids) {
+        const s = spaces.find(x => x && x.id === id);
+        if (!s) continue;
+        const sr = s.res || (state.barrow?.meta?.voxelSize || 1);
+        const y0 = (s.origin?.y||0) - ((s.size?.y||0) * sr)/2;
+        if (y0 < minY) minY = y0;
+      }
+      if (!isFinite(minY)) minY = 0;
+      const center = moveWidget.group ? (moveWidget.groupCenter || new BABYLON.Vector3(0,0,0)) : ((state?.built?.spaces||[]).find(x => ids.includes(x.id))?.mesh?.position || new BABYLON.Vector3(0,0,0));
+      moveWidget.disc.position.x = center.x;
+      moveWidget.disc.position.z = center.z;
+      moveWidget.disc.position.y = minY;
+      moveWidget.planeY = minY;
+    } catch {}
+  }
+
+  scene.onPointerObservable.add((pi) => {
+    try {
+      // Widget actions only in Edit mode
+      if (state.mode !== 'edit') return;
+      const type = pi.type;
+      // Rotation widget press
+      if (type === BABYLON.PointerEventTypes.POINTERDOWN) {
+        const pick = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('rotGizmo:'));
+        if (pick?.hit && pick.pickedMesh) {
+          const nm = String(pick.pickedMesh.name || '');
+          const mY = rotWidget.meshes?.y, mX = rotWidget.meshes?.x, mZ = rotWidget.meshes?.z;
+          let axis = null;
+          if (nm.startsWith('rotGizmo:Y:') && pick.pickedMesh === mY) axis = 'y';
+          else if (nm.startsWith('rotGizmo:X:') && pick.pickedMesh === mX) axis = 'x';
+          else if (nm.startsWith('rotGizmo:Z:') && pick.pickedMesh === mZ) axis = 'z';
+          if (axis) {
+            try { pi.event?.stopImmediatePropagation?.(); pi.event?.stopPropagation?.(); pi.event?.preventDefault?.(); pi.skipOnPointerObservable = true; } catch {}
+            rotWidget.axis = axis; rotWidget.preDrag = false; rotWidget.downX = scene.pointerX; rotWidget.downY = scene.pointerY; dPick('preDrag:rot', { axis, x: rotWidget.downX, y: rotWidget.downY });
+            try { setRingActive(axis); } catch {}
+            try {
+              const ax = rotWidget.axis || 'y';
+              const sel = Array.from(state.selection || []);
+              const isGroup = (sel.length > 1);
+              if (isGroup) {
+                const axisWorld = (ax === 'x') ? new BABYLON.Vector3(1,0,0) : (ax === 'y') ? new BABYLON.Vector3(0,1,0) : new BABYLON.Vector3(0,0,1);
+                rotWidget.axisWorld = axisWorld.clone();
+                const center = rotWidget.groupCenter || new BABYLON.Vector3(0,0,0);
+                const p0 = pickPointOnPlane(axisWorld, center) || center.clone();
+                let ref = p0.subtract(center);
+                ref = ref.subtract(axisWorld.scale(BABYLON.Vector3.Dot(ref, axisWorld)));
+                if (ref.lengthSquared() < 1e-6) ref = new BABYLON.Vector3(1,0,0); else ref.normalize();
+                rotWidget.refWorld = ref;
+                try { rotWidget.startAngle = (function(center){ try { const viewport = camera.viewport.toGlobal(engine.getRenderWidth(), engine.getRenderHeight()); const proj = BABYLON.Vector3.Project(center, BABYLON.Matrix.Identity(), scene.getTransformMatrix(), viewport); const dx = (scene.pointerX - proj.x), dy = (scene.pointerY - proj.y); return Math.atan2(dy, dx); } catch { return 0; } })(center); } catch {}
+                rotWidget.mStartX = scene.pointerX; rotWidget.mStartY = scene.pointerY;
+                const map = new Map();
+                for (const id of rotWidget.groupIDs || []) {
+                  const m = (state?.built?.spaces || []).find(x => x.id === id)?.mesh; if (!m) continue;
+                  try { if (!m.rotationQuaternion) m.rotationQuaternion = BABYLON.Quaternion.FromEulerAngles(m.rotation.x||0, m.rotation.y||0, m.rotation.z||0); } catch {}
+                  map.set(id, { q: m.rotationQuaternion?.clone ? m.rotationQuaternion.clone() : null, p: m.position?.clone ? m.position.clone() : new BABYLON.Vector3(m.position.x, m.position.y, m.position.z) });
+                }
+                rotWidget.startById = map; rotWidget.dragging = true;
+              } else {
+                const { mesh } = getSelectedSpaceAndMesh(); if (!mesh) return;
+                const center = mesh.position.clone();
+                const axisLocal = (ax === 'x') ? new BABYLON.Vector3(1,0,0) : (ax === 'y') ? new BABYLON.Vector3(0,1,0) : new BABYLON.Vector3(0,0,1);
+                rotWidget.axisLocal = axisLocal.clone();
+                if (!mesh.rotationQuaternion) { mesh.rotationQuaternion = BABYLON.Quaternion.FromEulerAngles(mesh.rotation.x||0, mesh.rotation.y||0, mesh.rotation.z||0); }
+                rotWidget.startQuat = mesh.rotationQuaternion.clone();
+                const wm = mesh.getWorldMatrix();
+                const nWorld = BABYLON.Vector3.TransformNormal(axisLocal, wm).normalize();
+                const p0 = pickPointOnPlane(nWorld, center) || center.clone();
+                const inv = BABYLON.Matrix.Invert(wm);
+                const p0Local = BABYLON.Vector3.TransformCoordinates(p0, inv);
+                let refLocal = p0Local.subtract(axisLocal.scale(BABYLON.Vector3.Dot(p0Local, axisLocal)));
+                if (refLocal.lengthSquared() < 1e-6) refLocal = new BABYLON.Vector3(1,0,0); else refLocal.normalize();
+                rotWidget.refLocal = refLocal; rotWidget.dragging = true;
+              }
+              const canvas = engine.getRenderingCanvas();
+              camera.inputs?.attached?.pointers?.detachControl(canvas);
+              try { const pe = pi.event; if (pe && pe.pointerId != null && canvas.setPointerCapture) canvas.setPointerCapture(pe.pointerId); } catch {}
+            } catch {}
+            try {
+              const now = performance.now();
+              if (now - _lastGizmoClick <= _GIZMO_DCLICK_MS) { const { id } = getSelectedSpaceAndMesh(); if (id) window.dispatchEvent(new CustomEvent('dw:showDbForSpace', { detail: { id } })); }
+              _lastGizmoClick = now;
+            } catch {}
+          }
+        }
+        // Move widget press
+        let pick2 = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('moveGizmo:disc:'));
+        if (!pick2?.hit) pick2 = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('moveGizmo:'));
+        if (pick2?.hit && pick2.pickedMesh && String(pick2.pickedMesh.name||'').startsWith('moveGizmo:')) {
+          try { pi.event?.stopImmediatePropagation?.(); pi.event?.stopPropagation?.(); pi.event?.preventDefault?.(); pi.skipOnPointerObservable = true; } catch {}
+          moveWidget.preDrag = true; moveWidget.downX = scene.pointerX; moveWidget.downY = scene.pointerY;
+          const _nm = String(pick2.pickedMesh.name||'');
+          try { const m = _nm.match(/^moveGizmo:(y):/i); moveWidget.axis = m ? m[1].toLowerCase() : null; } catch { moveWidget.axis = null; }
+          moveWidget.mode = _nm.startsWith('moveGizmo:disc:') ? 'plane' : 'axis';
+          dPick('preDrag:move', { x: moveWidget.downX, y: moveWidget.downY, mode: moveWidget.mode, axis: moveWidget.axis });
+          mLog('press', { picked: _nm, mode: moveWidget.mode, axis: moveWidget.axis });
+        }
+      } else if (type === BABYLON.PointerEventTypes.POINTERUP) {
+        if (rotWidget.dragging) {
+          rotWidget.dragging = false;
+          try { const canvas = engine.getRenderingCanvas(); camera.inputs?.attached?.pointers?.attachControl(canvas, true); } catch {}
+          try {
+            const sel = Array.from(state.selection || []);
+            if (sel.length > 1) {
+              const byId = new Map((state.barrow.spaces||[]).map(s => [s.id, s]));
+              for (const id2 of sel) {
+                const m2 = (state?.built?.spaces || []).find(x => x.id === id2)?.mesh; if (!m2) continue;
+                const sp = byId.get(id2); if (!sp) continue;
+                const e = m2.rotationQuaternion?.toEulerAngles ? m2.rotationQuaternion.toEulerAngles() : new BABYLON.Vector3(m2.rotation.x||0, m2.rotation.y||0, m2.rotation.z||0);
+                sp.rotation = { x: e.x, y: e.y, z: e.z }; sp.rotY = e.y;
+              }
+              try { saveBarrow?.(state.barrow); snapshot?.(state.barrow); } catch {}
+              try { renderDbView?.(state.barrow); } catch {}
+              try { scheduleGridUpdate?.(); } catch {}
+              try { rebuildScene?.(); ensureRotWidget(); ensureMoveWidget(); } catch {}
+            } else {
+              const { space, mesh } = getSelectedSpaceAndMesh();
+              if (space && mesh) {
+                if (!space.rotation || typeof space.rotation !== 'object') space.rotation = { x: 0, y: 0, z: 0 };
+                const e = mesh.rotationQuaternion?.toEulerAngles ? mesh.rotationQuaternion.toEulerAngles() : new BABYLON.Vector3(mesh.rotation.x||0, mesh.rotation.y||0, mesh.rotation.z||0);
+                space.rotation.x = e.x; space.rotation.y = e.y; space.rotation.z = e.z; space.rotY = e.y;
+                try { saveBarrow?.(state.barrow); snapshot?.(state.barrow); } catch {}
+                try { renderDbView?.(state.barrow); } catch {}
+                try { scheduleGridUpdate?.(); } catch {}
+                try { rebuildScene?.(); ensureRotWidget(); ensureMoveWidget(); } catch {}
+              }
+            }
+          } catch {}
+          try { setRingsDim(); } catch {}
+        }
+        if (moveWidget.dragging) {
+          moveWidget.dragging = false; moveWidget.preDrag = false; try { moveWidget.dragPlaneY = null; } catch {}
+          try { const canvas = engine.getRenderingCanvas(); camera.inputs?.attached?.pointers?.attachControl(canvas, true); } catch {}
+          try {
+            const { space, mesh } = getSelectedSpaceAndMesh();
+            if (space && mesh) {
+              space.origin = space.origin || { x: 0, y: 0, z: 0 };
+              space.origin.x = mesh.position.x; space.origin.y = mesh.position.y; space.origin.z = mesh.position.z;
+              try { saveBarrow?.(state.barrow); snapshot?.(state.barrow); } catch {}
+              try { renderDbView?.(state.barrow); } catch {}
+              try { scheduleGridUpdate?.(); } catch {}
+              try { rebuildScene?.(); ensureRotWidget(); ensureMoveWidget(); } catch {}
+            }
+          } catch {}
+          try { setRingsDim(); } catch {}
+        }
+      } else if (type === BABYLON.PointerEventTypes.POINTERMOVE) {
+        const selNowGlobal = Array.from(state.selection || []);
+        const isGroupGlobal = selNowGlobal.length > 1;
+        const { space, mesh, id } = getSelectedSpaceAndMesh(); if (!isGroupGlobal && !mesh) return;
+        try {
+          if (!rotWidget.dragging && !rotWidget.preDrag && !moveWidget.dragging && !moveWidget.preDrag) {
+            const hp = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('rotGizmo:'));
+            let hAxis = null;
+            if (hp?.hit && hp.pickedMesh) {
+              const n = String(hp.pickedMesh.name || '');
+              if (n.startsWith('rotGizmo:Y:') && rotWidget.meshes?.y && hp.pickedMesh === rotWidget.meshes.y) hAxis = 'y';
+              else if (n.startsWith('rotGizmo:X:') && rotWidget.meshes?.x && hp.pickedMesh === rotWidget.meshes.x) hAxis = 'x';
+              else if (n.startsWith('rotGizmo:Z:') && rotWidget.meshes?.z && hp.pickedMesh === rotWidget.meshes.z) hAxis = 'z';
+            }
+            if (hAxis) { if (rotWidget.activeAxis !== hAxis) { try { setRingActive(hAxis); } catch {} } }
+            else { if (rotWidget.activeAxis) { try { setRingsDim(); } catch {} } }
+          }
+        } catch {}
+        if (!rotWidget.dragging && rotWidget.preDrag) {
+          const dx = (scene.pointerX - rotWidget.downX); const dy = (scene.pointerY - rotWidget.downY);
+          if (Math.hypot(dx, dy) >= dragThreshold) {
+            try { pi.event?.stopImmediatePropagation?.(); pi.event?.stopPropagation?.(); pi.event?.preventDefault?.(); pi.skipOnPointerObservable = true; } catch {}
+            const ax = rotWidget.axis || 'y';
+            const center = mesh.position.clone();
+            const axisLocal = (ax === 'x') ? new BABYLON.Vector3(1,0,0) : (ax === 'y') ? new BABYLON.Vector3(0,1,0) : new BABYLON.Vector3(0,0,1);
+            rotWidget.axisLocal = axisLocal.clone();
+            try { if (!mesh.rotationQuaternion) { mesh.rotationQuaternion = BABYLON.Quaternion.FromEulerAngles(mesh.rotation.x||0, mesh.rotation.y||0, mesh.rotation.z||0); } } catch {}
+            rotWidget.startQuat = (mesh.rotationQuaternion && mesh.rotationQuaternion.clone) ? mesh.rotationQuaternion.clone() : null;
+            const wm = mesh.getWorldMatrix(); const nWorld = BABYLON.Vector3.TransformNormal(axisLocal, wm).normalize();
+            const p0 = pickPointOnPlane(nWorld, center) || center.clone();
+            const inv = BABYLON.Matrix.Invert(wm);
+            const p0Local = BABYLON.Vector3.TransformCoordinates(p0, inv);
+            let refLocal = p0Local.subtract(axisLocal.scale(BABYLON.Vector3.Dot(p0Local, axisLocal))); if (refLocal.lengthSquared() < 1e-6) refLocal = new BABYLON.Vector3(1,0,0); else refLocal.normalize();
+            rotWidget.refLocal = refLocal; rotWidget.dragging = true; rotWidget.preDrag = false;
+            try { const canvas = engine.getRenderingCanvas(); camera.inputs?.attached?.pointers?.detachControl(canvas); Log.log('GIZMO', 'Drag start', { id: rotWidget.spaceId, axis: ax }); } catch {}
+            dPick('dragStart:rot', {});
+            try { for (const x of state?.built?.intersections || []) { try { state.hl?.removeMesh(x.mesh); } catch {}; x.mesh?.setEnabled(false); } } catch {}
+            try { if (space) { if (!space.rotation || typeof space.rotation !== 'object') space.rotation = { x: 0, y: 0, z: 0 }; const e = mesh.rotationQuaternion?.toEulerAngles ? mesh.rotationQuaternion.toEulerAngles() : new BABYLON.Vector3(mesh.rotation.x||0, mesh.rotation.y||0, mesh.rotation.z||0); space.rotation.x = e.x; space.rotation.y = e.y; space.rotation.z = e.z; space.rotY = e.y; renderDbView?.(state.barrow); } } catch {}
+          }
+        }
+        if (rotWidget.dragging) {
+          try { pi.event?.stopImmediatePropagation?.(); pi.event?.stopPropagation?.(); pi.event?.preventDefault?.(); pi.skipOnPointerObservable = true; } catch {}
+          const ax = rotWidget.axis || 'y';
+          const sel = Array.from(state.selection || []);
+          const isGroup = (sel.length > 1);
+          let delta = 0;
+          if (isGroup) {
+            const center = rotWidget.groupCenter || new BABYLON.Vector3(0,0,0);
+            let ok = true; try { const viewport = camera.viewport.toGlobal(engine.getRenderWidth(), engine.getRenderHeight()); const proj = BABYLON.Vector3.Project(center, BABYLON.Matrix.Identity(), scene.getTransformMatrix(), viewport); const angNow = Math.atan2(scene.pointerY - proj.y, scene.pointerX - proj.x); const ang0 = rotWidget.startAngle || angNow; delta = angNow - ang0; } catch { ok = false; }
+            if (!isFinite(delta) || Math.abs(delta) < 1e-6 || ok === false) { const dx = (scene.pointerX - rotWidget.mStartX); const sens2 = (() => { try { return Math.max(0.0005, Math.min(0.01, Number(localStorage.getItem('dw:ui:rotSens') || '0.008')/100)); } catch { return 0.008/100; } })(); delta = dx * sens2 * Math.PI; }
+            if (delta > Math.PI) delta -= 2*Math.PI; else if (delta < -Math.PI) delta += 2*Math.PI;
+            const sens = (() => { try { return Math.max(0.1, Math.min(2.0, Number(localStorage.getItem('dw:ui:rotSens') || '0.8'))); } catch { return 0.8; } })();
+            const nWorld = rotWidget.axisWorld || new BABYLON.Vector3(0,1,0);
+            const qRot = BABYLON.Quaternion.RotationAxis(nWorld, sens * delta);
+            const mRot = BABYLON.Matrix.RotationAxis(nWorld, sens * delta);
+            for (const id of rotWidget.groupIDs || []) {
+              const entry = (state?.built?.spaces || []).find(x => x.id === id); if (!entry?.mesh) continue;
+              const start = rotWidget.startById?.get?.(id); if (!start) continue;
+              const m = entry.mesh;
+              const p0 = start.p || m.position; const rel = p0.subtract(center); const relRot = BABYLON.Vector3.TransformCoordinates(rel, mRot); const pNew = center.add(relRot); m.position.copyFrom(pNew);
+              try { const q0 = start.q || m.rotationQuaternion || BABYLON.Quaternion.FromEulerAngles(m.rotation.x||0, m.rotation.y||0, m.rotation.z||0); m.rotationQuaternion = qRot.multiply ? qRot.multiply(q0) : q0; m.rotation.set(0,0,0); } catch {}
+              try { m.computeWorldMatrix(true); m.refreshBoundingInfo(); } catch {}
+            }
+            rotWidget.lastRot = delta;
+            try { renderGizmoHud({ selCount: sel.length, center, deltaDeg: (delta*180/Math.PI), pickMode: 'screen|mouse' }); } catch {}
+          } else {
+            const center = mesh.position.clone();
+            const axisLocal = rotWidget.axisLocal || ((ax === 'x') ? new BABYLON.Vector3(1,0,0) : (ax === 'y') ? new BABYLON.Vector3(0,1,0) : new BABYLON.Vector3(0,0,1));
+            const wm = mesh.getWorldMatrix(); const nWorld = BABYLON.Vector3.TransformNormal(axisLocal, wm).normalize();
+            const p = pickPointOnPlane(nWorld, center); if (!p) return;
+            const inv = BABYLON.Matrix.Invert(wm); const pLocal = BABYLON.Vector3.TransformCoordinates(p, inv);
+            let curLocal = pLocal.subtract(axisLocal.scale(BABYLON.Vector3.Dot(pLocal, axisLocal))); if (curLocal.lengthSquared() < 1e-8) return; curLocal.normalize();
+            const refLocal = rotWidget.refLocal || new BABYLON.Vector3(1,0,0);
+            const crossL = BABYLON.Vector3.Cross(refLocal, curLocal);
+            const s = BABYLON.Vector3.Dot(axisLocal, crossL);
+            const c = BABYLON.Vector3.Dot(refLocal, curLocal);
+            delta = Math.atan2(s, c);
+            try { const qStart = rotWidget.startQuat || mesh.rotationQuaternion || BABYLON.Quaternion.FromEulerAngles(mesh.rotation.x||0, mesh.rotation.y||0, mesh.rotation.z||0); mesh.rotationQuaternion = (qStart.clone ? qStart.clone() : qStart); const sens = (() => { try { return Math.max(0.1, Math.min(2.0, Number(localStorage.getItem('dw:ui:rotSens') || '0.8'))); } catch { return 0.8; } })(); mesh.rotate(axisLocal, sens * delta, BABYLON.Space.LOCAL); mesh.rotation.set(0,0,0); } catch {}
+            try { mesh.computeWorldMatrix(true); mesh.refreshBoundingInfo(); } catch {}
+            rotWidget.lastRot = delta; try { renderGizmoHud({ selCount: 1, center, deltaDeg: (delta*180/Math.PI), pickMode: 'plane' }); } catch {}
+          }
+          try { updateRotWidgetFromMesh(mesh); } catch {}
+          try {
+            const selLive = Array.from(state.selection || []);
+            const isGroupLive = selLive.length > 1;
+            if (isGroupLive) {
+              const byId = new Map((state.barrow.spaces||[]).map(s => [s.id, s]));
+              for (const id2 of selLive) {
+                const m2 = (state?.built?.spaces || []).find(x => x.id === id2)?.mesh; if (!m2) continue;
+                const sp = byId.get(id2); if (!sp) continue;
+                const e = m2.rotationQuaternion?.toEulerAngles ? m2.rotationQuaternion.toEulerAngles() : new BABYLON.Vector3(m2.rotation.x||0, m2.rotation.y||0, m2.rotation.z||0);
+                sp.rotation = { x: e.x, y: e.y, z: e.z }; sp.rotY = e.y;
+              }
+            } else if (space && mesh) {
+              if (!space.rotation || typeof space.rotation !== 'object') space.rotation = { x: 0, y: 0, z: 0 };
+              const e = mesh.rotationQuaternion?.toEulerAngles ? mesh.rotationQuaternion.toEulerAngles() : new BABYLON.Vector3(mesh.rotation.x||0, mesh.rotation.y||0, mesh.rotation.z||0);
+              space.rotation.x = e.x; space.rotation.y = e.y; space.rotation.z = e.z; space.rotY = e.y;
+            }
+            const now = performance.now();
+            if (now - _lastDbRefresh > 60) {
+              _lastDbRefresh = now;
+              const deg = (rotWidget.lastRot * 180 / Math.PI);
+              try { Log.log('GIZMO', 'Drag update', { id: rotWidget.spaceId, axis: rotWidget.axis || 'y', delta: rotWidget.lastRot, deg: isFinite(deg) ? Math.round(deg*10)/10 : null }); } catch {}
+              try { renderDbView?.(state.barrow); } catch {}
+            }
+            try { if (!isGroupLive) helpers.updateLiveIntersectionsFor?.(id); else if (selLive.length) helpers.updateLiveIntersectionsFor?.(selLive[0]); } catch {}
+          } catch {}
+          return;
+        }
+        if (!moveWidget.dragging && moveWidget.preDrag) {
+          const dx = (scene.pointerX - moveWidget.downX); const dy = (scene.pointerY - moveWidget.downY);
+          if (Math.hypot(dx, dy) >= dragThreshold) {
+            try { pi.event?.stopImmediatePropagation?.(); pi.event?.stopPropagation?.(); pi.event?.preventDefault?.(); pi.skipOnPointerObservable = true; } catch {}
+            const selNow = Array.from(state.selection || []);
+            const isGroup = selNow.length > 1;
+            const isPlane = (moveWidget.mode === 'plane');
+            const axis = (moveWidget.axis === 'x') ? new BABYLON.Vector3(1,0,0) : (moveWidget.axis === 'y') ? new BABYLON.Vector3(0,1,0) : new BABYLON.Vector3(0,0,1);
+            const view = camera.getForwardRay().direction.clone();
+            let n = isPlane ? new BABYLON.Vector3(0,1,0) : BABYLON.Vector3.Cross(axis, BABYLON.Vector3.Cross(view, axis));
+            if (!isPlane) {
+              if (n.lengthSquared() < 1e-4) n = BABYLON.Vector3.Cross(axis, new BABYLON.Vector3(0,1,0));
+              if (n.lengthSquared() < 1e-4) n = BABYLON.Vector3.Cross(axis, new BABYLON.Vector3(1,0,0));
+            }
+            try { n.normalize(); } catch {}
+            mLog('drag:init', { isGroup, isPlane, axis: moveWidget.axis, planeY: moveWidget.planeY, dragPlaneY: moveWidget.dragPlaneY, n: { x: n.x, y: n.y, z: n.z } });
+            if (isGroup) {
+              const center = moveWidget.groupCenter || new BABYLON.Vector3(0,0,0);
+              if (isPlane && (moveWidget.dragPlaneY == null)) moveWidget.dragPlaneY = moveWidget.planeY || 0;
+              const base0 = isPlane ? new BABYLON.Vector3(0, (moveWidget.dragPlaneY != null ? moveWidget.dragPlaneY : (moveWidget.planeY || 0)), 0) : center;
+              const p0 = pickPointOnPlane(n, base0) || base0.clone();
+              moveWidget.axisStart = isPlane ? 0 : BABYLON.Vector3.Dot(p0, axis);
+              moveWidget.startPoint = p0.clone();
+              moveWidget.startCenter = center.clone ? center.clone() : new BABYLON.Vector3(center.x, center.y, center.z);
+              moveWidget.startById = new Map(); moveWidget.groupIDs = selNow.slice();
+              for (const id2 of moveWidget.groupIDs) { const m2 = (state?.built?.spaces || []).find(x => x.id === id2)?.mesh; if (!m2) continue; moveWidget.startById.set(id2, m2.position?.clone ? m2.position.clone() : new BABYLON.Vector3(m2.position.x, m2.position.y, m2.position.z)); }
+              moveWidget.planeNormal = n.clone(); moveWidget.dragging = true; moveWidget.preDrag = false;
+              try { const canvas = engine.getRenderingCanvas(); camera.inputs?.attached?.pointers?.detachControl(canvas); const pe = pi.event; if (pe && pe.pointerId != null && canvas.setPointerCapture) canvas.setPointerCapture(pe.pointerId); Log.log('GIZMO', isPlane ? 'Group Plane Move start' : 'Group Move start', { ids: moveWidget.groupIDs, mode: moveWidget.mode, axis: moveWidget.axis }); } catch {}
+            } else {
+              const mref = (state?.built?.spaces || []).find(x => x.id === selNow[0])?.mesh; if (!mref) return;
+              const center = mref.position.clone();
+              if (isPlane && (moveWidget.dragPlaneY == null)) moveWidget.dragPlaneY = moveWidget.planeY || 0;
+              const base0 = isPlane ? new BABYLON.Vector3(0, (moveWidget.dragPlaneY != null ? moveWidget.dragPlaneY : (moveWidget.planeY || 0)), 0) : center;
+              const p0 = pickPointOnPlane(n, base0) || base0.clone();
+              moveWidget.axisStart = isPlane ? 0 : BABYLON.Vector3.Dot(p0, axis);
+              moveWidget.startPoint = p0.clone(); moveWidget.startCenter = center.clone(); moveWidget.planeNormal = n.clone(); moveWidget.dragging = true; moveWidget.preDrag = false;
+              try { const canvas = engine.getRenderingCanvas(); camera.inputs?.attached?.pointers?.detachControl(canvas); const pe = pi.event; if (pe && pe.pointerId != null && canvas.setPointerCapture) canvas.setPointerCapture(pe.pointerId); Log.log('GIZMO', isPlane ? 'Plane Move start' : 'Move start', { id: moveWidget.spaceId, mode: moveWidget.mode, axis: moveWidget.axis, start: center }); } catch {}
+            }
+            dPick('dragStart:move', {});
+            try { for (const x of state?.built?.intersections || []) { try { state.hl?.removeMesh(x.mesh); } catch {}; x.mesh?.setEnabled(false); } } catch {}
+          }
+        }
+        if (moveWidget.dragging) {
+          try { pi.event?.stopImmediatePropagation?.(); pi.event?.stopPropagation?.(); pi.event?.preventDefault?.(); pi.skipOnPointerObservable = true; } catch {}
+          const selNow = Array.from(state.selection || []);
+          const isGroup = selNow.length > 1;
+          const isPlane = (moveWidget.mode === 'plane');
+          const axis = (moveWidget.axis === 'x') ? new BABYLON.Vector3(1,0,0) : (moveWidget.axis === 'y') ? new BABYLON.Vector3(0,1,0) : new BABYLON.Vector3(0,0,1);
+          if (isGroup) {
+            const n = moveWidget.planeNormal || new BABYLON.Vector3(0,1,0);
+            const basePt = isPlane ? new BABYLON.Vector3(0, (moveWidget.dragPlaneY != null ? moveWidget.dragPlaneY : (moveWidget.planeY || 0)), 0) : (moveWidget.startCenter || new BABYLON.Vector3(0,0,0));
+            const p = pickPointOnPlane(n, basePt); if (!p) return;
+            let deltaScalar = 0; let deltaVec = null;
+            if (isPlane) { deltaVec = p.subtract(moveWidget.startPoint || basePt); }
+            else { const s = BABYLON.Vector3.Dot(p, axis); deltaScalar = s - (moveWidget.axisStart || 0); }
+            const snapVal = (v, res) => { const r = Math.max(1e-6, Number(res) || 0); return Math.round(v / r) * r; };
+            for (const id2 of moveWidget.groupIDs || []) {
+              const entry = (state?.built?.spaces || []).find(x => x.id === id2); if (!entry?.mesh) continue;
+              const startPos = moveWidget.startById?.get?.(id2); if (!startPos) continue;
+              const targetPos = isPlane ? startPos.add(deltaVec) : startPos.add(axis.scale(deltaScalar));
+              try { const sp2 = (state?.barrow?.spaces || []).find(x => x && x.id === id2); const hasVox = !!(sp2 && sp2.vox && sp2.vox.size); if (hasVox) { const resV = sp2.vox?.res || sp2.res || (state?.barrow?.meta?.voxelSize || 1); targetPos.x = snapVal(targetPos.x, resV); targetPos.y = snapVal(targetPos.y, resV); targetPos.z = snapVal(targetPos.z, resV); } } catch {}
+              const m2 = entry.mesh; m2.position.copyFrom(targetPos); try { m2.computeWorldMatrix(true); m2.refreshBoundingInfo(); } catch {}
+            }
+            const targetCenter = isPlane ? (moveWidget.startCenter || new BABYLON.Vector3(0,0,0)).add(deltaVec) : (moveWidget.startCenter || new BABYLON.Vector3(0,0,0)).add(axis.scale(deltaScalar));
+            try { moveWidget.root.position.copyFrom(targetCenter); } catch {}
+            try { updateMoveDiscPlacement(); } catch {}
+            try { helpers.updateContactShadowPlacement?.(); } catch {}
+            moveWidget.groupCenter = targetCenter; try { if (rotWidget.group && rotWidget.groupNode) rotWidget.groupNode.position.copyFrom(targetCenter); } catch {}
+            try { const byId = new Map((state.barrow.spaces||[]).map(s => [s.id, s])); for (const id2 of moveWidget.groupIDs || []) { const m2 = (state?.built?.spaces || []).find(x => x.id === id2)?.mesh; if (!m2) continue; const sp = byId.get(id2); if (!sp) continue; sp.origin = { x: m2.position.x, y: m2.position.y, z: m2.position.z }; } const now = performance.now(); if (now - _lastDbRefresh > 60) { _lastDbRefresh = now; Log.log('GIZMO', isPlane ? 'Group Plane Move update' : 'Group Move update', { ids: moveWidget.groupIDs, mode: moveWidget.mode, axis: moveWidget.axis }); try { renderDbView?.(state.barrow); } catch {}; try { helpers.updateSelectionObbLive?.(); } catch {} } } catch {}
+          } else {
+            const n = moveWidget.planeNormal || new BABYLON.Vector3(0,1,0);
+            const basePt = isPlane ? new BABYLON.Vector3(0, (moveWidget.dragPlaneY != null ? moveWidget.dragPlaneY : (moveWidget.planeY || 0)), 0) : (moveWidget.startCenter || mesh.position || new BABYLON.Vector3(0,0,0));
+            const p = pickPointOnPlane(n, basePt); if (!p) return; let target;
+            if (isPlane) { const deltaVec = p.subtract(moveWidget.startPoint || basePt); target = (moveWidget.startCenter || mesh.position).add(deltaVec); }
+            else { const s = BABYLON.Vector3.Dot(p, axis); const deltaScalar = s - (moveWidget.axisStart || 0); target = (moveWidget.startCenter || mesh.position).add(axis.scale(deltaScalar)); }
+            try { const sp = (state?.barrow?.spaces || []).find(x => x && x.id === moveWidget.spaceId); const hasVox = !!(sp && sp.vox && sp.vox.size); if (hasVox) { const resV = sp.vox?.res || sp.res || (state?.barrow?.meta?.voxelSize || 1); const snapVal = (v, r) => { r = Math.max(1e-6, Number(r)||0); return Math.round(v / r) * r; }; target.x = snapVal(target.x, resV); target.y = snapVal(target.y, resV); target.z = snapVal(target.z, resV); } } catch {}
+            try { const now = performance.now(); moveWidget._lastLog = moveWidget._lastLog || 0; if (now - moveWidget._lastLog > 100) { moveWidget._lastLog = now; mLog('drag:update', { isPlane, basePt: { x: basePt.x, y: basePt.y, z: basePt.z }, target: { x: target.x, y: target.y, z: target.z }, dragPlaneY: moveWidget.dragPlaneY }); } } catch {}
+            mesh.position.copyFrom(target); try { mesh.computeWorldMatrix(true); mesh.refreshBoundingInfo(); } catch {}
+            try { if (moveWidget.root) moveWidget.root.position.copyFrom(target); } catch {}
+            try { updateMoveDiscPlacement(); } catch {}
+            try { helpers.updateContactShadowPlacement?.(); } catch {}
+            try { updateRotWidgetFromMesh(mesh); } catch {}
+            try { if (space) { space.origin = space.origin || { x: 0, y: 0, z: 0 }; space.origin.x = mesh.position.x; space.origin.y = mesh.position.y; space.origin.z = mesh.position.z; const now = performance.now(); if (now - _lastDbRefresh > 60) { _lastDbRefresh = now; Log.log('GIZMO', isPlane ? 'Plane Move update' : 'Move update', { id: moveWidget.spaceId, mode: moveWidget.mode, axis: moveWidget.axis, origin: space.origin }); try { renderDbView?.(state.barrow); } catch {} } try { helpers.updateLiveIntersectionsFor?.(id); } catch {} } } catch {}
+            try { helpers.updateSelectionObbLive?.(); } catch {}
+          }
+        }
+      }
+    } catch {}
+  });
+
+  window.addEventListener('pointerup', () => {
+    try {
+      if (rotWidget.dragging) {
+        rotWidget.dragging = false; rotWidget.preDrag = false;
+        try { const canvas = engine.getRenderingCanvas(); camera.inputs?.attached?.pointers?.attachControl(canvas, true); } catch {}
+        try {
+          const sel = Array.from(state.selection || []);
+          if (sel.length > 1) {
+            const byId = new Map((state.barrow.spaces||[]).map(s => [s.id, s]));
+            for (const id2 of sel) { const m2 = (state?.built?.spaces || []).find(x => x.id === id2)?.mesh; if (!m2) continue; const sp = byId.get(id2); if (!sp) continue; const e = m2.rotationQuaternion?.toEulerAngles ? m2.rotationQuaternion.toEulerAngles() : new BABYLON.Vector3(m2.rotation.x||0, m2.rotation.y||0, m2.rotation.z||0); sp.rotation = { x: e.x, y: e.y, z: e.z }; sp.rotY = e.y; }
+            try { saveBarrow?.(state.barrow); snapshot?.(state.barrow); } catch {}
+            try { renderDbView?.(state.barrow); } catch {}
+            try { scheduleGridUpdate?.(); } catch {}
+            try { rebuildScene?.(); ensureRotWidget(); ensureMoveWidget(); } catch {}
+          } else {
+            const { space, mesh } = getSelectedSpaceAndMesh();
+            if (space && mesh) {
+              if (!space.rotation || typeof space.rotation !== 'object') space.rotation = { x: 0, y: 0, z: 0 };
+              const e = mesh.rotationQuaternion?.toEulerAngles ? mesh.rotationQuaternion.toEulerAngles() : new BABYLON.Vector3(mesh.rotation.x||0, mesh.rotation.y||0, mesh.rotation.z||0);
+              space.rotation.x = e.x; space.rotation.y = e.y; space.rotation.z = e.z; space.rotY = e.y;
+              try { saveBarrow?.(state.barrow); snapshot?.(state.barrow); } catch {}
+              try { renderDbView?.(state.barrow); } catch {}
+              try { scheduleGridUpdate?.(); } catch {}
+              try { rebuildScene?.(); ensureRotWidget(); ensureMoveWidget(); } catch {}
+            }
+          }
+        } catch {}
+        try { setRingsDim(); } catch {}
+      }
+      if (moveWidget.dragging) {
+        moveWidget.dragging = false; moveWidget.preDrag = false;
+        try { moveWidget.dragPlaneY = null; } catch {}
+        try { const canvas = engine.getRenderingCanvas(); camera.inputs?.attached?.pointers?.attachControl(canvas, true); } catch {}
+        try {
+          const { space, mesh } = getSelectedSpaceAndMesh();
+          if (space && mesh) {
+            space.origin = space.origin || { x: 0, y: 0, z: 0 };
+            space.origin.x = mesh.position.x; space.origin.y = mesh.position.y; space.origin.z = mesh.position.z;
+            try { saveBarrow?.(state.barrow); snapshot?.(state.barrow); } catch {}
+            try { renderDbView?.(state.barrow); } catch {}
+            try { scheduleGridUpdate?.(); } catch {}
+            try { rebuildScene?.(); ensureRotWidget(); ensureMoveWidget(); } catch {}
+          }
+        } catch {}
+        try { setRingsDim(); } catch {}
+      }
+    } catch {}
+  }, { passive: true });
 
   return { rotWidget, moveWidget, disposeRotWidget, ensureRotWidget, disposeMoveWidget, ensureMoveWidget, pickPointOnPlane, setRingsDim, setRingActive, setGizmoHudVisible, renderGizmoHud, suppressGizmos, updateRotWidgetFromMesh, _GIZMO_DCLICK_MS };
 }

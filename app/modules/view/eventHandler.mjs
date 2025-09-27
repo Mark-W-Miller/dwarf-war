@@ -1927,6 +1927,8 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
       return;
     }
     if (state.mode !== 'edit') return;
+    // Widget interactions (edit mode) are now handled in handlers/gizmo.mjs
+    return;
     const type = pi.type;
     if (type === BABYLON.PointerEventTypes.POINTERDOWN) {
       const pick = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('rotGizmo:'));
@@ -2549,70 +2551,15 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
     });
   })();
 
-  // Global pointerup failsafe (release outside canvas)
+  // Global pointerup failsafe (release outside canvas) — only handles voxel brush here
   window.addEventListener('pointerup', () => {
     try {
-      // End voxel brush session and restore camera controls
       if (voxBrush.active) {
         voxBrush.active = false; voxBrush.pointerId = null; voxBrush.lastAt = 0;
         try { const canvas = engine.getRenderingCanvas(); camera.inputs?.attached?.pointers?.attachControl(canvas, true); } catch {}
         try { inputLog('pointer', 'brush:end', {}); } catch {}
         try { setTimeout(() => { try { scene.render(); } catch {} }, 0); } catch {}
       }
-      if (rotWidget.dragging) {
-        rotWidget.dragging = false; rotWidget.preDrag = false;
-        try { const canvas = engine.getRenderingCanvas(); camera.inputs?.attached?.pointers?.attachControl(canvas, true); } catch {}
-        // Persist latest rotation
-        try {
-          const sel = Array.from(state.selection || []);
-          if (sel.length > 1) {
-            const byId = new Map((state.barrow.spaces||[]).map(s => [s.id, s]));
-            for (const id2 of sel) {
-              const m2 = (state?.built?.spaces || []).find(x => x.id === id2)?.mesh; if (!m2) continue;
-              const sp = byId.get(id2); if (!sp) continue;
-              try {
-                const e = m2.rotationQuaternion?.toEulerAngles ? m2.rotationQuaternion.toEulerAngles() : new BABYLON.Vector3(m2.rotation.x||0, m2.rotation.y||0, m2.rotation.z||0);
-                sp.rotation = { x: e.x, y: e.y, z: e.z }; sp.rotY = e.y;
-              } catch {}
-            }
-            saveBarrow(state.barrow); snapshot(state.barrow);
-            renderDbView(state.barrow);
-            scheduleGridUpdate();
-            try { rebuildScene(); ensureRotWidget(); ensureMoveWidget(); } catch {}
-          } else {
-            const { space, mesh } = getSelectedSpaceAndMesh();
-            if (space && mesh) {
-              if (!space.rotation || typeof space.rotation !== 'object') space.rotation = { x: 0, y: 0, z: 0 };
-              try {
-                const e = mesh.rotationQuaternion?.toEulerAngles ? mesh.rotationQuaternion.toEulerAngles() : new BABYLON.Vector3(mesh.rotation.x||0, mesh.rotation.y||0, mesh.rotation.z||0);
-                space.rotation.x = e.x; space.rotation.y = e.y; space.rotation.z = e.z; space.rotY = e.y;
-              } catch {}
-              saveBarrow(state.barrow); snapshot(state.barrow);
-              renderDbView(state.barrow);
-              scheduleGridUpdate();
-              try { rebuildScene(); ensureRotWidget(); ensureMoveWidget(); } catch {}
-            }
-          }
-        } catch {}
-      }
-      if (moveWidget.dragging) {
-        moveWidget.dragging = false; moveWidget.preDrag = false;
-        try { moveWidget.dragPlaneY = null; } catch {}
-        try { const canvas = engine.getRenderingCanvas(); camera.inputs?.attached?.pointers?.attachControl(canvas, true); } catch {}
-        // Persist latest origin
-        try {
-          const { space, mesh } = getSelectedSpaceAndMesh();
-          if (space && mesh) {
-            space.origin = space.origin || { x: 0, y: 0, z: 0 };
-            space.origin.x = mesh.position.x; space.origin.y = mesh.position.y; space.origin.z = mesh.position.z;
-            saveBarrow(state.barrow); snapshot(state.barrow);
-            renderDbView(state.barrow);
-            scheduleGridUpdate();
-            try { rebuildScene(); ensureRotWidget(); ensureMoveWidget(); } catch {}
-          }
-        } catch {}
-      }
-      try { setRingsDim(); } catch {}
     } catch {}
   }, { passive: true });
 
@@ -2760,7 +2707,12 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
   try { initGizmoHandlers({ scene, engine, camera, state }); } catch (e) { logErr('EH:gizmo:init', e); }
   // Bind transform gizmo API (rotate/move) from module into local names
   try {
-    const giz = initTransformGizmos({ scene, engine, camera, state, renderDbView });
+    const giz = initTransformGizmos({
+      scene, engine, camera, state,
+      renderDbView,
+      saveBarrow, snapshot, scheduleGridUpdate, rebuildScene,
+      helpers: { updateContactShadowPlacement, updateSelectionObbLive, updateLiveIntersectionsFor }
+    });
     // Bind state and core APIs
     rotWidget = giz.rotWidget; moveWidget = giz.moveWidget;
     disposeRotWidget = giz.disposeRotWidget; ensureRotWidget = giz.ensureRotWidget;
