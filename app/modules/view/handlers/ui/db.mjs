@@ -3,7 +3,7 @@
 import { saveBarrow, snapshot, undoLast, loadBarrow, cloneForSave, inflateAfterLoad } from '../../../barrow/store.mjs';
 import { buildSceneFromBarrow, disposeBuilt } from '../../../barrow/builder.mjs';
 import { makeDefaultBarrow, mergeInstructions, layoutBarrow } from '../../../barrow/schema.mjs';
-import { renderDbView } from '../../dbView.mjs';
+import { renderDbView } from '../../dbTab.mjs';
 import { Log } from '../../../util/log.mjs';
 
 export function initDbUiHandlers(ctx) {

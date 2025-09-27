@@ -93,51 +93,22 @@ export function renderDbView(barrow) {
       dRot.appendChild(kv('z', s2(s.rotation?.z||0), { path: `spaces.${idx}.rotation.z`, type: 'number' }));
       d.appendChild(dRot);
 
-      // Voxel map summary
-      const dVox = make('details'); dVox.dataset.section = 'voxel'; dVox.dataset.spaceId = s.id || String(idx); dVox.appendChild(make('summary', { text: 'Voxel Map' }));
-      const vx = s?.vox?.size?.x || 0, vy = s?.vox?.size?.y || 0, vz = s?.vox?.size?.z || 0;
-      const vres = s?.vox?.res || s?.res || (barrow?.meta?.voxelSize || 1);
-      dVox.appendChild(kv('dims (vox)', `${vx} × ${vy} × ${vz}`));
-      try { const vol = (vx|0) * (vy|0) * (vz|0); dVox.appendChild(kv('cells (count)', String(vol))); } catch {}
-      dVox.appendChild(kv('res (world/vox)', s2(vres)));
-      d.appendChild(dVox);
+      const dAttrs = make('details'); dAttrs.dataset.section = 'attrs'; dAttrs.dataset.spaceId = s.id || String(idx); dAttrs.appendChild(make('summary', { text: 'Attributes' }));
+      const attrs = s.attrs || {};
+      for (const key of Object.keys(attrs)) {
+        dAttrs.appendChild(kv(key, s2(attrs[key]), { path: `spaces.${idx}.attrs.${key}`, type: (typeof attrs[key] === 'number' ? 'number' : 'text') }));
+      }
+      d.appendChild(dAttrs);
 
+      // Per-space controls (later: delete, show/hide, lock, etc.)
+      const row = make('div', { class: 'row' });
+      d.appendChild(row);
       dSpaces.appendChild(d);
     });
   }
   root.appendChild(dSpaces);
-  // Selection highlighting for space names
-  function updateSelectionHighlight(ids) {
-    try {
-      const set = new Set(Array.isArray(ids) ? ids.map(String) : []);
-      root.querySelectorAll('a.db-space-link').forEach((a) => {
-        const id = a.dataset.spaceId || '';
-        const on = set.has(id);
-        a.classList.toggle('selected', on);
-        // Inline styles to avoid external CSS dependency
-        if (on) {
-          a.style.fontWeight = '700';
-          a.style.color = '#e9f1f7';
-          a.style.background = '#132430';
-          a.style.borderRadius = '4px';
-          a.style.padding = '2px 6px';
-        } else {
-          a.style.fontWeight = '';
-          a.style.color = '';
-          a.style.background = '';
-          a.style.borderRadius = '';
-          a.style.padding = '';
-        }
-      });
-    } catch {}
-  }
-  try {
-    window.addEventListener('dw:selectionChange', (e) => {
-      const ids = (e && e.detail && Array.isArray(e.detail.selection)) ? e.detail.selection : [];
-      updateSelectionHighlight(ids);
-    });
-  } catch {}
-  // Restore top-level Spaces open state
+
+  // Restore open/closed top-level Spaces state
   try { dSpaces.open = !!spacesWasOpen; } catch {}
 
   // Restore open/closed states for each space and its subsections
@@ -277,3 +248,4 @@ export function renderDbView(barrow) {
     // No-op, but ensures event bubbles and can be listened to elsewhere if needed
   });
 }
+

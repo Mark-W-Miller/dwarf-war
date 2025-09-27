@@ -216,6 +216,58 @@ export function initTransformGizmos({ scene, engine, camera, state, renderDbView
     } catch {}
   }
 
+  // ——————————— Connect (PP) gizmo ———————————
+  function disposeConnectGizmo() {
+    try {
+      const g = state?._connect?.gizmo; if (!g) return;
+      try { g.parts?.forEach(m => { try { m?.dispose?.(); } catch {} }); } catch {}
+      try { g.root?.dispose?.(); } catch {}
+      state._connect.gizmo = null;
+    } catch {}
+  }
+  function ensureConnectGizmoFromSel() {
+    try {
+      state._connect = state._connect || {};
+      const sel = (state._connect.sel instanceof Set) ? state._connect.sel : null;
+      if (!sel || sel.size === 0) { disposeConnectGizmo(); return; }
+      const nodes = Array.isArray(state._connect.nodes) ? state._connect.nodes : [];
+      const byName = new Map(nodes.map(n => [n?.mesh?.name || `connect:node:${n?.i}`, n?.mesh]).filter(([k,v]) => !!v));
+      let cx=0, cy=0, cz=0, n=0;
+      for (const name of sel) { const m = byName.get(String(name)); if (m && m.position) { cx += m.position.x; cy += m.position.y; cz += m.position.z; n++; } }
+      if (!n) { disposeConnectGizmo(); return; }
+      const center = { x: cx/n, y: cy/n, z: cz/n };
+      const gOld = state._connect.gizmo || {};
+      let root = gOld.root; let parts = gOld.parts || [];
+      if (!root || root.isDisposed?.()) {
+        try { parts.forEach(m => { try { m?.dispose?.(); } catch {} }); } catch {}
+        parts = [];
+        root = new BABYLON.TransformNode('connectGizmo:root', scene);
+        // Disc (XZ move)
+        try {
+          const disc = BABYLON.MeshBuilder.CreateDisc('connectGizmo:disc', { radius: 1.2, tessellation: 64 }, scene);
+          const dmat = new BABYLON.StandardMaterial('connectGizmo:disc:mat', scene);
+          dmat.diffuseColor = new BABYLON.Color3(0.15, 0.5, 0.95);
+          dmat.emissiveColor = new BABYLON.Color3(0.12, 0.42, 0.85);
+          dmat.alpha = 0.18; dmat.specularColor = new BABYLON.Color3(0,0,0);
+          dmat.disableDepthWrite = true; disc.zOffset = 8;
+          disc.material = dmat; disc.isPickable = true; disc.alwaysSelectAsActiveMesh = true; disc.renderingGroupId = 2; disc.rotation.x = Math.PI/2; disc.parent = root; parts.push(disc);
+        } catch {}
+        // Y arrow
+        try {
+          const shaft = BABYLON.MeshBuilder.CreateCylinder('connectGizmo:arrow:y:shaft', { height: 2.2, diameter: 0.06, tessellation: 16 }, scene);
+          const tip = BABYLON.MeshBuilder.CreateCylinder('connectGizmo:arrow:y:tip', { height: 0.3, diameterTop: 0, diameterBottom: 0.22, tessellation: 16 }, scene);
+          const amat = new BABYLON.StandardMaterial('connectGizmo:arrow:y:mat', scene);
+          amat.diffuseColor = new BABYLON.Color3(0.2, 0.95, 0.2); amat.emissiveColor = new BABYLON.Color3(0.18, 0.8, 0.18);
+          shaft.material = amat; tip.material = amat; shaft.isPickable = true; tip.isPickable = true; shaft.renderingGroupId=2; tip.renderingGroupId=2; try { shaft.zOffset = 8; tip.zOffset = 8; } catch {}
+          shaft.parent = root; tip.parent = root; shaft.position.y = 1.1; tip.position.y = 2.35; parts.push(shaft, tip);
+        } catch {}
+        state._connect.gizmo = { root, parts };
+      }
+      try { root.position.set(center.x, center.y, center.z); } catch {}
+      try { state._connect.gizmo.center = { x: center.x, y: center.y, z: center.z }; } catch {}
+    } catch {}
+  }
+
   // ——————————— Live intersection preview (selected vs others) ———————————
   const liveIx = new Map();
   const ixLastExact = new Map();
@@ -392,6 +444,31 @@ export function initTransformGizmos({ scene, engine, camera, state, renderDbView
       // Widget actions only in Edit mode
       if (state.mode !== 'edit') return;
       const type = pi.type;
+      // Connect gizmo press (PP)
+      if (type === BABYLON.PointerEventTypes.POINTERDOWN) {
+        const hitConn = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('connectGizmo:'));
+        if (hitConn?.hit && hitConn.pickedMesh) {
+          try { pi.event?.stopImmediatePropagation?.(); pi.event?.stopPropagation?.(); pi.event?.preventDefault?.(); pi.skipOnPointerObservable = true; } catch {}
+          const ev = pi.event || window.event;
+          const isLeft = (ev && typeof ev.button === 'number') ? (ev.button === 0) : true;
+          if (isLeft) {
+            // Initialize drag state
+            const center = (state?._connect?.gizmo?.center) ? new BABYLON.Vector3(state._connect.gizmo.center.x, state._connect.gizmo.center.y, state._connect.gizmo.center.z) : new BABYLON.Vector3(0,0,0);
+            const widget = (state._connect._drag = state._connect._drag || {});
+            widget.active = true; widget.mode = null; widget.axisStart = 0; widget.startPick = null; widget.sens = (() => { try { return Math.max(0.05, Math.min(2.0, Number(localStorage.getItem('dw:ui:ppMoveSens') || '1.0'))); } catch { return 1.0; } })() * (ev && ev.altKey ? 0.25 : 1.0);
+            if (hitConn.pickedMesh.name === 'connectGizmo:disc') {
+              widget.mode = 'plane'; widget.planeN = new BABYLON.Vector3(0,1,0); widget.planeP = new BABYLON.Vector3(0, center.y, 0);
+              widget.startPick = pickPointOnPlane(widget.planeN, widget.planeP) || center.clone();
+            } else {
+              widget.mode = 'y'; const axis = new BABYLON.Vector3(0,1,0); const view = camera.getForwardRay()?.direction || new BABYLON.Vector3(0,0,1);
+              let n = BABYLON.Vector3.Cross(axis, BABYLON.Vector3.Cross(view, axis)); if (n.lengthSquared() < 1e-4) n = BABYLON.Vector3.Cross(axis, new BABYLON.Vector3(0,1,0)); if (n.lengthSquared() < 1e-4) n = BABYLON.Vector3.Cross(axis, new BABYLON.Vector3(1,0,0)); try { n.normalize(); } catch {}
+              widget.planeN = n; widget.planeP = center.clone(); const sp = pickPointOnPlane(widget.planeN, widget.planeP) || center.clone(); widget.startPick = sp; widget.axisStart = BABYLON.Vector3.Dot(sp, axis);
+            }
+            try { const canvas = engine.getRenderingCanvas(); camera.inputs?.attached?.pointers?.detachControl(canvas); if (ev && ev.pointerId != null && canvas.setPointerCapture) canvas.setPointerCapture(ev.pointerId); } catch {}
+            return;
+          }
+        }
+      }
       // Rotation widget press
       if (type === BABYLON.PointerEventTypes.POINTERDOWN) {
         const pick = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('rotGizmo:'));
@@ -517,6 +594,31 @@ export function initTransformGizmos({ scene, engine, camera, state, renderDbView
           try { setRingsDim(); } catch {}
         }
       } else if (type === BABYLON.PointerEventTypes.POINTERMOVE) {
+        // Connect gizmo drag
+        if (state?._connect?._drag?.active) {
+          try { pi.event?.stopImmediatePropagation?.(); pi.event?.stopPropagation?.(); pi.event?.preventDefault?.(); pi.skipOnPointerObservable = true; } catch {}
+          const d = state._connect._drag;
+          const p = pickPointOnPlane(d.planeN, d.planeP); if (!p) return;
+          const sp = d.startPick || d.planeP || new BABYLON.Vector3(0,0,0);
+          let dx=0, dy=0, dz=0;
+          if (d.mode === 'plane') { const dv = p.subtract(sp); dx = dv.x * (d.sens||1); dy = 0; dz = dv.z * (d.sens||1); }
+          else { const axis = new BABYLON.Vector3(0,1,0); const sNow = BABYLON.Vector3.Dot(p, axis); dy = (sNow - (d.axisStart||0)) * (d.sens||1); }
+          try {
+            state._connect = state._connect || {}; const sel = (state._connect.sel instanceof Set) ? state._connect.sel : null; if (!sel || !sel.size) return;
+            const path = Array.isArray(state._connect.path) ? state._connect.path : [];
+            for (const name of sel) { const parts = String(name).split(':'); const i = Number(parts[2] || NaN); if (!isFinite(i) || !path[i]) continue; path[i].x += dx; path[i].y += dy; path[i].z += dz; }
+            // Update node meshes
+            const nodes = Array.isArray(state._connect.nodes) ? state._connect.nodes : [];
+            for (const n of nodes) { try { const i = n?.i; const m = n?.mesh; if (m && path[i]) m.position.set(path[i].x, path[i].y, path[i].z); } catch {} }
+            // Update line instance
+            let line = null; try { const prop = (state._connect.props||[]).find(p2 => p2 && p2.name === 'connect:proposal'); line = prop?.mesh || null; } catch {}
+            if (line) { try { const pts = path.map(p3 => new BABYLON.Vector3(p3.x, p3.y, p3.z)); BABYLON.MeshBuilder.CreateLines('connect:proposal', { points: pts, updatable: true, instance: line }, scene); } catch {} }
+            // Update gizmo position
+            try { ensureConnectGizmoFromSel(); } catch {}
+            try { scene.render(); } catch {}
+          } catch {}
+          return;
+        }
         const selNowGlobal = Array.from(state.selection || []);
         const isGroupGlobal = selNowGlobal.length > 1;
         const { space, mesh, id } = getSelectedSpaceAndMesh(); if (!isGroupGlobal && !mesh) return;
@@ -717,6 +819,10 @@ export function initTransformGizmos({ scene, engine, camera, state, renderDbView
 
   window.addEventListener('pointerup', () => {
     try {
+      if (state?._connect?._drag?.active) {
+        try { state._connect._drag.active = false; } catch {}
+        try { const canvas = engine.getRenderingCanvas(); camera.inputs?.attached?.pointers?.attachControl(canvas, true); } catch {}
+      }
       if (rotWidget.dragging) {
         rotWidget.dragging = false; rotWidget.preDrag = false;
         try { const canvas = engine.getRenderingCanvas(); camera.inputs?.attached?.pointers?.attachControl(canvas, true); } catch {}
@@ -764,5 +870,5 @@ export function initTransformGizmos({ scene, engine, camera, state, renderDbView
     } catch {}
   }, { passive: true });
 
-  return { rotWidget, moveWidget, disposeRotWidget, ensureRotWidget, disposeMoveWidget, ensureMoveWidget, pickPointOnPlane, setRingsDim, setRingActive, setGizmoHudVisible, renderGizmoHud, suppressGizmos, updateRotWidgetFromMesh, updateContactShadowPlacement, updateSelectionObbLive, updateLiveIntersectionsFor, disposeLiveIntersections, _GIZMO_DCLICK_MS };
+  return { rotWidget, moveWidget, disposeRotWidget, ensureRotWidget, disposeMoveWidget, ensureMoveWidget, pickPointOnPlane, setRingsDim, setRingActive, setGizmoHudVisible, renderGizmoHud, suppressGizmos, updateRotWidgetFromMesh, updateContactShadowPlacement, updateSelectionObbLive, updateLiveIntersectionsFor, disposeLiveIntersections, ensureConnectGizmoFromSel, disposeConnectGizmo, _GIZMO_DCLICK_MS };
 }

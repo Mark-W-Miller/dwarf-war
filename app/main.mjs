@@ -4,10 +4,10 @@ import { buildSceneFromBarrow, disposeBuilt } from './modules/barrow/builder.mjs
 import { Log } from './modules/util/log.mjs';
 import { initCamera } from './modules/view/camera.mjs';
 import { initGrids } from './modules/view/grids.mjs';
-import { renderDbView } from './modules/view/dbView.mjs';
+import { renderDbView } from './modules/view/dbTab.mjs';
 // Floating log window (replaces tab)
 import { initLogWindow } from './modules/view/logWindow.mjs';
-import { initSettingsTab } from './modules/view/settings.mjs';
+import { initSettingsTab } from './modules/view/settingsTab.mjs';
 import { initVoxelTab } from './modules/view/voxelTab.mjs';
 import { worldAabbFromSpace } from './modules/barrow/schema.mjs';
 import { initEventHandlers } from './modules/view/eventHandler.mjs';

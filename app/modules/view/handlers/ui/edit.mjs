@@ -89,7 +89,18 @@ export function initEditUiHandlers(ctx) {
     const size = { x: sx, y: sy, z: sz };
     const desiredRaw = (spaceNameEl?.value || '').trim(); const baseName = desiredRaw || suggestSpaceName(type);
     const used = new Set((state.barrow.spaces||[]).map(s => s.id)); let n = 1; let id = baseName; while (used.has(id)) { id = `${baseName}-${++n}`; }
-    const origin = ((state.barrow?.spaces||[]).length === 0) ? new BABYLON.Vector3(0,0,0) : camera.target.clone();
+    // Place new spaces at the pointer's ground-plane intersection when possible,
+    // fall back to the current camera target (previous behavior) and (0,0,0) for the first.
+    let origin;
+    if ((state.barrow?.spaces||[]).length === 0) {
+      origin = new BABYLON.Vector3(0,0,0);
+    } else {
+      try {
+        const planeY = camera?.target?.y ?? 0;
+        const p = pickPointOnPlane(new BABYLON.Vector3(0,1,0), new BABYLON.Vector3(0, planeY, 0));
+        origin = (p && isFinite(p.x) && isFinite(p.y) && isFinite(p.z)) ? p : camera.target.clone();
+      } catch { origin = camera.target.clone(); }
+    }
     const s = { id, type, res, size, origin: { x: origin.x, y: origin.y, z: origin.z }, chunks: {}, attrs: {} };
     state.barrow.spaces = state.barrow.spaces || []; state.barrow.spaces.push(s);
     Log?.log('UI', 'New space', { id: s.id, type: s.type, res: s.res, size: s.size, origin: s.origin });

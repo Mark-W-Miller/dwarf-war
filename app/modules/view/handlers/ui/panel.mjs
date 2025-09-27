@@ -1,5 +1,7 @@
 // Panel UI: resizer and collapse/expand behavior
 
+import { initLogWindow } from '../../logWindow.mjs';
+
 export function initPanelUI({ panel, collapsePanelBtn, engine, Log }) {
   if (!panel) return;
   // Resizer
@@ -47,6 +49,22 @@ export function initPanelUI({ panel, collapsePanelBtn, engine, Log }) {
   try { applyPanelCollapsed(localStorage.getItem(PANEL_STATE_KEY) === '1'); } catch {}
   collapsePanelBtn?.addEventListener('click', () => { const next = !panel.classList.contains('collapsed'); applyPanelCollapsed(next); try { localStorage.setItem(PANEL_STATE_KEY, next ? '1' : '0'); } catch {} });
 
+  // Header quick-open buttons for Log and Settings tabs
+  try {
+    const logBtn = document.getElementById('logOpen');
+    const settingsBtn = document.getElementById('settingsOpen');
+    // Initialize floating log window (once)
+    const logWin = initLogWindow({ Log });
+    const activate = (tabId) => {
+      try {
+        const btn = document.querySelector(`.tabs .tab[data-tab="${tabId}"]`);
+        if (btn) btn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        else window.dispatchEvent(new CustomEvent('dw:tabChange', { detail: { id: tabId } }));
+      } catch {}
+    };
+    logBtn?.addEventListener('click', () => { try { logWin.toggle(); } catch {} });
+    settingsBtn?.addEventListener('click', () => activate('tab-settings'));
+  } catch {}
+
   return { applyPanelCollapsed };
 }
-
