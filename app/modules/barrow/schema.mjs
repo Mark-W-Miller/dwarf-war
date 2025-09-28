@@ -38,6 +38,10 @@ export function aabbIntersects(a, b) {
 export function mergeInstructions(base, instr) {
   const out = structuredClone(base);
   if (instr.id) out.id = instr.id;
+  // Replace spaces outright when provided (import is typically a full state)
+  if (Array.isArray(instr.spaces)) {
+    try { out.spaces = instr.spaces.map((s) => (s ? structuredClone(s) : s)).filter(Boolean); } catch { out.spaces = [...instr.spaces]; }
+  }
   if (Array.isArray(instr.caverns)) {
     const byId = new Map(out.caverns.map(c => [c.id, c]));
     for (const c of instr.caverns) {
@@ -49,6 +53,9 @@ export function mergeInstructions(base, instr) {
   }
   if (Array.isArray(instr.links)) {
     out.links = out.links.concat(instr.links.filter(l => l && l.from && l.to));
+  }
+  if (instr.meta && typeof instr.meta === 'object') {
+    out.meta = { ...(out.meta || {}), ...structuredClone(instr.meta) };
   }
   out.meta.updatedAt = Date.now();
   return out;

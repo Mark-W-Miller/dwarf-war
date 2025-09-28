@@ -249,6 +249,13 @@ export function initDbUiHandlers(ctx) {
     const file = e.target.files?.[0]; if (!file) return;
     const text = await file.text();
     try {
+      // Reset transient UI state to avoid stale references during rebuild
+      try { disposeMoveWidget(); } catch {}
+      try { disposeRotWidget(); } catch {}
+      try { state.selection.clear(); } catch {}
+      try { rebuildHalos(); } catch {}
+      try { window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: [] } })); } catch {}
+
       let data = JSON.parse(text);
       try { data = inflateAfterLoad(data); } catch {}
       try { disposeBuilt(state.built); } catch {}
@@ -259,6 +266,7 @@ export function initDbUiHandlers(ctx) {
       try { renderDbView(state.barrow); } catch {}
       try { rebuildScene?.(); } catch {}
       try { updateHud?.(); } catch {}
+      try { camApi?.fitViewSmart?.(state.barrow); } catch {}
       try { Log.log('UI', 'Import barrow', { size: text.length }); } catch {}
     } catch (err) { console.error('Import failed', err); }
     if (importFile) importFile.value = '';
