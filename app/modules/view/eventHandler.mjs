@@ -2,11 +2,11 @@ import { saveBarrow, snapshot } from '../barrow/store.mjs';
 import { VoxelType, decompressVox } from '../voxels/voxelize.mjs';
 import { initVoxelHandlers } from './handlers/voxel.mjs';
 import { initScryApi } from './handlers/scry.mjs';
-import { Log } from '../util/log.mjs';
+import { Log, logErr, sLog, mLog, inputLog, modsOf, comboName, dPick } from '../util/log.mjs';
 import { renderDbView } from './dbTab.mjs';
 import { initErrorBar } from './errorBar.mjs';
 import { initDbUiHandlers } from './handlers/ui/db.mjs';
-import { initGizmoHandlers, initTransformGizmos } from './handlers/gizmo.mjs';
+import { initGizmoSystem } from './handlers/gizmo.mjs';
 import { initCavernApi } from './handlers/cavern.mjs';
 import { initViewManipulations } from './handlers/view.mjs';
 import { initPanelUI } from './handlers/ui/panel.mjs';
@@ -20,15 +20,6 @@ import { initEditUiHandlers } from './handlers/ui/edit.mjs';
 export function initEventHandlers({ scene, engine, camApi, camera, state, helpers }) {
   const { setMode, setRunning, rebuildScene, rebuildHalos, moveSelection, scheduleGridUpdate, applyViewToggles, updateHud } = helpers;
 
-  function logErr(ctx, e) {
-    try { Log.log('ERROR', ctx, { error: String(e && e.message ? e.message : e), stack: e && e.stack ? String(e.stack) : undefined }); } catch {}
-  }
-  function sLog(ev, data = {}) {
-    try { Log.log('SELECT', ev, data); } catch {}
-  }
-  function mLog(ev, data = {}) {
-    try { Log.log('MOVE', ev, data); } catch {}
-  }
   // Gizmo integration placeholders (populated by handlers/gizmo.mjs)
   let _gizmosSuppressed = false;
   let _gizmo = null;
@@ -51,26 +42,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
   const DOUBLE_CLICK_MS = Number(localStorage.getItem('dw:ui:doubleClickMs') || '500') || 500;
   // ——————————— Error banner ———————————
   try { initErrorBar(Log); } catch {}
-  // Unified input logging helpers
-  function inputLog(kind, msg, data = {}) { try { Log.log('INPUT', `${kind}:${msg}`, data); } catch {} }
-  function modsOf(ev) {
-    return {
-      cmd: !!(ev && ev.metaKey),
-      ctrl: !!(ev && ev.ctrlKey),
-      shift: !!(ev && ev.shiftKey),
-      alt: !!(ev && ev.altKey)
-    };
-  }
-  function comboName(button, mods) {
-    const parts = [];
-    if (mods?.cmd) parts.push('cmd');
-    if (mods?.ctrl) parts.push('ctrl');
-    if (mods?.shift) parts.push('shift');
-    if (mods?.alt) parts.push('alt');
-    const btn = (button === 2) ? 'RC' : (button === 1) ? 'MC' : 'LC';
-    parts.push(btn);
-    return parts.join('-');
-  }
+  // Unified input logging helpers are provided by util/log.mjs
 
   // ——————————— Camera target helpers ———————————
   function getSelectionCenter() {
@@ -168,8 +140,7 @@ export function initEventHandlers({ scene, engine, camApi, camera, state, helper
   // Edit tab view toggles, proportional size, size fields, and controls are handled in handlers/ui/edit.mjs
 
   // ——————————— Debug helpers ———————————
-  function pickDebugOn() { try { return localStorage.getItem('dw:debug:picking') === '1'; } catch (e) { logErr('EH:pickDebugOn', e); return false; } }
-  function dPick(event, data) { if (!pickDebugOn()) return; try { Log.log('PICK', event, data); } catch (e) { logErr('EH:dPick', e); } }
+  // dPick provided by util/log.mjs (respects Pick Debug setting)
 
   // Screen-space projection helper for robust angle computation
   function projectToScreen(v) {
@@ -427,34 +398,24 @@ function pickPointOnPlane(normal, point) {
   // ——————————— View (camera) manipulations ———————————
   try { initViewManipulations({ scene, engine, camera, state, helpers: { getSelectionCenter, getVoxelPickWorldCenter } }); } catch (e) { logErr('EH:view:init', e); }
 
-  // ——————————— Gizmo pre-capture ———————————
-  try { initGizmoHandlers({ scene, engine, camera, state }); } catch (e) { logErr('EH:gizmo:init', e); }
-  // Bind transform gizmo API (rotate/move) from module into local names
+  // ——————————— Gizmo system (pre-capture + transform) ———————————
   try {
-    const giz = initTransformGizmos({
+    const giz = initGizmoSystem({
       scene, engine, camera, state,
       renderDbView,
       saveBarrow, snapshot, scheduleGridUpdate, rebuildScene,
       helpers: { updateContactShadowPlacement, updateSelectionObbLive, updateLiveIntersectionsFor }
     });
-    // Bind state and core APIs
     _gizmo = giz;
     rotWidget = giz.rotWidget; moveWidget = giz.moveWidget;
     disposeRotWidget = giz.disposeRotWidget; ensureRotWidget = giz.ensureRotWidget;
     disposeMoveWidget = giz.disposeMoveWidget; ensureMoveWidget = giz.ensureMoveWidget;
     pickPointOnPlane = giz.pickPointOnPlane; setRingsDim = giz.setRingsDim; setRingActive = giz.setRingActive;
-    ensureConnectGizmoFromSel = giz.ensureConnectGizmoFromSel;
-    disposeConnectGizmo = giz.disposeConnectGizmo;
+    ensureConnectGizmoFromSel = giz.ensureConnectGizmoFromSel; disposeConnectGizmo = giz.disposeConnectGizmo;
     updateRotWidgetFromMesh = giz.updateRotWidgetFromMesh; _GIZMO_DCLICK_MS = giz._GIZMO_DCLICK_MS;
-    // Wrap HUD + suppression to keep local suppressed flag in sync
-    const __setGizmoHudVisible = giz.setGizmoHudVisible;
-    const __renderGizmoHud = giz.renderGizmoHud;
-    const __suppressGizmos = giz.suppressGizmos;
-    setGizmoHudVisible = (v) => { try { __setGizmoHudVisible(v); } catch {} };
-    renderGizmoHud = (opts) => { try { __renderGizmoHud(opts||{}); } catch {} };
-    suppressGizmos = (on) => { _gizmosSuppressed = !!on; try { __suppressGizmos(on); } catch {} };
-    try { window.addEventListener('dw:gizmos:disable', () => suppressGizmos(true)); window.addEventListener('dw:gizmos:enable', () => suppressGizmos(false)); } catch {}
-  } catch (e) { logErr('EH:gizmo:bind', e); }
+    setGizmoHudVisible = giz.setGizmoHudVisible; renderGizmoHud = giz.renderGizmoHud;
+    suppressGizmos = (on) => { _gizmosSuppressed = !!on; try { giz.suppressGizmos(on); } catch {} };
+  } catch (e) { logErr('EH:gizmo:init', e); }
 
   // Initialize Cavern API now that gizmo callbacks are bound
   try {

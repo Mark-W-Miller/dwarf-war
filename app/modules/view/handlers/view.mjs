@@ -3,28 +3,16 @@
 // - Prevents camera rotation when interacting with gizmos by detaching camera input
 // - Adds inertial guards while rotating or when a gizmo has claimed the pointer
 
-import { Log } from '../../util/log.mjs';
+import { Log, modsOf, comboName } from '../../util/log.mjs';
 
 export function initViewManipulations({ scene, engine, camera, state, helpers }) {
   const canvas = engine.getRenderingCanvas();
   try { canvas.addEventListener('contextmenu', (e) => e.preventDefault()); } catch {}
   let _rcPanGuard = null; // { saved: number }
   let _rcDecision = null; // 'rotate' | 'pan' | null
-  let _claimed = { by: null, ptrId: null }; // 'gizmo' | null
+  let _claimed = { by: null, ptrId: null }; // 'gizmo' | 'view' | null
 
-  function modsOf(ev) {
-    return { cmd: !!ev?.metaKey, ctrl: !!ev?.ctrlKey, shift: !!ev?.shiftKey, alt: !!ev?.altKey };
-  }
-  function comboName(button, mods) {
-    const parts = [];
-    if (mods?.cmd) parts.push('cmd');
-    if (mods?.ctrl) parts.push('ctrl');
-    if (mods?.shift) parts.push('shift');
-    if (mods?.alt) parts.push('alt');
-    const btn = (button === 2) ? 'RC' : (button === 1) ? 'MC' : 'LC';
-    parts.push(btn);
-    return parts.join('-');
-  }
+  // modsOf/comboName centralized in util/log.mjs
   function isGizmoHitAt(e) {
     try {
       const rect = canvas.getBoundingClientRect();
@@ -80,6 +68,9 @@ export function initViewManipulations({ scene, engine, camera, state, helpers })
       // Guard against panning while rotating
       if (decision === 'rotate') {
         try { _rcPanGuard = { saved: camera.panningSensibility }; camera.panningSensibility = 1e9; } catch {}
+        // Capture pointer to ensure consistent move events during orbit
+        try { if (e.pointerId != null && canvas.setPointerCapture) { canvas.setPointerCapture(e.pointerId); _claimed = { by: 'view', ptrId: e.pointerId }; } } catch {}
+        try { camera.inputs?.attached?.pointers?.attachControl(canvas, true); } catch {}
       } else if (_rcPanGuard && typeof _rcPanGuard.saved === 'number') {
         try { camera.panningSensibility = _rcPanGuard.saved; } catch {}
         _rcPanGuard = null;
@@ -102,12 +93,10 @@ export function initViewManipulations({ scene, engine, camera, state, helpers })
 
   function onPointerUpCapture() {
     try { camera.panningMouseButton = 1; } catch {}
-    if (_claimed.by === 'gizmo') {
-      try {
-        if (_claimed.ptrId != null && canvas.releasePointerCapture) canvas.releasePointerCapture(_claimed.ptrId);
-        camera.inputs?.attached?.pointers?.attachControl(canvas, true);
-      } catch {}
-    }
+    try {
+      if (_claimed.ptrId != null && canvas.releasePointerCapture) canvas.releasePointerCapture(_claimed.ptrId);
+      camera.inputs?.attached?.pointers?.attachControl(canvas, true);
+    } catch {}
     _claimed = { by: null, ptrId: null };
     if (_rcPanGuard && typeof _rcPanGuard.saved === 'number') {
       try { camera.panningSensibility = _rcPanGuard.saved; } catch {}

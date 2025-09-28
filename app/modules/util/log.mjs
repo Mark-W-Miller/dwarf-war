@@ -70,3 +70,47 @@ export const Log = (() => {
     getClasses() { return new Set([...classesAll, ...classesRuntime]); }
   };
 })();
+
+// ————— Logging helpers (centralized) —————
+// Error logging with normalized payload
+export function logErr(ctx, e) {
+  try {
+    Log.log('ERROR', String(ctx || ''), {
+      error: String(e && e.message ? e.message : e),
+      stack: e && e.stack ? String(e.stack) : undefined
+    });
+  } catch {}
+}
+
+// Category shorthands
+export function sLog(event, data = {}) { try { Log.log('SELECT', event, data); } catch {} }
+export function mLog(event, data = {}) { try { Log.log('MOVE', event, data); } catch {} }
+export function inputLog(kind, msg, data = {}) { try { Log.log('INPUT', `${kind}:${msg}`, data); } catch {} }
+
+// Input modifier/combination helpers (shared by handlers)
+export function modsOf(ev) {
+  return {
+    cmd: !!(ev && ev.metaKey),
+    ctrl: !!(ev && ev.ctrlKey),
+    shift: !!(ev && ev.shiftKey),
+    alt: !!(ev && ev.altKey)
+  };
+}
+
+export function comboName(button, mods) {
+  const parts = [];
+  if (mods?.cmd) parts.push('cmd');
+  if (mods?.ctrl) parts.push('ctrl');
+  if (mods?.shift) parts.push('shift');
+  if (mods?.alt) parts.push('alt');
+  const btn = (button === 2) ? 'RC' : (button === 1) ? 'MC' : 'LC';
+  parts.push(btn);
+  return parts.join('-');
+}
+
+// Pick debug toggle and helpers
+export function pickDebugOn() { try { return localStorage.getItem('dw:debug:picking') === '1'; } catch { return false; } }
+// Gated pick logger (respects Pick Debug setting)
+export function dPick(event, data = {}) { if (!pickDebugOn()) return; try { Log.log('PICK', event, data); } catch {} }
+// Ungated pick logger (always logs)
+export function pickLog(event, data = {}) { try { Log.log('PICK', event, data); } catch {} }

@@ -231,7 +231,19 @@ export function initPointerSelection(opts) {
   // Main pointerdown selection + double-click
   try {
     scene.onPointerObservable.add((pi) => {
-      try { trace('obs', { type: pi.type, mode: state?.mode || null }); } catch {}
+      // Only trace click-observer entries for actual click-related events,
+      // not for mouseover/move spam.
+      try {
+        const t = pi.type;
+        if (
+          t === BABYLON.PointerEventTypes.POINTERDOWN ||
+          t === BABYLON.PointerEventTypes.POINTERPICK ||
+          t === BABYLON.PointerEventTypes.POINTERTAP ||
+          t === BABYLON.PointerEventTypes.POINTERDOUBLETAP
+        ) {
+          trace('obs', { type: t, mode: state?.mode || null });
+        }
+      } catch {}
       if (isGizmosSuppressed()) {
         try { const rw = getRotWidget(); if (rw) { rw.dragging = false; rw.preDrag = false; rw.axis = null; } } catch {}
         try { const mw = getMoveWidget(); if (mw) { mw.dragging = false; mw.preDrag = false; mw.axis = null; } } catch {}
@@ -252,8 +264,13 @@ export function initPointerSelection(opts) {
       const isLeft = (ev && typeof ev.button === 'number') ? (ev.button === 0) : true;
       const isCmd = !!(ev && ev.metaKey);
       const isShift = !!(ev && ev.shiftKey);
+      const isCtrl = !!(ev && ev.ctrlKey);
+      // On macOS, Ctrl+LeftClick emulates RightClick. Treat that as NOT a left click
+      // for selection so it doesn't trigger selection paths.
+      const isEmulatedRC = (!!isCtrl && !isCmd && isLeft);
+      const isLeftMeaningful = isLeft && !isEmulatedRC;
       // Priority: gizmo (handled elsewhere) → PP node → voxel → empty
-      if (!isCmd && isLeft) {
+      if (!isCmd && isLeftMeaningful) {
         try {
           const ppPick = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('connect:node:'));
           if (ppPick?.hit && ppPick.pickedMesh) {
@@ -284,18 +301,31 @@ export function initPointerSelection(opts) {
         (m) => {
           if (!m || typeof m.name !== 'string') return false;
           const n = m.name;
-          if (n.startsWith('space:')) {
-            // Only pick the base space mesh (no suffix like :label or :wall)
-            const rest = n.slice('space:'.length);
-            return !rest.includes(':');
-          }
-          return n.startsWith('cavern:');
+          // Allow any mesh that belongs to a space (including label/voxel walls),
+          // so clicks on visible parts still hit. Cavern meshes also count.
+          return n.startsWith('space:') || n.startsWith('cavern:');
         }
       );
       dPick('primaryPick', { hit: !!pick?.hit, name: pick?.pickedMesh?.name || null, dist: pick?.distance ?? null });
       sLog('edit:primaryPick', { hit: !!pick?.hit, name: pick?.pickedMesh?.name || null, dist: pick?.distance ?? null });
       try { trace('primaryPick', { hit: !!pick?.hit, name: pick?.pickedMesh?.name || null, dist: pick?.distance ?? null }); } catch {}
-      // Fallback: robust ray/mesh intersection if Babylon pick misses
+      // For Cmd+Left, honor only the direct primary pick (no fallback) to avoid
+      // selecting a different space than the one under the cursor.
+      if (isCmd && isLeftMeaningful) {
+        if (pick?.hit && pick.pickedMesh && String(pick.pickedMesh.name||'').startsWith('space:')) {
+          const pickedName = String(pick.pickedMesh.name||'');
+          let _id = pickedName.slice('space:'.length).split(':')[0];
+          state.selection.clear();
+          state.selection.add(_id);
+          try { rebuildHalos(); ensureRotWidget(); ensureMoveWidget(); } catch {}
+          try { window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: Array.from(state.selection) } })); } catch {}
+          try { disposeConnectGizmo(); } catch {}
+          try { trace('handled:space:single', { id: _id, selection: Array.from(state.selection) }); } catch {}
+        }
+        return;
+      }
+
+      // Fallback: robust ray/mesh intersection if Babylon pick misses (non-Cmd paths only)
       if (!pick?.hit || !pick.pickedMesh) {
         try {
           const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), camera);
@@ -321,7 +351,7 @@ export function initPointerSelection(opts) {
       }
       if (!pick?.hit || !pick.pickedMesh) {
         // No mesh hit
-        if (isLeft) {
+        if (isLeftMeaningful) {
           // LC on empty: clear selection
           try { state.selection.clear(); } catch {}
           try { rebuildHalos(); } catch {}
@@ -347,20 +377,7 @@ export function initPointerSelection(opts) {
         id = pickedName.slice('cavern:'.length);
         name = 'cavern:' + id;
       }
-      // Cmd-Click selection (ignore gizmo/PP; operate on spaces)
-      if (isCmd && isLeft) {
-        if (name.startsWith('space:')) {
-          if (isShift) {
-            if (state.selection.has(id)) state.selection.delete(id); else state.selection.add(id);
-          } else {
-            state.selection.clear(); state.selection.add(id);
-          }
-          try { rebuildHalos(); ensureRotWidget(); ensureMoveWidget(); } catch {}
-          try { window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: Array.from(state.selection) } })); } catch {}
-          try { disposeConnectGizmo(); } catch {}
-        }
-        return;
-      }
+      // Cmd-Click selection handled above on primary pick only; skip here.
       dPick('selectId', { id, name });
       // Only compute voxel pick for plain LC (Cmd ignored per spec)
       sLog('edit:selectId', { id, name });
@@ -372,9 +389,14 @@ export function initPointerSelection(opts) {
           dPick('doubleClick', { name, id });
           sLog('edit:doubleClick', { name, id });
           try { trace('doubleClick', { name, id }); } catch {}
-          // Double-click enters Cavern Mode for spaces
+          // Double-click enters Cavern Mode only for voxelized spaces; otherwise center.
           if (name.startsWith('space:')) {
-            try { enterCavernModeForSpace(id); } catch {}
+            let sp = null; try { sp = (state?.barrow?.spaces || []).find(x => x && x.id === id) || null; } catch {}
+            if (sp && sp.vox && sp.vox.size) {
+              try { enterCavernModeForSpace(id); } catch {}
+            } else {
+              try { camApi.centerOnMesh(pick.pickedMesh); } catch (err) { Log?.log?.('ERROR', 'Center on item failed', { error: String(err) }); }
+            }
           } else {
             try { camApi.centerOnMesh(pick.pickedMesh); } catch (err) { Log?.log?.('ERROR', 'Center on item failed', { error: String(err) }); }
           }
@@ -387,15 +409,18 @@ export function initPointerSelection(opts) {
         lastPickTime = now;
         try { trace('dbl:arm', { name, lastPickTime }); } catch {}
       }
-      // If voxel hit exists on plain left click (no Cmd), handle voxel selection (do not select space)
-      if (isLeft && !isCmd) {
+      // If voxel hit exists on plain left click (no Cmd), handle voxel selection
+      // Restrict voxel picking to the picked space only to avoid cross-selecting
+      // another voxelized space when clicking a non-voxelized one.
+      if (isLeftMeaningful && !isCmd) {
         let vBest = null;
         try {
-          // Find nearest voxel hit among all spaces
-          for (const sp of (state?.barrow?.spaces || [])) {
-            if (!sp || !sp.vox || !sp.vox.size) continue;
-            const hit = voxelHitAtPointerForSpace(sp);
-            if (hit && isFinite(hit.t) && (vBest == null || hit.t < vBest.t)) vBest = { ...hit, id: sp.id };
+          if (name.startsWith('space:')) {
+            const s = (state?.barrow?.spaces || []).find(x => x && x.id === id);
+            if (s && s.vox && s.vox.size) {
+              const hit = voxelHitAtPointerForSpace(s);
+              if (hit && isFinite(hit.t)) vBest = { ...hit, id: s.id };
+            }
           }
         } catch {}
         if (vBest) {
@@ -440,7 +465,7 @@ export function initPointerSelection(opts) {
         else if (!isCmd) {
           // Plain left-click: optional space selection (compat)
           const plainSelectOn = (() => { try { return (localStorage.getItem('dw:ui:spaceSelectPlain') ?? '1') === '1'; } catch { return true; } })();
-          if (plainSelectOn && name.startsWith('space:')) {
+          if (isLeftMeaningful && plainSelectOn && name.startsWith('space:')) {
             state.selection.clear();
             state.selection.add(id);
             const selNow = Array.from(state.selection);
@@ -454,8 +479,11 @@ export function initPointerSelection(opts) {
             try { trace('handled:space:plain', { id }); } catch {}
           }
           return;
-        } else {
-          // Cmd held: prefer selecting the nearest voxel-backed space under the pointer if available
+      } else {
+        // Cmd held: if we already picked a space by name above, honor that exact
+        // pick. Only fall back to nearest voxel-backed space when the pick is not
+        // a space (e.g., label disabled or other mesh).
+        if (!name.startsWith('space:')) {
           try {
             let best = { t: Infinity, id: null };
             for (const sp of (state?.barrow?.spaces || [])) {
@@ -465,6 +493,7 @@ export function initPointerSelection(opts) {
             }
             if (best.id) { id = best.id; name = 'space:' + id; }
           } catch {}
+        }
 
           if (isShift) {
             // Shift+Cmd: multi-select (add-only)

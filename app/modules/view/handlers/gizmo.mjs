@@ -1,5 +1,5 @@
 // Gizmo input handling (priority/capture to prevent camera rotation) extracted from eventHandler.mjs
-import { Log } from '../../util/log.mjs';
+import { Log, pickLog, mLog } from '../../util/log.mjs';
 
 // Pre-pointer capture for gizmo priority (connect/move/rot)
 export function initGizmoHandlers({ scene, engine, camera, state }) {
@@ -183,8 +183,6 @@ export function initTransformGizmos({ scene, engine, camera, state, renderDbView
   let _lastDbRefresh = 0;
   let _lastGizmoClick = 0;
   const dragThreshold = 6; // pixels
-  function dPick(event, data) { try { Log.log('PICK', event, data); } catch {} }
-  function mLog(event, data) { try { Log.log('MOVE', event, data); } catch {} }
   function getSelectedSpaceAndMesh() {
     const sel = Array.from(state.selection || []);
     if (sel.length !== 1) return { space: null, mesh: null, id: null };
@@ -476,12 +474,14 @@ export function initTransformGizmos({ scene, engine, camera, state, renderDbView
           const nm = String(pick.pickedMesh.name || '');
           const mY = rotWidget.meshes?.y, mX = rotWidget.meshes?.x, mZ = rotWidget.meshes?.z;
           let axis = null;
-          if (nm.startsWith('rotGizmo:Y:') && pick.pickedMesh === mY) axis = 'y';
-          else if (nm.startsWith('rotGizmo:X:') && pick.pickedMesh === mX) axis = 'x';
-          else if (nm.startsWith('rotGizmo:Z:') && pick.pickedMesh === mZ) axis = 'z';
+          // Determine axis by name prefix; do not require exact mesh equality to
+          // tolerate sub-mesh/instance picks.
+          if (nm.startsWith('rotGizmo:Y:')) axis = 'y';
+          else if (nm.startsWith('rotGizmo:X:')) axis = 'x';
+          else if (nm.startsWith('rotGizmo:Z:')) axis = 'z';
           if (axis) {
             try { pi.event?.stopImmediatePropagation?.(); pi.event?.stopPropagation?.(); pi.event?.preventDefault?.(); pi.skipOnPointerObservable = true; } catch {}
-            rotWidget.axis = axis; rotWidget.preDrag = false; rotWidget.downX = scene.pointerX; rotWidget.downY = scene.pointerY; dPick('preDrag:rot', { axis, x: rotWidget.downX, y: rotWidget.downY });
+            rotWidget.axis = axis; rotWidget.preDrag = false; rotWidget.downX = scene.pointerX; rotWidget.downY = scene.pointerY; pickLog('preDrag:rot', { axis, x: rotWidget.downX, y: rotWidget.downY });
             try { setRingActive(axis); } catch {}
             try {
               const ax = rotWidget.axis || 'y';
@@ -541,7 +541,7 @@ export function initTransformGizmos({ scene, engine, camera, state, renderDbView
           const _nm = String(pick2.pickedMesh.name||'');
           try { const m = _nm.match(/^moveGizmo:(y):/i); moveWidget.axis = m ? m[1].toLowerCase() : null; } catch { moveWidget.axis = null; }
           moveWidget.mode = _nm.startsWith('moveGizmo:disc:') ? 'plane' : 'axis';
-          dPick('preDrag:move', { x: moveWidget.downX, y: moveWidget.downY, mode: moveWidget.mode, axis: moveWidget.axis });
+          pickLog('preDrag:move', { x: moveWidget.downX, y: moveWidget.downY, mode: moveWidget.mode, axis: moveWidget.axis });
           mLog('press', { picked: _nm, mode: moveWidget.mode, axis: moveWidget.axis });
         }
       } else if (type === BABYLON.PointerEventTypes.POINTERUP) {
@@ -628,9 +628,9 @@ export function initTransformGizmos({ scene, engine, camera, state, renderDbView
             let hAxis = null;
             if (hp?.hit && hp.pickedMesh) {
               const n = String(hp.pickedMesh.name || '');
-              if (n.startsWith('rotGizmo:Y:') && rotWidget.meshes?.y && hp.pickedMesh === rotWidget.meshes.y) hAxis = 'y';
-              else if (n.startsWith('rotGizmo:X:') && rotWidget.meshes?.x && hp.pickedMesh === rotWidget.meshes.x) hAxis = 'x';
-              else if (n.startsWith('rotGizmo:Z:') && rotWidget.meshes?.z && hp.pickedMesh === rotWidget.meshes.z) hAxis = 'z';
+              if (n.startsWith('rotGizmo:Y:')) hAxis = 'y';
+              else if (n.startsWith('rotGizmo:X:')) hAxis = 'x';
+              else if (n.startsWith('rotGizmo:Z:')) hAxis = 'z';
             }
             if (hAxis) { if (rotWidget.activeAxis !== hAxis) { try { setRingActive(hAxis); } catch {} } }
             else { if (rotWidget.activeAxis) { try { setRingsDim(); } catch {} } }
@@ -653,7 +653,7 @@ export function initTransformGizmos({ scene, engine, camera, state, renderDbView
             let refLocal = p0Local.subtract(axisLocal.scale(BABYLON.Vector3.Dot(p0Local, axisLocal))); if (refLocal.lengthSquared() < 1e-6) refLocal = new BABYLON.Vector3(1,0,0); else refLocal.normalize();
             rotWidget.refLocal = refLocal; rotWidget.dragging = true; rotWidget.preDrag = false;
             try { const canvas = engine.getRenderingCanvas(); camera.inputs?.attached?.pointers?.detachControl(canvas); Log.log('GIZMO', 'Drag start', { id: rotWidget.spaceId, axis: ax }); } catch {}
-            dPick('dragStart:rot', {});
+            pickLog('dragStart:rot', {});
             try { for (const x of state?.built?.intersections || []) { try { state.hl?.removeMesh(x.mesh); } catch {}; x.mesh?.setEnabled(false); } } catch {}
             try { if (space) { if (!space.rotation || typeof space.rotation !== 'object') space.rotation = { x: 0, y: 0, z: 0 }; const e = mesh.rotationQuaternion?.toEulerAngles ? mesh.rotationQuaternion.toEulerAngles() : new BABYLON.Vector3(mesh.rotation.x||0, mesh.rotation.y||0, mesh.rotation.z||0); space.rotation.x = e.x; space.rotation.y = e.y; space.rotation.z = e.z; space.rotY = e.y; renderDbView?.(state.barrow); } } catch {}
           }
@@ -765,7 +765,7 @@ export function initTransformGizmos({ scene, engine, camera, state, renderDbView
               moveWidget.startPoint = p0.clone(); moveWidget.startCenter = center.clone(); moveWidget.planeNormal = n.clone(); moveWidget.dragging = true; moveWidget.preDrag = false;
               try { const canvas = engine.getRenderingCanvas(); camera.inputs?.attached?.pointers?.detachControl(canvas); const pe = pi.event; if (pe && pe.pointerId != null && canvas.setPointerCapture) canvas.setPointerCapture(pe.pointerId); Log.log('GIZMO', isPlane ? 'Plane Move start' : 'Move start', { id: moveWidget.spaceId, mode: moveWidget.mode, axis: moveWidget.axis, start: center }); } catch {}
             }
-            dPick('dragStart:move', {});
+            pickLog('dragStart:move', {});
             try { for (const x of state?.built?.intersections || []) { try { state.hl?.removeMesh(x.mesh); } catch {}; x.mesh?.setEnabled(false); } } catch {}
           }
         }
@@ -871,4 +871,41 @@ export function initTransformGizmos({ scene, engine, camera, state, renderDbView
   }, { passive: true });
 
   return { rotWidget, moveWidget, disposeRotWidget, ensureRotWidget, disposeMoveWidget, ensureMoveWidget, pickPointOnPlane, setRingsDim, setRingActive, setGizmoHudVisible, renderGizmoHud, suppressGizmos, updateRotWidgetFromMesh, updateContactShadowPlacement, updateSelectionObbLive, updateLiveIntersectionsFor, disposeLiveIntersections, ensureConnectGizmoFromSel, disposeConnectGizmo, _GIZMO_DCLICK_MS };
+}
+
+// High-level gizmo system initializer: pre-capture + transform gizmos + wrappers.
+export function initGizmoSystem({ scene, engine, camera, state, renderDbView, saveBarrow, snapshot, scheduleGridUpdate, rebuildScene, helpers = {} }) {
+  // Initialize pre-capture so gizmos claim the pointer before view rotates
+  try { initGizmoHandlers({ scene, engine, camera, state }); } catch {}
+  // Initialize transform gizmos and expose a unified API
+  const giz = initTransformGizmos({ scene, engine, camera, state, renderDbView, saveBarrow, snapshot, scheduleGridUpdate, rebuildScene, helpers });
+  // Local suppression wrapper keeps internal state in sync
+  let _suppressed = false;
+  function suppressGizmos(on) { _suppressed = !!on; try { giz.suppressGizmos(on); } catch {} }
+  try {
+    window.addEventListener('dw:gizmos:disable', () => suppressGizmos(true));
+    window.addEventListener('dw:gizmos:enable', () => suppressGizmos(false));
+  } catch {}
+  return {
+    rotWidget: giz.rotWidget,
+    moveWidget: giz.moveWidget,
+    disposeRotWidget: giz.disposeRotWidget,
+    ensureRotWidget: giz.ensureRotWidget,
+    disposeMoveWidget: giz.disposeMoveWidget,
+    ensureMoveWidget: giz.ensureMoveWidget,
+    pickPointOnPlane: giz.pickPointOnPlane,
+    setRingsDim: giz.setRingsDim,
+    setRingActive: giz.setRingActive,
+    setGizmoHudVisible: giz.setGizmoHudVisible,
+    renderGizmoHud: giz.renderGizmoHud,
+    suppressGizmos,
+    updateRotWidgetFromMesh: giz.updateRotWidgetFromMesh,
+    updateContactShadowPlacement: giz.updateContactShadowPlacement,
+    updateSelectionObbLive: giz.updateSelectionObbLive,
+    updateLiveIntersectionsFor: giz.updateLiveIntersectionsFor,
+    disposeLiveIntersections: giz.disposeLiveIntersections,
+    ensureConnectGizmoFromSel: giz.ensureConnectGizmoFromSel,
+    disposeConnectGizmo: giz.disposeConnectGizmo,
+    _GIZMO_DCLICK_MS: giz._GIZMO_DCLICK_MS,
+  };
 }

@@ -89,17 +89,39 @@ export function initEditUiHandlers(ctx) {
     const size = { x: sx, y: sy, z: sz };
     const desiredRaw = (spaceNameEl?.value || '').trim(); const baseName = desiredRaw || suggestSpaceName(type);
     const used = new Set((state.barrow.spaces||[]).map(s => s.id)); let n = 1; let id = baseName; while (used.has(id)) { id = `${baseName}-${++n}`; }
-    // Place new spaces at the pointer's ground-plane intersection when possible,
-    // fall back to the current camera target (previous behavior) and (0,0,0) for the first.
+    // Place near the pointer on the horizontal plane through the current camera
+    // target, but clamp to a reasonable distance so shallow angles don't send
+    // the intersection too far away. Snap to voxel grid for tidy alignment.
     let origin;
-    if ((state.barrow?.spaces||[]).length === 0) {
+    const isFirst = ((state.barrow?.spaces||[]).length === 0);
+    if (isFirst) {
       origin = new BABYLON.Vector3(0,0,0);
     } else {
+      const target = camera.target.clone();
+      const planeY = target.y;
+      let p = null;
+      try { p = pickPointOnPlane(new BABYLON.Vector3(0,1,0), new BABYLON.Vector3(0, planeY, 0)); } catch {}
+      if (p && isFinite(p.x) && isFinite(p.y) && isFinite(p.z)) {
+        // Clamp to within a fraction of the camera radius from the target
+        try {
+          const maxDist = Math.max(5, (camera.radius || 50) * 0.6);
+          const dx = p.x - target.x, dy = p.y - target.y, dz = p.z - target.z;
+          const len = Math.hypot(dx, dy, dz);
+          if (len > maxDist) {
+            const k = maxDist / len; p = new BABYLON.Vector3(target.x + dx*k, target.y + dy*k, target.z + dz*k);
+          }
+        } catch {}
+        origin = p;
+      } else {
+        origin = target;
+      }
+      // Snap to voxel grid
       try {
-        const planeY = camera?.target?.y ?? 0;
-        const p = pickPointOnPlane(new BABYLON.Vector3(0,1,0), new BABYLON.Vector3(0, planeY, 0));
-        origin = (p && isFinite(p.x) && isFinite(p.y) && isFinite(p.z)) ? p : camera.target.clone();
-      } catch { origin = camera.target.clone(); }
+        const snap = (v, r) => { r = Math.max(1e-6, Number(r)||1); return Math.round(v / r) * r; };
+        origin.x = snap(origin.x, res);
+        origin.y = snap(origin.y, res);
+        origin.z = snap(origin.z, res);
+      } catch {}
     }
     const s = { id, type, res, size, origin: { x: origin.x, y: origin.y, z: origin.z }, chunks: {}, attrs: {} };
     state.barrow.spaces = state.barrow.spaces || []; state.barrow.spaces.push(s);
