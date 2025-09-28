@@ -1,0 +1,17 @@
+{
+  "id": "Test: WR Basic",
+  "caverns": [],
+  "links": [],
+  "spaces": [
+    { "id": "A", "type": "Room", "res": 1, "size": { "x": 10, "y": 10, "z": 10 }, "origin": { "x": -20, "y": 0, "z": 0 }, "chunks": {}, "attrs": {}, "rotation": { "x": 0, "y": 0, "z": 0 } },
+    { "id": "B", "type": "Room", "res": 1, "size": { "x": 10, "y": 10, "z": 10 }, "origin": { "x": 0, "y": 0, "z": 0 },    "chunks": {}, "attrs": {}, "rotation": { "x": 0, "y": 0, "z": 0 } },
+    { "id": "C", "type": "Room", "res": 1, "size": { "x": 10, "y": 10, "z": 10 }, "origin": { "x": 20, "y": 0, "z": 0 },  "chunks": {}, "attrs": {}, "rotation": { "x": 0, "y": 0, "z": 0 } }
+  ],
+  "meta": {
+    "version": 1,
+    "units": "yard",
+    "voxelSize": 1,
+    "selected": ["B"]
+  }
+}
+

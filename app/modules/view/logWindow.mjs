@@ -4,11 +4,34 @@ export function initLogWindow({ Log }) {
   if (root && root._inited) {
     const api = root._api; return api || { open: () => { root.style.display='block'; }, close: () => { root.style.display='none'; }, toggle: () => { root.style.display = (root.style.display==='none'||!root.style.display)?'block':'none'; } };
   }
+  const POS_KEY = 'dw:ui:logWinPos';
+  const SIZE_KEY = 'dw:ui:logWinSize';
+  const MIN_W = 480; // ensure roomy default and min sizes
+  const MIN_H = 300;
+  const OPEN_KEY = 'dw:ui:logWinOpen';
+  let savedOpen = false;
+  try { savedOpen = (localStorage.getItem(OPEN_KEY) === '1'); } catch {}
   root = document.createElement('div'); root.id = 'logWindow'; root.style.cssText = [
-    'position:fixed','right:24px','top:64px','width:500px','height:360px','background:#0b1116','color:#cfe1ea',
+    'position:fixed','right:24px','top:64px','width:1000px','height:720px','min-width:'+MIN_W+'px','min-height:'+MIN_H+'px','background:#0b1116','color:#cfe1ea',
     'border:1px solid #1e2a30','border-radius:8px','box-shadow:0 8px 20px rgba(0,0,0,0.45)','z-index:2002','display:none',
-    'overflow:hidden','backdrop-filter: blur(2px)'
+    'overflow:hidden','backdrop-filter: blur(2px)','resize:both','box-sizing:border-box'
   ].join(';');
+  // Apply saved window position (persisted until the window is closed)
+  try {
+    const saved = JSON.parse(localStorage.getItem(POS_KEY) || 'null');
+    if (saved && Number.isFinite(saved.right) && Number.isFinite(saved.top)) {
+      root.style.right = Math.max(8, Math.floor(saved.right)) + 'px';
+      root.style.top = Math.max(8, Math.floor(saved.top)) + 'px';
+    }
+  } catch {}
+  // Apply saved window size if present
+  try {
+    const sz = JSON.parse(localStorage.getItem(SIZE_KEY) || 'null');
+    if (sz && Number.isFinite(sz.w) && Number.isFinite(sz.h)) {
+      root.style.width = Math.max(MIN_W, Math.floor(sz.w)) + 'px';
+      root.style.height = Math.max(MIN_H, Math.floor(sz.h)) + 'px';
+    }
+  } catch {}
   const header = document.createElement('div'); header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;background:#0f151a;border-bottom:1px solid #1e2a30;padding:6px 8px;cursor:move;';
   const title = document.createElement('div'); title.textContent = 'Log'; title.style.fontWeight = '600';
   const hdrBtns = document.createElement('div'); hdrBtns.style.display='flex'; hdrBtns.style.gap='6px';
@@ -27,9 +50,72 @@ export function initLogWindow({ Log }) {
   (function enableDrag(){
     let dragging=false, sx=0, sy=0, start={x:0,y:0};
     header.addEventListener('mousedown', (e)=>{ dragging=true; sx=e.clientX||0; sy=e.clientY||0; const r=root.getBoundingClientRect(); start={x:r.right, y:r.top}; document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp); e.preventDefault(); });
-    function onMove(e){ if(!dragging) return; const dx=(e.clientX||0)-sx; const dy=(e.clientY||0)-sy; const rightPx = Math.max(8, window.innerWidth - (start.x + dx)); const topPx = Math.max(8, start.y + dy); root.style.right = rightPx + 'px'; root.style.top = topPx + 'px'; }
-    function onUp(){ dragging=false; document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); }
+    function onMove(e){
+      if(!dragging) return;
+      const dx=(e.clientX||0)-sx; const dy=(e.clientY||0)-sy;
+      const rightPx = Math.max(8, window.innerWidth - (start.x + dx));
+      const topPx = Math.max(8, start.y + dy);
+      root.style.right = rightPx + 'px';
+      root.style.top = topPx + 'px';
+      try { localStorage.setItem(POS_KEY, JSON.stringify({ right: rightPx, top: topPx })); } catch {}
+    }
+    function onUp(){ dragging=false; document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); try { const r = parseInt(root.style.right)||24, t = parseInt(root.style.top)||64; localStorage.setItem(POS_KEY, JSON.stringify({ right: r, top: t })); } catch {} }
   })();
+
+  // Resize handle (bottom-right corner)
+  (function enableResize(){
+    const grip = document.createElement('div');
+    grip.title = 'Resize';
+    grip.style.position = 'absolute';
+    grip.style.right = '6px';
+    grip.style.bottom = '6px';
+    grip.style.width = '14px';
+    grip.style.height = '14px';
+    grip.style.cursor = 'se-resize';
+    grip.style.opacity = '0.9';
+    grip.style.borderRight = '2px solid #2a3a44';
+    grip.style.borderBottom = '2px solid #2a3a44';
+    grip.style.transform = 'rotate(0deg)';
+    grip.style.boxSizing = 'border-box';
+    grip.style.zIndex = '3';
+    grip.style.pointerEvents = 'auto';
+    root.appendChild(grip);
+
+    let resizing = false, sx = 0, sy = 0, startW = 0, startH = 0;
+    function onMove(e){
+      if (!resizing) return;
+      const dx = (e.clientX||0) - sx; const dy = (e.clientY||0) - sy;
+      const w = Math.max(MIN_W, startW + dx);
+      const h = Math.max(MIN_H, startH + dy);
+      root.style.width = w + 'px';
+      root.style.height = h + 'px';
+      try { localStorage.setItem(SIZE_KEY, JSON.stringify({ w, h })); } catch {}
+      e.preventDefault();
+    }
+    function onUp(){ resizing = false; document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); }
+    grip.addEventListener('mousedown', (e) => {
+      resizing = true; sx = e.clientX||0; sy = e.clientY||0; const r = root.getBoundingClientRect(); startW = r.width; startH = r.height; document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp); e.preventDefault(); e.stopPropagation();
+    });
+    // Touch support
+    grip.addEventListener('touchstart', (e) => {
+      const t = e.touches && e.touches[0]; if (!t) return;
+      resizing = true; sx = t.clientX||0; sy = t.clientY||0; const r = root.getBoundingClientRect(); startW = r.width; startH = r.height; document.addEventListener('touchmove', onMove, { passive:false }); document.addEventListener('touchend', onUp); e.preventDefault(); e.stopPropagation();
+    }, { passive:false });
+  })();
+
+  // Persist native CSS resize changes as well (when dragging edges/corners)
+  try {
+    const ro = new ResizeObserver((entries) => {
+      for (const ent of entries) {
+        if (ent.target !== root) continue;
+        const rect = ent.contentRect || root.getBoundingClientRect();
+        const w = Math.max(MIN_W, Math.floor(rect.width));
+        const h = Math.max(MIN_H, Math.floor(rect.height));
+        try { localStorage.setItem(SIZE_KEY, JSON.stringify({ w, h })); } catch {}
+      }
+    });
+    ro.observe(root);
+  } catch {}
 
   const selected = new Set();
   function renderFilters() {
@@ -67,11 +153,12 @@ export function initLogWindow({ Log }) {
   btnClose.addEventListener('click', () => { root.style.display='none'; });
 
   const api = {
-    open(){ root.style.display='block'; renderFilters(); renderEntries(); },
-    close(){ root.style.display='none'; },
+    open(){ try { localStorage.setItem(OPEN_KEY, '1'); } catch {} root.style.display='block'; renderFilters(); renderEntries(); },
+    close(){ try { localStorage.setItem(OPEN_KEY, '0'); } catch {} root.style.display='none'; },
     toggle(){ if (root.style.display==='none' || !root.style.display) this.open(); else this.close(); },
   };
   root._inited = true; root._api = api;
+  // Restore open state across reloads
+  if (savedOpen) { try { api.open(); } catch {} } else { try { api.close(); } catch {} }
   return api;
 }
-

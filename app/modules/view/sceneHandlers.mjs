@@ -1,6 +1,7 @@
 import { Log, logErr, sLog, inputLog, modsOf, comboName, dPick } from '../util/log.mjs';
 import { initScryApi } from './handlers/scry.mjs';
 import { initViewManipulations } from './handlers/view.mjs';
+import { initRouter } from './router.mjs';
 import { initGizmoSystem, getVoxelPickWorldCenter as computeVoxelPickWorldCenter } from './handlers/gizmo.mjs';
 import { initCavernApi } from './handlers/cavern.mjs';
 import { initVoxelHandlers } from './handlers/voxel.mjs';
@@ -26,9 +27,10 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
   function enterScryMode() { try { _scryApi?.enterScryMode?.(); } catch { } }
   function exitScryMode() { try { _scryApi?.exitScryMode?.(); } catch { } }
 
-  // Single onPointerObservable handler below; use a timing window on POINTERDOWN for double‑tap
-
-  scene.onPointerObservable.add((pi) => {
+  // LEGACY INPUT HANDLER (disabled): kept for reference only — NOT attached.
+  // To re-enable temporarily for debugging, attach with:
+  //   scene.onPointerObservable.add(legacyScenePointerHandler);
+  function legacyScenePointerHandler(pi) {
     const ev = pi.event || window.event;
     // Cavern mode click handling (voxel lock + scry double‑tap)
     if (state.mode === 'cavern' && pi.type === BABYLON.PointerEventTypes.POINTERDOWN) {
@@ -109,49 +111,16 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
       } catch (e) { logErr('EH:cavern:voxelLock', e); }
       return;
     }
-    // Edit mode: space selection + PP node selection (basic routing)
+    // Edit mode: legacy selection is disabled (router handles inputs). No-op.
     if (state.mode === 'edit' && pi.type === BABYLON.PointerEventTypes.POINTERDOWN) {
-      try {
-        const isLeft = (typeof ev?.button === 'number') ? (ev.button === 0) : true;
-        const isCmd = !!ev?.metaKey; const isShift = !!ev?.shiftKey; const isCtrl = !!ev?.ctrlKey; const isEmulatedRC = (!!isCtrl && !isCmd && isLeft);
-        if (!isLeft || isEmulatedRC) return;
-        // PP node selection takes priority
-        const ppPick = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('connect:node:'));
-        if (ppPick?.hit && ppPick.pickedMesh) {
-          const n = String(ppPick.pickedMesh.name || '');
-          state._connect = state._connect || {}; const sel = (state._connect.sel instanceof Set) ? state._connect.sel : (state._connect.sel = new Set());
-          if (isShift) { if (sel.has(n)) sel.delete(n); else sel.add(n); } else { sel.clear(); sel.add(n); }
-          try { _gizmo?.ensureConnectGizmoFromSel?.(); } catch {}
-          ev.preventDefault(); ev.stopPropagation(); return;
-        }
-        // Space selection
-        let spacePick = scene.pick(scene.pointerX, scene.pointerY, (m) => m && typeof m.name === 'string' && m.name.startsWith('space:'));
-        if (!spacePick?.hit || !spacePick.pickedMesh) return;
-        const pickedName = String(spacePick.pickedMesh.name||''); const id = pickedName.slice('space:'.length).split(':')[0];
-        if (isCmd && isShift) { state.selection.add(id); }
-        else if (isCmd) { state.selection.clear(); state.selection.add(id); }
-        else {
-          // Plain left-click on a space: do not change selection, and consume the event
-          try { ev?.stopImmediatePropagation?.(); ev?.stopPropagation?.(); ev?.preventDefault?.(); } catch {}
-          try { pi.skipOnPointerObservable = true; } catch {}
-          return;
-        }
-        try { rebuildHalos?.(); } catch {}
-        try { _gizmo?.ensureRotWidget?.(); _gizmo?.ensureMoveWidget?.(); } catch {}
-        try { window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: Array.from(state.selection) } })); } catch {}
-        ev.preventDefault(); ev.stopPropagation();
-      } catch (e) { logErr('EH:edit:pointerdown', e); }
+      return;
     }
-  });
+  }
 
-  // Failsafe: always reattach camera inputs on pointerup/cancel in case any path detached them
-  try {
-    const canvas = engine.getRenderingCanvas();
-    const reattach = () => { try { camera.inputs?.attached?.pointers?.attachControl(canvas, true); } catch {} };
-    window.addEventListener('pointerup', reattach, { passive: true });
-    window.addEventListener('pointercancel', reattach, { passive: true });
-  } catch {}
+  // Failsafe (legacy): not attached; router manages camera pointers centrally.
 
+  // Attach debug router logs before view handlers so logs still appear
+  try { initRouter({ scene, engine, camera, state, Log }); } catch (e) { logErr('EH:router:init', e); }
   try { initViewManipulations({ scene, engine, camera, state, helpers: { getSelectionCenter, getVoxelPickWorldCenter } }); } catch (e) { logErr('EH:view:init', e); }
 
   try {
@@ -164,19 +133,10 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
     _gizmo = giz;
   } catch (e) { logErr('EH:gizmo:init', e); }
 
-  // Central pre-pointer router: allow gizmo to pre-capture pointer before other handlers
-  try {
-    scene.onPrePointerObservable.add((pi) => {
-      try {
-        if (pi.type !== BABYLON.PointerEventTypes.POINTERDOWN) return;
-        const ev = pi.event || window.event;
-        // Only relevant in Edit mode
-        if (state.mode !== 'edit') return;
-        // Delegate to gizmo pre-capture (detaches camera and captures pointer when a gizmo part is hit)
-        try { _gizmo?.preGizmoPreCapture?.(ev); } catch {}
-      } catch {}
-    });
-  } catch {}
+  // Keep PP gizmo synced with node selection/position updates
+  try { window.addEventListener('dw:connect:update', () => { try { _gizmo?.ensureConnectGizmoFromSel?.(); } catch {} }); } catch {}
+
+  // Gizmo pre-capture is handled centrally in routeDebug; no Babylon pre-observer here.
 
   try {
     _cavernApi = initCavernApi({

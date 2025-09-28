@@ -314,6 +314,10 @@ export function initEditUiHandlers(ctx) {
     if (state._connect.gizmo && state._connect.gizmo.parts) { for (const m of state._connect.gizmo.parts) { try { m.dispose(); } catch {} } }
     if (state._connect.debug && state._connect.debug.marker) { try { state._connect.debug.marker.dispose(); } catch {} }
     state._connect.props = []; state._connect.nodes = []; state._connect.segs = []; state._connect.path = null;
+    // Remove from DB as well
+    try { if (state.barrow && state.barrow.connect) { state.barrow.connect = null; } } catch {}
+    try { saveBarrow(state.barrow); snapshot(state.barrow); } catch {}
+    try { window.dispatchEvent(new CustomEvent('dw:connect:update')); } catch {}
     if (state._connect.pickObs) { try { scene.onPrePointerObservable.remove(state._connect.pickObs); } catch {}; state._connect.pickObs = null; }
     if (state._connect.editObs) { try { scene.onPrePointerObservable.remove(state._connect.editObs); } catch {}; state._connect.editObs = null; }
     try { state._connect.debug = null; } catch {}
@@ -340,6 +344,9 @@ export function initEditUiHandlers(ctx) {
       }
       if (btnFinalize) btnFinalize.style.display = 'inline-block';
       Log?.log('PATH', 'proposal:create', { points: path.length, segs: state._connect.segs.length, nodes: state._connect.nodes.length });
+      // Persist to DB
+      try { state.barrow.connect = { path: path.map(p => ({ x: p.x, y: p.y, z: p.z })) }; saveBarrow(state.barrow); } catch {}
+      try { window.dispatchEvent(new CustomEvent('dw:connect:update')); } catch {}
     } catch {}
   }
 
@@ -364,6 +371,9 @@ export function initEditUiHandlers(ctx) {
         s.material = mat; state._connect.nodes.push({ i, mesh: s });
       }
       Log?.log('PATH', 'proposal:update', { points: path.length, segs: state._connect.segs.length, nodes: state._connect.nodes.length });
+      // Persist to DB
+      try { state.barrow.connect = { path: path.map(p => ({ x: p.x, y: p.y, z: p.z })) }; saveBarrow(state.barrow); } catch {}
+      try { window.dispatchEvent(new CustomEvent('dw:connect:update')); } catch {}
     } catch {}
   }
 
@@ -404,6 +414,9 @@ export function initEditUiHandlers(ctx) {
       state._connect = state._connect || { props: [], nodes: [], segs: [], path: null };
       state._connect.path = path.map(p => ({ x: p.x, y: p.y, z: p.z }));
       createProposalMeshesFromPath(state._connect.path);
+      // Save to DB and notify
+      try { state.barrow.connect = { path: state._connect.path.map(p => ({ x:p.x, y:p.y, z:p.z })) }; saveBarrow(state.barrow); } catch {}
+      try { window.dispatchEvent(new CustomEvent('dw:connect:update')); } catch {}
       ensureConnectGizmo();
     } catch {}
   });

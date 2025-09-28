@@ -72,6 +72,11 @@ export const Log = (() => {
 })();
 
 // ————— Logging helpers (centralized) —————
+// Safe logging wrapper: hides try/catch at call sites
+export function log(cls, msg, data = {}) {
+  try { Log.log(cls, msg, data); } catch {}
+}
+
 // Error logging with normalized payload
 export function logErr(ctx, e) {
   try {

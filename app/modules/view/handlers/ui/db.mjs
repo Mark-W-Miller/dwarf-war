@@ -164,6 +164,8 @@ export function initDbUiHandlers(ctx) {
   const exportBtn = document.getElementById('export');
   const importBtn = document.getElementById('import');
   const importFile = document.getElementById('importFile');
+  const testSelect = document.getElementById('dbTestSelect');
+  const testBtn = document.getElementById('dbLoadTest');
 
   resetBtn?.addEventListener('click', () => {
     try { disposeMoveWidget(); } catch {}
@@ -190,6 +192,8 @@ export function initDbUiHandlers(ctx) {
   exportBtn?.addEventListener('click', async () => {
     try {
       const toExport = cloneForSave(state.barrow);
+      // Include current selection for test scenarios to reselect after import
+      try { toExport.meta = toExport.meta || {}; toExport.meta.selected = Array.from(state.selection || []); } catch {}
       // Prefer local dev receiver to write file into repo under exports/
       const id = String(state.barrow.id || 'barrow');
       const safeId = id.replace(/[^a-zA-Z0-9._-]/g, '-');
@@ -266,9 +270,112 @@ export function initDbUiHandlers(ctx) {
       try { renderDbView(state.barrow); } catch {}
       try { rebuildScene?.(); } catch {}
       try { updateHud?.(); } catch {}
+      // Apply PP proposal path if provided
+      try {
+        const p = (data && data.connect && Array.isArray(data.connect.path)) ? data.connect.path : ((data && data.meta && data.meta.connect && Array.isArray(data.meta.connect.path)) ? data.meta.connect.path : null);
+        if (p && p.length >= 2) {
+          // Clear previous proposal
+          try {
+            state._connect = state._connect || {};
+            for (const it of state._connect.props || []) { try { it.mesh?.dispose?.(); } catch {} }
+            for (const it of state._connect.nodes || []) { try { it.mesh?.dispose?.(); } catch {} }
+            state._connect.props = []; state._connect.nodes = []; state._connect.segs = []; state._connect.path = null;
+          } catch {}
+          // Create new proposal meshes
+          const pts = p.map(q => new BABYLON.Vector3(q.x||0, q.y||0, q.z||0));
+          const line = BABYLON.MeshBuilder.CreateLines('connect:proposal', { points: pts, updatable: true }, scene);
+          line.color = new BABYLON.Color3(0.55, 0.9, 1.0); line.isPickable = false; line.renderingGroupId = 3;
+          state._connect.props = [{ name: 'connect:proposal', mesh: line, path: p }];
+          state._connect.nodes = [];
+          for (let i = 1; i < pts.length - 1; i++) {
+            const sNode = BABYLON.MeshBuilder.CreateSphere(`connect:node:${i}`, { diameter: 1.2 }, scene);
+            sNode.position.copyFrom(pts[i]); sNode.isPickable = true; sNode.renderingGroupId = 3;
+            const mat = new BABYLON.StandardMaterial(`connect:node:${i}:mat`, scene);
+            mat.emissiveColor = new BABYLON.Color3(0.6,0.9,1.0); mat.diffuseColor = new BABYLON.Color3(0.15,0.25,0.35); mat.specularColor = new BABYLON.Color3(0,0,0); mat.disableDepthWrite = true; mat.backFaceCulling = false; mat.zOffset = 8;
+            sNode.material = mat; state._connect.nodes.push({ i, mesh: sNode });
+          }
+          state._connect.path = p.map(q => ({ x:q.x||0, y:q.y||0, z:q.z||0 }));
+          try { state.barrow.connect = { path: state._connect.path.map(q => ({ x:q.x, y:q.y, z:q.z })) }; saveBarrow(state.barrow); } catch {}
+          try { if (gizmo?.ensureConnectGizmoFromSel) gizmo.ensureConnectGizmoFromSel(); } catch {}
+        }
+      } catch {}
+      // Reapply selection if provided
+      try {
+        const selFromMeta = Array.isArray(data?.meta?.selected) ? data.meta.selected.map(String) : [];
+        if (selFromMeta.length) {
+          state.selection.clear(); for (const id of selFromMeta) state.selection.add(id);
+          try { rebuildHalos(); } catch {}
+          try { window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: Array.from(state.selection) } })); } catch {}
+          try { ensureRotWidget(); ensureMoveWidget(); } catch {}
+        }
+      } catch {}
       try { camApi?.fitViewSmart?.(state.barrow); } catch {}
       try { Log.log('UI', 'Import barrow', { size: text.length }); } catch {}
     } catch (err) { console.error('Import failed', err); }
     if (importFile) importFile.value = '';
+  });
+
+  // Load a bundled test DB by path (from dbTab select)
+  window.addEventListener('dw:dbLoadTest', async (e) => {
+    try {
+      const path = String(e?.detail?.path || ''); if (!path) return;
+      // Reset transient state
+      try { disposeMoveWidget(); } catch {}
+      try { disposeRotWidget(); } catch {}
+      try { state.selection.clear(); } catch {}
+      try { rebuildHalos(); } catch {}
+      try { window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: [] } })); } catch {}
+      // Fetch and apply
+      const resp = await fetch(path, { cache: 'no-store' }); if (!resp.ok) throw new Error('fetch failed');
+      let data = await resp.json();
+      try { data = inflateAfterLoad(data); } catch {}
+      try { disposeBuilt(state.built); } catch {}
+      state.barrow = mergeInstructions(makeDefaultBarrow(), data);
+      try { layoutBarrow(state.barrow); } catch {}
+      try { state.built = buildSceneFromBarrow(scene, state.barrow); } catch {}
+      try { saveBarrow(state.barrow); snapshot(state.barrow); } catch {}
+      try { renderDbView(state.barrow); } catch {}
+      try { rebuildScene?.(); } catch {}
+      try { updateHud?.(); } catch {}
+      // Apply PP proposal path if provided
+      try {
+        const p = (data && data.connect && Array.isArray(data.connect.path)) ? data.connect.path : ((data && data.meta && data.meta.connect && Array.isArray(data.meta.connect.path)) ? data.meta.connect.path : null);
+        if (p && p.length >= 2) {
+          try {
+            state._connect = state._connect || {};
+            for (const it of state._connect.props || []) { try { it.mesh?.dispose?.(); } catch {} }
+            for (const it of state._connect.nodes || []) { try { it.mesh?.dispose?.(); } catch {} }
+            state._connect.props = []; state._connect.nodes = []; state._connect.segs = []; state._connect.path = null;
+          } catch {}
+          const pts = p.map(q => new BABYLON.Vector3(q.x||0, q.y||0, q.z||0));
+          const line = BABYLON.MeshBuilder.CreateLines('connect:proposal', { points: pts, updatable: true }, scene);
+          line.color = new BABYLON.Color3(0.55, 0.9, 1.0); line.isPickable = false; line.renderingGroupId = 3;
+          state._connect.props = [{ name: 'connect:proposal', mesh: line, path: p }];
+          state._connect.nodes = [];
+          for (let i = 1; i < pts.length - 1; i++) {
+            const sNode = BABYLON.MeshBuilder.CreateSphere(`connect:node:${i}`, { diameter: 1.2 }, scene);
+            sNode.position.copyFrom(pts[i]); sNode.isPickable = true; sNode.renderingGroupId = 3;
+            const mat = new BABYLON.StandardMaterial(`connect:node:${i}:mat`, scene);
+            mat.emissiveColor = new BABYLON.Color3(0.6,0.9,1.0); mat.diffuseColor = new BABYLON.Color3(0.15,0.25,0.35); mat.specularColor = new BABYLON.Color3(0,0,0); mat.disableDepthWrite = true; mat.backFaceCulling = false; mat.zOffset = 8;
+            sNode.material = mat; state._connect.nodes.push({ i, mesh: sNode });
+          }
+          state._connect.path = p.map(q => ({ x:q.x||0, y:q.y||0, z:q.z||0 }));
+          try { state.barrow.connect = { path: state._connect.path.map(q => ({ x:q.x, y:q.y, z:q.z })) }; saveBarrow(state.barrow); } catch {}
+          try { if (gizmo?.ensureConnectGizmoFromSel) gizmo.ensureConnectGizmoFromSel(); } catch {}
+        }
+      } catch {}
+      // Apply 'meta.selected' selection if present
+      try {
+        const selFromMeta = Array.isArray(data?.meta?.selected) ? data.meta.selected.map(String) : [];
+        if (selFromMeta.length) {
+          state.selection.clear(); for (const id of selFromMeta) state.selection.add(id);
+          try { rebuildHalos(); } catch {}
+          try { window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: Array.from(state.selection) } })); } catch {}
+          try { ensureRotWidget(); ensureMoveWidget(); } catch {}
+        }
+      } catch {}
+      try { camApi?.fitViewSmart?.(state.barrow); } catch {}
+      try { Log.log('UI', 'Load test DB', { path }); } catch {}
+    } catch (err) { Log.log('ERROR', 'Load test DB failed', { error: String(err && err.message ? err.message : err) }); }
   });
 }

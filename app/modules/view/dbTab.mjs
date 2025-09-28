@@ -57,6 +57,29 @@ export function renderDbView(barrow) {
   const controls = make('div', { class: 'row' });
   const closeAllBtn = make('button', { class: 'btn', id: 'dbCloseAll', text: 'Close All' });
   controls.appendChild(closeAllBtn);
+  // Test DB loader controls
+  const testWrap = make('span', { style: 'margin-left:8px;' });
+  const testLabel = make('span', { text: 'Load Test:' }); testLabel.style.marginRight = '4px';
+  const testSelect = document.createElement('select'); testSelect.id = 'dbTestSelect'; testSelect.className = 'sel'; testSelect.style.marginRight = '4px';
+  const TEST_SCENARIOS = [
+    { name: 'WR: Basic 3 Spaces', path: '/app/test-db/wr-basic.json' },
+    { name: 'WR: Vox + PP', path: '/app/test-db/wr-vox-pp.json' },
+    { name: 'Export: three-spaces.json', path: '/export/three-spaces.json' }
+  ];
+  for (const t of TEST_SCENARIOS) {
+    const opt = document.createElement('option'); opt.value = t.path; opt.textContent = t.name; testSelect.appendChild(opt);
+  }
+  // Restore last selected test DB
+  try {
+    const key = 'dw:ui:lastTestDbPath';
+    const last = localStorage.getItem(key);
+    if (last && Array.from(testSelect.options).some(o => o.value === last)) {
+      testSelect.value = last;
+    }
+  } catch {}
+  const testBtn = make('button', { class: 'btn', id: 'dbLoadTest', text: 'Load' });
+  testWrap.appendChild(testLabel); testWrap.appendChild(testSelect); testWrap.appendChild(testBtn);
+  controls.appendChild(testWrap);
   dSpaces.appendChild(controls);
   if (!Array.isArray(barrow.spaces) || barrow.spaces.length === 0) {
     dSpaces.appendChild(make('div', { class: 'kv', text: '(none)' }));
@@ -220,6 +243,16 @@ export function renderDbView(barrow) {
     } catch {}
   });
 
+  // Load a bundled test database by path
+  try {
+    testBtn.addEventListener('click', () => {
+      const path = testSelect.value || '';
+      if (!path) return;
+      try { localStorage.setItem('dw:ui:lastTestDbPath', path); } catch {}
+      try { window.dispatchEvent(new CustomEvent('dw:dbLoadTest', { detail: { path } })); } catch {}
+    });
+  } catch {}
+
   // Delete Selected button
   const delBtn = make('button', { class: 'btn warn', id: 'dbDeleteSelected', text: 'Delete Selected' });
   const undoBtn = make('button', { class: 'btn', id: 'dbUndoDelete', text: 'Undo Delete' });
@@ -248,4 +281,3 @@ export function renderDbView(barrow) {
     // No-op, but ensures event bubbles and can be listened to elsewhere if needed
   });
 }
-

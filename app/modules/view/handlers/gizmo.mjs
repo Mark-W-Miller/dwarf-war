@@ -281,22 +281,22 @@ export function initTransformGizmos({ scene, engine, camera, state, renderDbView
         root = new BABYLON.TransformNode('connectGizmo:root', scene);
         // Disc (XZ move)
         try {
-          const disc = BABYLON.MeshBuilder.CreateDisc('connectGizmo:disc', { radius: 1.2, tessellation: 64 }, scene);
+          const disc = BABYLON.MeshBuilder.CreateDisc('connectGizmo:disc', { radius: 0.25, tessellation: 48 }, scene);
           const dmat = new BABYLON.StandardMaterial('connectGizmo:disc:mat', scene);
           dmat.diffuseColor = new BABYLON.Color3(0.15, 0.5, 0.95);
           dmat.emissiveColor = new BABYLON.Color3(0.12, 0.42, 0.85);
-          dmat.alpha = 0.18; dmat.specularColor = new BABYLON.Color3(0,0,0);
+          dmat.alpha = 0.22; dmat.specularColor = new BABYLON.Color3(0,0,0);
           dmat.disableDepthWrite = true; disc.zOffset = 8;
           disc.material = dmat; disc.isPickable = true; disc.alwaysSelectAsActiveMesh = true; disc.renderingGroupId = 2; disc.rotation.x = Math.PI/2; disc.parent = root; parts.push(disc);
         } catch {}
         // Y arrow
         try {
-          const shaft = BABYLON.MeshBuilder.CreateCylinder('connectGizmo:arrow:y:shaft', { height: 2.2, diameter: 0.06, tessellation: 16 }, scene);
-          const tip = BABYLON.MeshBuilder.CreateCylinder('connectGizmo:arrow:y:tip', { height: 0.3, diameterTop: 0, diameterBottom: 0.22, tessellation: 16 }, scene);
+          const shaft = BABYLON.MeshBuilder.CreateCylinder('connectGizmo:arrow:y:shaft', { height: 0.5, diameter: 0.03, tessellation: 16 }, scene);
+          const tip = BABYLON.MeshBuilder.CreateCylinder('connectGizmo:arrow:y:tip', { height: 0.12, diameterTop: 0, diameterBottom: 0.08, tessellation: 16 }, scene);
           const amat = new BABYLON.StandardMaterial('connectGizmo:arrow:y:mat', scene);
           amat.diffuseColor = new BABYLON.Color3(0.2, 0.95, 0.2); amat.emissiveColor = new BABYLON.Color3(0.18, 0.8, 0.18);
           shaft.material = amat; tip.material = amat; shaft.isPickable = true; tip.isPickable = true; shaft.renderingGroupId=2; tip.renderingGroupId=2; try { shaft.zOffset = 8; tip.zOffset = 8; } catch {}
-          shaft.parent = root; tip.parent = root; shaft.position.y = 1.1; tip.position.y = 2.35; parts.push(shaft, tip);
+          shaft.parent = root; tip.parent = root; shaft.position.y = 0.25; tip.position.y = 0.56; parts.push(shaft, tip);
         } catch {}
         state._connect.gizmo = { root, parts };
       }

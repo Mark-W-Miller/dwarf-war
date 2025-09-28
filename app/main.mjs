@@ -141,8 +141,10 @@ try {
   window.addEventListener('dw:gizmos:enable', () => { _voxOpActive = false; try { Log.log('VOXEL', 'Op end: allow transforms', {}); } catch {} });
 } catch {}
 
-// Load or create barrow
-state.barrow = loadBarrow() || makeDefaultBarrow();
+// Load or create barrow; remember if it came from saved localStorage
+const __savedBarrow = loadBarrow();
+const __hadSavedBarrow = !!__savedBarrow;
+state.barrow = __savedBarrow || makeDefaultBarrow();
 layoutBarrow(state.barrow); // ensure positions from directions
 // Create highlight layer before first halo rebuild so it applies immediately
 state.hl = new BABYLON.HighlightLayer('hl', scene, { blurHorizontalSize: 0.45, blurVerticalSize: 0.45 });
@@ -167,6 +169,43 @@ applyTextScale?.();
 applyVoxelOpacity?.();
 updateHud();
 
+// If a connect path is present in DB, render the proposal nodes/line at startup
+try {
+  const p = (state?.barrow?.connect && Array.isArray(state.barrow.connect.path)) ? state.barrow.connect.path : null;
+  if (p && p.length >= 2) {
+    try {
+      state._connect = state._connect || {};
+      for (const it of state._connect.props || []) { try { it.mesh?.dispose?.(); } catch {} }
+      for (const it of state._connect.nodes || []) { try { it.mesh?.dispose?.(); } catch {} }
+      state._connect.props = []; state._connect.nodes = []; state._connect.segs = []; state._connect.path = null;
+    } catch {}
+    const pts = p.map(q => new BABYLON.Vector3(q.x||0, q.y||0, q.z||0));
+    const line = BABYLON.MeshBuilder.CreateLines('connect:proposal', { points: pts, updatable: true }, scene);
+    line.color = new BABYLON.Color3(0.55, 0.9, 1.0); line.isPickable = false; line.renderingGroupId = 3;
+    state._connect.props = [{ name: 'connect:proposal', mesh: line, path: p }];
+    state._connect.nodes = [];
+    for (let i = 1; i < pts.length - 1; i++) {
+      const sNode = BABYLON.MeshBuilder.CreateSphere(`connect:node:${i}`, { diameter: 1.2 }, scene);
+      sNode.position.copyFrom(pts[i]); sNode.isPickable = true; sNode.renderingGroupId = 3;
+      const mat = new BABYLON.StandardMaterial(`connect:node:${i}:mat`, scene);
+      mat.emissiveColor = new BABYLON.Color3(0.6,0.9,1.0); mat.diffuseColor = new BABYLON.Color3(0.15,0.25,0.35); mat.specularColor = new BABYLON.Color3(0,0,0); mat.disableDepthWrite = true; mat.backFaceCulling = false; mat.zOffset = 8;
+      sNode.material = mat; state._connect.nodes.push({ i, mesh: sNode });
+    }
+    state._connect.path = p.map(q => ({ x:q.x||0, y:q.y||0, z:q.z||0 }));
+    try { window.dispatchEvent(new CustomEvent('dw:connect:update')); } catch {}
+  }
+} catch {}
+
+// Restore selection from saved DB (meta.selected) after initial build
+try {
+  const selFromMeta = Array.isArray(state?.barrow?.meta?.selected) ? state.barrow.meta.selected.map(String) : [];
+  if (selFromMeta.length) {
+    state.selection.clear(); for (const id of selFromMeta) state.selection.add(id);
+    try { rebuildHalos(); } catch {}
+    try { window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: Array.from(state.selection) } })); } catch {}
+  }
+} catch {}
+
 // Optional: auto-load a saved JSON from the repo's export folder
 // - Honors ?load=<path> query param (relative to server root)
 // - Else tries common defaults: /export/three-spaces.json, then /exports/three-spaces.json
@@ -176,9 +215,20 @@ updateHud();
     const params = new URLSearchParams(location.search || '');
     const q = params.get('load');
     const candidates = [];
-    if (q) candidates.push(q);
-    candidates.push('/export/three-spaces.json');
-    candidates.push('/exports/three-spaces.json');
+    if (q) {
+      candidates.push(q);
+    } else {
+      // If we already had a saved barrow, do NOT auto-load anything else
+      if (__hadSavedBarrow) return;
+      // Prefer last selected test DB if any
+      try {
+        const last = localStorage.getItem('dw:ui:lastTestDbPath');
+        if (last) candidates.push(last);
+      } catch {}
+      // Fallbacks
+      candidates.push('/export/three-spaces.json');
+      candidates.push('/exports/three-spaces.json');
+    }
     for (const rel of candidates) {
       const url = rel.startsWith('/') ? rel : `/${rel}`;
       try {
@@ -191,6 +241,15 @@ updateHud();
         saveBarrow(state.barrow); snapshot(state.barrow);
         rebuildScene();
         renderDbView(state.barrow);
+        // Apply saved selection from loaded file if present
+        try {
+          const selFromMeta = Array.isArray(state?.barrow?.meta?.selected) ? state.barrow.meta.selected.map(String) : [];
+          if (selFromMeta.length) {
+            state.selection.clear(); for (const id of selFromMeta) state.selection.add(id);
+            try { rebuildHalos(); } catch {}
+            try { window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: Array.from(state.selection) } })); } catch {}
+          }
+        } catch {}
         try { Log.log('UI', 'Loaded barrow from export', { url }); } catch {}
         updateHud();
         break;
@@ -449,7 +508,13 @@ try {
 // Log selection change events for debugging
 try {
   window.addEventListener('dw:selectionChange', (e) => {
-    try { Log.log('SELECT', 'event:selectionChange', { selection: (e?.detail?.selection || []) }); } catch {}
+    try {
+      const sel = (e?.detail?.selection || []);
+      Log.log('SELECT', 'event:selectionChange', { selection: sel });
+      // Persist selection into DB meta so refresh restores it
+      try { state.barrow.meta = state.barrow.meta || {}; state.barrow.meta.selected = sel.map(String); } catch {}
+      try { saveBarrow(state.barrow); } catch {}
+    } catch {}
   });
   } catch {}
   

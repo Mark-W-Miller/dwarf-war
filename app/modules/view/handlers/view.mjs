@@ -8,9 +8,9 @@ import { Log, modsOf, comboName } from '../../util/log.mjs';
 export function initViewManipulations({ scene, engine, camera, state, helpers }) {
   const canvas = engine.getRenderingCanvas();
   try { canvas.addEventListener('contextmenu', (e) => e.preventDefault()); } catch {}
-  let _rcPanGuard = null; // { saved: number }
-  let _rcDecision = null; // 'rotate' | 'pan' | null
-  let _claimed = { by: null, ptrId: null }; // 'gizmo' | 'view' | null
+  // Camera gesture handling is centralized in routeDebug now.
+  let _targetDot = null;
+  let _targetDotObs = null;
 
   // modsOf/comboName centralized in util/log.mjs
   function isGizmoHitAt(e) {
@@ -30,84 +30,28 @@ export function initViewManipulations({ scene, engine, camera, state, helpers })
     return false;
   }
 
-  function onPointerDownCapture(e) {
+  function ensureTargetDot() {
     try {
-      if (state.mode !== 'edit') return;
-      // If modifiers are active, do not claim gizmo (spec: modifiers bypass gizmo)
-      if (e && (e.metaKey || e.shiftKey || e.ctrlKey || e.altKey)) return;
-      // If a gizmo part is under the cursor, temporarily claim the pointer for view to prevent camera handling.
-      // Do NOT stop the event — Babylon/gizmo handlers still need it.
-      if (isGizmoHitAt(e)) {
-        try {
-          camera.inputs?.attached?.pointers?.detachControl(canvas);
-          if (e.pointerId != null && canvas.setPointerCapture) { canvas.setPointerCapture(e.pointerId); _claimed = { by: 'gizmo', ptrId: e.pointerId }; }
-          Log.log('GIZMO', 'view:claimed', {});
-        } catch {}
-        return; // skip RC mapping below
-      }
-
-      // Right-click mapping: RC rotates, Cmd+RC pans
-      const emulateRC = (e.button === 0 && !!e.ctrlKey && !e.metaKey);
-      const rcLike = (e.button === 2) || emulateRC;
-      if (!rcLike) return;
-      const isCmd = !!e.metaKey;
-      camera.panningMouseButton = isCmd ? 2 : 1;
-      const decision = (camera.panningMouseButton === 2) ? 'pan' : 'rotate';
-      _rcDecision = decision;
-      try { Log.log('CAMERA', 'rc:map', { button: e.button, cmd: !!e.metaKey, ctrl: !!e.ctrlKey, alt: !!e.altKey, emulateRC, rcLike, panningMouseButton: camera.panningMouseButton, decision }); } catch {}
-      try { Log.log('INPUT', 'pointer:rc:decision', { combo: comboName(e.button || (emulateRC?0:undefined), modsOf(e)), emulateRC, decision }); } catch {}
-      // Shift+RC: recenter to selection/voxel pick
-      if (e.shiftKey) {
-        try {
-          const vox = helpers?.getVoxelPickWorldCenter?.();
-          const sel = helpers?.getSelectionCenter?.();
-          const tgt = vox || sel || null;
-          if (tgt) camera.target.copyFrom(tgt);
-        } catch {}
-      }
-      // Guard against panning while rotating
-      if (decision === 'rotate') {
-        try { _rcPanGuard = { saved: camera.panningSensibility }; camera.panningSensibility = 1e9; } catch {}
-        // Capture pointer to ensure consistent move events during orbit
-        try { if (e.pointerId != null && canvas.setPointerCapture) { canvas.setPointerCapture(e.pointerId); _claimed = { by: 'view', ptrId: e.pointerId }; } } catch {}
-        try { camera.inputs?.attached?.pointers?.attachControl(canvas, true); } catch {}
-      } else if (_rcPanGuard && typeof _rcPanGuard.saved === 'number') {
-        try { camera.panningSensibility = _rcPanGuard.saved; } catch {}
-        _rcPanGuard = null;
-      }
-    } catch {}
+      if (_targetDot && !_targetDot.isDisposed()) return _targetDot;
+      const s = BABYLON.MeshBuilder.CreateSphere('cam:targetDot', { diameter: 0.6, segments: 16 }, scene);
+      const m = new BABYLON.StandardMaterial('cam:targetDot:mat', scene);
+      m.emissiveColor = new BABYLON.Color3(1.0, 0.5, 0.05); // bright orange
+      m.diffuseColor = new BABYLON.Color3(0.2, 0.1, 0.0);
+      m.specularColor = new BABYLON.Color3(0,0,0);
+      s.material = m; s.isPickable = false; s.renderingGroupId = 3;
+      _targetDot = s;
+      try { if (_targetDotObs) scene.onBeforeRenderObservable.remove(_targetDotObs); } catch {}
+      _targetDotObs = scene.onBeforeRenderObservable.add(() => {
+        try { s.position.copyFrom(camera.target); } catch {}
+      });
+      return s;
+    } catch { return null; }
   }
 
-  function onPointerMoveCapture() {
-    try {
-      if (_claimed.by === 'gizmo') {
-        // Zero inertials so camera never moves while a gizmo is active
-        try { camera.inertialPanningX = 0; camera.inertialPanningY = 0; camera.inertialAlphaOffset = 0; camera.inertialBetaOffset = 0; } catch {}
-        return;
-      }
-      if (_rcDecision === 'rotate') {
-        try { camera.inertialPanningX = 0; camera.inertialPanningY = 0; } catch {}
-      }
-    } catch {}
-  }
+  // Camera pointer mapping moved to routeDebug; no pointer event wiring here.
 
-  function onPointerUpCapture() {
-    try { camera.panningMouseButton = 1; } catch {}
-    try {
-      if (_claimed.ptrId != null && canvas.releasePointerCapture) canvas.releasePointerCapture(_claimed.ptrId);
-      camera.inputs?.attached?.pointers?.attachControl(canvas, true);
-    } catch {}
-    _claimed = { by: null, ptrId: null };
-    if (_rcPanGuard && typeof _rcPanGuard.saved === 'number') {
-      try { camera.panningSensibility = _rcPanGuard.saved; } catch {}
-      _rcPanGuard = null;
-    }
-    _rcDecision = null;
-  }
+  // No pointer event wiring here (handled centrally in routeDebug).
 
-  try {
-    canvas.addEventListener('pointerdown', onPointerDownCapture, { capture: true });
-  } catch {}
-  try { canvas.addEventListener('pointermove', onPointerMoveCapture, { capture: true }); } catch {}
-  try { window.addEventListener('pointerup', onPointerUpCapture, { capture: true }); } catch {}
+  // Ensure target dot exists and follows camera target
+  try { ensureTargetDot(); } catch {}
 }
