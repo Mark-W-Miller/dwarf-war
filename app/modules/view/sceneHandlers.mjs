@@ -164,6 +164,20 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
     _gizmo = giz;
   } catch (e) { logErr('EH:gizmo:init', e); }
 
+  // Central pre-pointer router: allow gizmo to pre-capture pointer before other handlers
+  try {
+    scene.onPrePointerObservable.add((pi) => {
+      try {
+        if (pi.type !== BABYLON.PointerEventTypes.POINTERDOWN) return;
+        const ev = pi.event || window.event;
+        // Only relevant in Edit mode
+        if (state.mode !== 'edit') return;
+        // Delegate to gizmo pre-capture (detaches camera and captures pointer when a gizmo part is hit)
+        try { _gizmo?.preGizmoPreCapture?.(ev); } catch {}
+      } catch {}
+    });
+  } catch {}
+
   try {
     _cavernApi = initCavernApi({
       scene, engine, camera, state,
