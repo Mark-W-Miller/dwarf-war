@@ -1,6 +1,45 @@
 // Gizmo input handling (priority/capture to prevent camera rotation) extracted from eventHandler.mjs
 import { Log, pickLog, mLog } from '../../util/log.mjs';
 
+// Compute world position for the current voxel pick or last voxel selection.
+export function getVoxelPickWorldCenter(state) {
+  try {
+    // Prefer the last pick remembered globally
+    let pid = null, px = null, py = null, pz = null;
+    if (state && state.lastVoxPick && state.lastVoxPick.id) {
+      pid = state.lastVoxPick.id; px = state.lastVoxPick.x; py = state.lastVoxPick.y; pz = state.lastVoxPick.z;
+    } else {
+      const picks = Array.isArray(state?.voxSel) ? state.voxSel : [];
+      if (!picks.length) return null;
+      const p = picks[picks.length - 1]; pid = p.id; px = p.x; py = p.y; pz = p.z;
+    }
+    const s = (state?.barrow?.spaces || []).find(x => x && x.id === pid);
+    if (!s || !s.vox || !s.vox.size) return null;
+    const vox = s.vox;
+    const nx = Math.max(1, vox.size?.x || 1);
+    const ny = Math.max(1, vox.size?.y || 1);
+    const nz = Math.max(1, vox.size?.z || 1);
+    const res = vox.res || s.res || (state?.barrow?.meta?.voxelSize || 1);
+    const minX = -(nx * res) / 2, minY = -(ny * res) / 2, minZ = -(nz * res) / 2;
+    let wx = minX + (px + 0.5) * res;
+    let wy = minY + (py + 0.5) * res;
+    let wz = minZ + (pz + 0.5) * res;
+    let v = new BABYLON.Vector3(wx, wy, wz);
+    const worldAligned = !!(s.vox && s.vox.worldAligned);
+    if (!worldAligned) {
+      const rx = Number(s.rotation?.x ?? 0) || 0;
+      const ry = (s.rotation && typeof s.rotation.y === 'number') ? Number(s.rotation.y) : Number(s.rotY || 0) || 0;
+      const rz = Number(s.rotation?.z ?? 0) || 0;
+      const q = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz);
+      const m = BABYLON.Matrix.Compose(new BABYLON.Vector3(1,1,1), q, BABYLON.Vector3.Zero());
+      v = BABYLON.Vector3.TransformCoordinates(v, m);
+    }
+    const cx = s.origin?.x||0, cy = s.origin?.y||0, cz = s.origin?.z||0;
+    v.x += cx; v.y += cy; v.z += cz;
+    return v;
+  } catch { return null; }
+}
+
 // Pre-pointer capture for gizmo priority (connect/move/rot)
 export function initGizmoHandlers({ scene, engine, camera, state }) {
   try {

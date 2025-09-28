@@ -1,4 +1,4 @@
-import { makeDefaultBarrow, mergeInstructions, directions, layoutBarrow } from './modules/barrow/schema.mjs';
+import { makeDefaultBarrow, mergeInstructions, layoutBarrow } from './modules/barrow/schema.mjs';
 import { loadBarrow, saveBarrow, snapshot } from './modules/barrow/store.mjs';
 import { buildSceneFromBarrow, disposeBuilt } from './modules/barrow/builder.mjs';
 import { Log } from './modules/util/log.mjs';
@@ -9,8 +9,10 @@ import { renderDbView } from './modules/view/dbTab.mjs';
 import { initLogWindow } from './modules/view/logWindow.mjs';
 import { initSettingsTab } from './modules/view/settingsTab.mjs';
 import { initVoxelTab } from './modules/view/voxelTab.mjs';
-import { worldAabbFromSpace } from './modules/barrow/schema.mjs';
-import { initEventHandlers } from './modules/view/eventHandler.mjs';
+import { initSceneHandlers } from './modules/view/sceneHandlers.mjs';
+import { initUIHandlers } from './modules/view/uiHandlers.mjs';
+import { createRebuildHalos } from './modules/view/handlers/halos.mjs';
+import { initVoxelDebug } from './modules/view/handlers/voxelDebug.mjs';
 
 // Babylon setup
 const canvas = document.getElementById('renderCanvas');
@@ -115,6 +117,9 @@ const state = {
   lockedVoxPick: null, // { id, x,y,z,v } locked in Cavern Mode
 };
 
+// Provide a reusable selection/voxel highlight rebuilder
+const rebuildHalos = createRebuildHalos({ scene, state });
+
 // Ensure view mode and material opacities are sane on startup (avoid stale cavern settings)
 try {
   // Force War Room view on boot unless explicitly in cavern
@@ -180,43 +185,26 @@ function updateHud() {
 function setMode(mode) { state.mode = mode; updateHud(); }
 function setRunning(run) { state.running = run; updateHud(); }
 
-// UI wiring
-const toggleRunBtn = document.getElementById('toggleRun');
-const resetBtn = document.getElementById('reset');
-const exportBtn = document.getElementById('export');
-const importBtn = document.getElementById('import');
-const importFile = document.getElementById('importFile');
-// (no text assistant UI)
-// Transform controls
-const tStepEl = document.getElementById('tStep');
-const txMinus = document.getElementById('txMinus');
-const txPlus = document.getElementById('txPlus');
-const tyMinus = document.getElementById('tyMinus');
-const tyPlus = document.getElementById('tyPlus');
-const tzMinus = document.getElementById('tzMinus');
-const tzPlus = document.getElementById('tzPlus');
-const spaceTypeEl = document.getElementById('spaceType');
-const newSpaceBtn = document.getElementById('newSpace');
-const fitViewBtn = document.getElementById('fitView');
-const sizeXEl = document.getElementById('sizeX');
-const sizeYEl = document.getElementById('sizeY');
-const sizeZEl = document.getElementById('sizeZ');
-//
-const panel = document.getElementById('rightPanel');
-const collapsePanelBtn = document.getElementById('collapsePanel');
-const settingsOpenBtn = document.getElementById('settingsOpen');
-const settingsModal = document.getElementById('settingsModal');
-const settingsCloseBtn = document.getElementById('settingsClose');
-//
+// UI wiring handled by initUIHandlers
 
 // Centralize event wiring in a dedicated module
-initEventHandlers({
+const sceneApi = initSceneHandlers({
   scene,
   engine,
   camApi,
   camera,
   state,
-  helpers: { setMode, setRunning, rebuildScene, rebuildHalos, moveSelection, scheduleGridUpdate, applyViewToggles, updateHud, updateGridExtent }
+  helpers: { setMode, rebuildScene, rebuildHalos, scheduleGridUpdate }
+});
+
+initUIHandlers({
+  scene,
+  engine,
+  camApi,
+  camera,
+  state,
+  helpers: { setMode, setRunning, rebuildScene, rebuildHalos, moveSelection, scheduleGridUpdate, applyViewToggles, updateHud, updateGridExtent, saveBarrow, snapshot },
+  sceneApi
 });
 
 // Initialize optional tabs now that tabs exist
@@ -225,7 +213,8 @@ function ensureVoxelTab() {
     const panelContent = document.querySelector('.panel-content');
     if (!panelContent) return;
     if (!panelContent.querySelector('#tab-vox')) {
-      initVoxelTab(panelContent, { state, saveBarrow, snapshot, renderDbView, rebuildScene, scheduleGridUpdate: () => grids.scheduleGridUpdate(state.built), scene, debug: { startVoxelScanDebug, addVoxelScanPointInside, addVoxelScanPointOutside, addVoxelScanPointWall, addVoxelScanPointRock, addVoxelScanPointUninst, flushVoxelScanPoints, endVoxelScanDebug, showObbDebug, clearObbDebug } });
+      const voxelDebug = initVoxelDebug({ scene, state });
+      initVoxelTab(panelContent, { state, saveBarrow, snapshot, renderDbView, rebuildScene, scheduleGridUpdate: () => grids.scheduleGridUpdate(state.built), scene, debug: voxelDebug });
       try { Log.log('UI', 'Voxel tab initialized', {}); } catch {}
     }
   } catch (e) { try { Log.log('ERROR', 'Init voxel tab failed', { error: String(e) }); } catch {} }
@@ -235,37 +224,12 @@ ensureVoxelTab();
 try { window.addEventListener('dw:tabsReady', ensureVoxelTab); } catch {}
 
 // Fit camera to all spaces
-function fitViewAll() {
-  const spaces = state.barrow?.spaces || [];
-  if (spaces.length === 0) return;
-  let minX = Infinity, minY = Infinity, minZ = Infinity;
-  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
-  for (const s of spaces) {
-    const res = s.res || (state.barrow?.meta?.voxelSize || 1);
-    const w = (s.size?.x||0) * res, h = (s.size?.y||0) * res, d = (s.size?.z||0) * res;
-    const cx = s.origin?.x||0, cy = s.origin?.y||0, cz = s.origin?.z||0;
-    const min = { x: cx - w/2, y: cy - h/2, z: cz - d/2 };
-    const max = { x: cx + w/2, y: cy + h/2, z: cz + d/2 };
-    if (min.x < minX) minX = min.x; if (min.y < minY) minY = min.y; if (min.z < minZ) minZ = min.z;
-    if (max.x > maxX) maxX = max.x; if (max.y > maxY) maxY = max.y; if (max.z > maxZ) maxZ = max.z;
-  }
-  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2, cz = (minZ + maxZ) / 2;
-  const spanX = maxX - minX, spanY = maxY - minY, spanZ = maxZ - minZ;
-  const span = Math.max(spanX, spanY, spanZ);
-  const radius = Math.max(10, span * 0.8 + 10);
-  camera.target.set(cx, cy, cz);
-  camera.radius = radius;
-  if (camera.upperRadiusLimit < radius * 1.2) camera.upperRadiusLimit = radius * 1.2;
-  Log.log('UI', 'Fit view', { center: { x: cx, y: cy, z: cz }, span: { x: spanX, y: spanY, z: spanZ }, radius });
-}
-
-// Fit view handled in eventHandler.mjs
+// Fit view now handled via camera/click handlers
 
 // Defaults per type and update size fields when type changes
 // (text-based assistant disabled)
 
 engine.runRenderLoop(() => {
-  const dt = engine.getDeltaTime() / 1000;
   // Keep grids near the camera target so they don't "disappear" when moving far
   try {
     // Grids are centered at the world origin (0,0,0); do not follow camera.
@@ -280,22 +244,11 @@ engine.runRenderLoop(() => {
     // Adapt pan speed with distance
     camApi.updatePanDynamics();
   } catch {}
-  // Grid extent updates are debounced (2s) via scheduleGridUpdate()
-  // Percentage-based zoom handles near/far scaling; settings slider updates base percentage.
-  // Render
+  // Grid extent updates are debounced via scheduleGridUpdate(); render the scene
   scene.render();
 });
 
-// Window resize handled in eventHandler.mjs
-
-// Collapse/expand panel with persistence
-// Panel collapse handled in eventHandler.mjs
-
 // (AI/Ollama disabled)
-
-// Build tabs: Edit and Database, and move existing controls accordingly
-// Tabs setup handled in eventHandler.mjs
-// removed legacy Parse button wiring; Enter now handles parsing
 // ——————————— Log Window ———————————
 try { document.getElementById('logOpen')?.addEventListener('click', () => { try { initLogWindow(); } catch {} }); } catch {}
 // Global error logging into Log tab
@@ -448,93 +401,6 @@ function rebuildScene() {
   applyVoxelOpacity?.();
 }
 
-// ——————————— Voxel scan debug visualization ———————————
-state._scanDebug = { redBase: null, greenBase: null, orangeBase: null, blueBase: null, redArr: [], greenArr: [], orangeArr: [], blueArr: [], count: 0, jitter: 0 };
-state._obbDebug = { mesh: null };
-function startVoxelScanDebug(res=1) {
-  try { endVoxelScanDebug(); } catch {}
-  // Reduce dot size to 1/4 of previous and set jitter amplitude
-  const dia = Math.max(0.0625, (res * 0.7) / 4);
-  state._scanDebug.jitter = Math.max(0, res * 0.12); // ~12% of voxel size
-  function mkBase(name, diffuse, emissive) {
-    const m = BABYLON.MeshBuilder.CreateSphere(`dbg:scanDot:${name}`, { diameter: dia, segments: 8 }, scene);
-    const mat = new BABYLON.StandardMaterial(`dbg:scanDot:${name}:mat`, scene);
-    mat.diffuseColor = diffuse; mat.emissiveColor = emissive; mat.specularColor = new BABYLON.Color3(0,0,0);
-    m.material = mat; m.isPickable = false; m.renderingGroupId = 3; return m;
-  }
-  // Lower intensity for red (uninstantiated) and green (empty)
-  const red = mkBase('red', new BABYLON.Color3(0.60,0.10,0.10), new BABYLON.Color3(0.40,0.08,0.08));
-  const green = mkBase('green', new BABYLON.Color3(0.08,0.50,0.12), new BABYLON.Color3(0.06,0.40,0.10));
-  const orange = mkBase('orange', new BABYLON.Color3(0.95,0.55,0.10), new BABYLON.Color3(0.90,0.50,0.08));
-  const blue = mkBase('blue', new BABYLON.Color3(0.20,0.45,0.95), new BABYLON.Color3(0.18,0.38,0.85));
-  state._scanDebug.redBase = red; state._scanDebug.greenBase = green; state._scanDebug.orangeBase = orange; state._scanDebug.blueBase = blue;
-  state._scanDebug.redArr = []; state._scanDebug.greenArr = []; state._scanDebug.orangeArr = []; state._scanDebug.blueArr = []; state._scanDebug.count = 0;
-  try { Log.log('VOXEL', 'scan:start', { res, dia }); } catch {}
-}
-function _pushDot(arr, wx, wy, wz) {
-  // Apply small random jitter so dots don't perfectly stack on the lattice
-  const j = state._scanDebug.jitter || 0;
-  const jx = (Math.random() - 0.5) * j;
-  const jy = (Math.random() - 0.5) * j;
-  const jz = (Math.random() - 0.5) * j;
-  const t = BABYLON.Vector3.Zero(); t.x = wx + jx; t.y = wy + jy; t.z = wz + jz;
-  const sc = new BABYLON.Vector3(1,1,1);
-  const m = BABYLON.Matrix.Compose(sc, BABYLON.Quaternion.Identity(), t);
-  for (let k = 0; k < 16; k++) arr.push(m.m[k]);
-}
-function addVoxelScanPointOutside(wx, wy, wz) { _pushDot(state._scanDebug.redArr, wx, wy, wz); state._scanDebug.count++; if (state._scanDebug.count % 256 === 0) flushVoxelScanPoints(); }
-function addVoxelScanPointInside(wx, wy, wz) { _pushDot(state._scanDebug.greenArr, wx, wy, wz); state._scanDebug.count++; if (state._scanDebug.count % 256 === 0) flushVoxelScanPoints(); }
-function addVoxelScanPointWall(wx, wy, wz) { _pushDot(state._scanDebug.orangeArr, wx, wy, wz); state._scanDebug.count++; if (state._scanDebug.count % 256 === 0) flushVoxelScanPoints(); }
-function addVoxelScanPointRock(wx, wy, wz) { _pushDot(state._scanDebug.blueArr, wx, wy, wz); state._scanDebug.count++; if (state._scanDebug.count % 256 === 0) flushVoxelScanPoints(); }
-function addVoxelScanPointUninst(wx, wy, wz) { _pushDot(state._scanDebug.redArr, wx, wy, wz); state._scanDebug.count++; if (state._scanDebug.count % 256 === 0) flushVoxelScanPoints(); }
-function flushVoxelScanPoints() {
-  try { const b = state._scanDebug.redBase; if (b && state._scanDebug.redArr.length) b.thinInstanceSetBuffer('matrix', new Float32Array(state._scanDebug.redArr), 16, true); } catch {}
-  try { const b2 = state._scanDebug.greenBase; if (b2 && state._scanDebug.greenArr.length) b2.thinInstanceSetBuffer('matrix', new Float32Array(state._scanDebug.greenArr), 16, true); } catch {}
-  try { const b3 = state._scanDebug.orangeBase; if (b3 && state._scanDebug.orangeArr.length) b3.thinInstanceSetBuffer('matrix', new Float32Array(state._scanDebug.orangeArr), 16, true); } catch {}
-  try { const b4 = state._scanDebug.blueBase; if (b4 && state._scanDebug.blueArr.length) b4.thinInstanceSetBuffer('matrix', new Float32Array(state._scanDebug.blueArr), 16, true); } catch {}
-  // Quiet: avoid logging each flush to reduce spam
-}
-function endVoxelScanDebug() {
-  try { state._scanDebug.redBase?.dispose?.(); } catch {}
-  try { state._scanDebug.greenBase?.dispose?.(); } catch {}
-  try { state._scanDebug.orangeBase?.dispose?.(); } catch {}
-  try { state._scanDebug.blueBase?.dispose?.(); } catch {}
-  state._scanDebug.redBase = null; state._scanDebug.greenBase = null; state._scanDebug.orangeBase = null; state._scanDebug.blueBase = null;
-  state._scanDebug.redArr = []; state._scanDebug.greenArr = []; state._scanDebug.orangeArr = []; state._scanDebug.blueArr = []; state._scanDebug.count = 0;
-  try { Log.log('VOXEL', 'scan:end', {}); } catch {}
-}
-
-function clearObbDebug() {
-  try { state._obbDebug.mesh?.dispose?.(); } catch {}
-  state._obbDebug.mesh = null;
-}
-function showObbDebug(corners) {
-  try {
-    clearObbDebug();
-    if (!Array.isArray(corners) || corners.length !== 8) return;
-    const V = (p) => new BABYLON.Vector3(p.x||0, p.y||0, p.z||0);
-    const cs = corners.map(V);
-    const edges = [
-      [cs[0], cs[1]], [cs[1], cs[5]], [cs[5], cs[4]], [cs[4], cs[0]], // bottom rectangle
-      [cs[2], cs[3]], [cs[3], cs[7]], [cs[7], cs[6]], [cs[6], cs[2]], // top rectangle
-      [cs[0], cs[2]], [cs[1], cs[3]], [cs[4], cs[6]], [cs[5], cs[7]]  // verticals
-    ];
-    const lines = BABYLON.MeshBuilder.CreateLineSystem('dbg:obb', { lines: edges }, scene);
-    lines.color = new BABYLON.Color3(0.1, 0.9, 0.9);
-    lines.isPickable = false; lines.renderingGroupId = 3;
-    state._obbDebug.mesh = lines;
-  } catch {}
-}
-
-// Global debug clear handler (used on DB reset)
-try {
-  window.addEventListener('dw:debug:clearAll', () => {
-    try { endVoxelScanDebug(); } catch {}
-    try { clearObbDebug(); } catch {}
-    try { state.debugAabb?.dispose?.(); state.debugAabb = null; } catch {}
-    try { Log.log('VOXEL', 'debug:cleared', {}); } catch {}
-  });
-} catch {}
 
 // Rebuild halos (selection visuals + voxel highlight) when a voxel is picked, and remember last pick
 try {
@@ -553,93 +419,9 @@ try {
   window.addEventListener('dw:selectionChange', (e) => {
     try { Log.log('SELECT', 'event:selectionChange', { selection: (e?.detail?.selection || []) }); } catch {}
   });
-} catch {}
-
-function rebuildHalos() {
-  const report = (ctx, e) => {
-    try { Log.log('ERROR', ctx, { error: String(e && e.message ? e.message : e), stack: e && e.stack ? String(e.stack) : undefined }); } catch {}
-  };
-  try {
-    const selArr = Array.from(state.selection || []);
-    Log.log('HILITE', 'rebuild:start', { sel: selArr, last: state.lastVoxPick || null, locked: state.lockedVoxPick || null });
   } catch {}
-  // clear old torus meshes if any
-  for (const [id, mesh] of state.halos) { try { mesh.dispose(); } catch {} }
-  state.halos.clear();
-  // clear previous OBB selection boxes
-  try { for (const [id, m] of (state.selObb || new Map())) { try { m.dispose?.(); } catch {} } } catch {}
-  try { state.selObb.clear(); } catch {}
-  // clear previous voxel highlight meshes
-  try { for (const [id, m] of (state.voxHl || new Map())) { try { m.dispose?.(); } catch {} } } catch {}
-  try { state.voxHl.clear(); } catch {}
-  // clear multi-voxel selection meshes
-  try { for (const m of (state.voxSelMeshes || [])) { try { m.dispose?.(); } catch {} } } catch {}
-  try { state.voxSelMeshes = []; } catch {}
-  // update highlight layer
-  try { state.hl.removeAllMeshes(); } catch {}
-  const bySpace = new Map((state.built.spaces||[]).map(x => [x.id, x.mesh]));
-  // Glow color intensity from setting
-  let glowK = 0.7;
-  try { const s = Number(localStorage.getItem('dw:ui:glowStrength') || '70') || 70; glowK = Math.max(0.2, Math.min(3.0, s / 100)); } catch {}
-  const byCav = new Map((state.built.caverns||[]).map(x => [x.id, x.mesh]));
-  const blue = new BABYLON.Color3(0.12 * glowK, 0.35 * glowK, 0.7 * glowK);
-  const yellow = new BABYLON.Color3(0.7 * glowK, 0.65 * glowK, 0.15 * glowK);
-  const redGlow = new BABYLON.Color3(0.9 * glowK, 0.18 * glowK, 0.18 * glowK);
-  const subtleBlue = new BABYLON.Color3(0.10 * glowK, 0.28 * glowK, 0.55 * glowK);
-  // Clear any outlines from previous selection
-  try {
-    for (const part of (state?.built?.voxParts || [])) {
-      try { part.renderOutline = false; } catch {}
-    }
-  } catch {}
-  for (const id of state.selection) {
-    const m = bySpace.get(id) || byCav.get(id);
-    if (!m) continue;
-    state.hl.addMesh(m, blue);
-    // Also glow voxel parts for selected spaces (subtle)
-    try {
-      for (const part of (state?.built?.voxParts || [])) {
-        const nm = String(part?.name || '');
-        if (nm.startsWith(`space:${id}:`)) {
-          // Avoid adding voxel thin-instance bases to HighlightLayer to prevent rare full-screen triangle artifacts
-          // Use outline only for subtle emphasis
-          try { part.outlineColor = subtleBlue; part.renderOutline = true; part.outlineWidth = 0.02; } catch {}
-        }
-      }
-    } catch {}
-
-    // Draw OBB selection box (lines) around selected spaces
-    try {
-      const s = (state.barrow.spaces||[]).find(x => x.id === id);
-      if (s) {
-        const sr = s.res || (state.barrow?.meta?.voxelSize || 1);
-        const w = (s.size?.x||0) * sr, h = (s.size?.y||0) * sr, d = (s.size?.z||0) * sr;
-        const hx = w/2, hy = h/2, hz = d/2;
-        const cx = s.origin?.x||0, cy = s.origin?.y||0, cz = s.origin?.z||0;
-        const rx = (s.rotation && typeof s.rotation.x === 'number') ? s.rotation.x : 0;
-        const ry = (s.rotation && typeof s.rotation.y === 'number') ? s.rotation.y : (typeof s.rotY === 'number' ? s.rotY : 0);
-        const rz = (s.rotation && typeof s.rotation.z === 'number') ? s.rotation.z : 0;
-        const q = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz);
-        const mtx = BABYLON.Matrix.Compose(new BABYLON.Vector3(1,1,1), q, new BABYLON.Vector3(cx,cy,cz));
-        const locals = [
-          new BABYLON.Vector3(-hx,-hy,-hz), new BABYLON.Vector3(+hx,-hy,-hz),
-          new BABYLON.Vector3(-hx,+hy,-hz), new BABYLON.Vector3(+hx,+hy,-hz),
-          new BABYLON.Vector3(-hx,-hy,+hz), new BABYLON.Vector3(+hx,-hy,+hz),
-          new BABYLON.Vector3(-hx,+hy,+hz), new BABYLON.Vector3(+hx,+hy,+hz)
-        ];
-        const cs = locals.map(v => BABYLON.Vector3.TransformCoordinates(v, mtx));
-        const edges = [
-          [cs[0], cs[1]], [cs[1], cs[3]], [cs[3], cs[2]], [cs[2], cs[0]], // bottom rectangle
-          [cs[4], cs[5]], [cs[5], cs[7]], [cs[7], cs[6]], [cs[6], cs[4]], // top rectangle
-          [cs[0], cs[4]], [cs[1], cs[5]], [cs[2], cs[6]], [cs[3], cs[7]]  // verticals
-        ];
-        const lines = BABYLON.MeshBuilder.CreateLineSystem(`sel:obb:${id}`, { lines: edges }, scene);
-        lines.color = new BABYLON.Color3(0.1, 0.9, 0.9);
-        lines.isPickable = false; lines.renderingGroupId = 3;
-        state.selObb.set(id, lines);
-      }
-    } catch {}
-
+  
+/*
     // Selected voxel highlight (if any)
     try {
       const s2 = (state.barrow.spaces||[]).find(x => x.id === id);
@@ -853,77 +635,7 @@ function rebuildHalos() {
     }
   } catch {}
 
-  // Multi-voxel selection highlights (independent of space selection)
-  try {
-    const picks = Array.isArray(state.voxSel) ? state.voxSel : [];
-    for (const sel of picks) {
-      const s2 = (state.barrow.spaces||[]).find(x => x.id === sel.id);
-      if (!s2 || !s2.vox || !s2.vox.size) continue;
-      const nx = Math.max(1, s2.vox.size?.x || 1);
-      const ny = Math.max(1, s2.vox.size?.y || 1);
-      const nz = Math.max(1, s2.vox.size?.z || 1);
-      const res = s2.vox.res || s2.res || (state.barrow?.meta?.voxelSize || 1);
-      const ix = sel.x|0, iy = sel.y|0, iz = sel.z|0;
-      if (ix < 0 || iy < 0 || iz < 0 || ix >= nx || iy >= ny || iz >= nz) continue;
-      let hideTop = 0; try { hideTop = Math.max(0, Math.min(ny, Math.floor(Number(s2.voxExposeTop || 0) || 0))); } catch {}
-      const yCut = ny - hideTop; if (iy >= yCut) continue;
-      const centerX = (nx * res) / 2, centerY = (ny * res) / 2, centerZ = (nz * res) / 2;
-      const lx2 = (ix + 0.5) * res - centerX;
-      const ly2 = (iy + 0.5) * res - centerY;
-      const lz2 = (iz + 0.5) * res - centerZ;
-      let q2 = BABYLON.Quaternion.Identity();
-      try {
-        const worldAligned2 = !!(s2.vox && s2.vox.worldAligned);
-        if (!worldAligned2) {
-          const rx2 = Number(s2.rotation?.x ?? 0) || 0;
-          const ry2 = (s2.rotation && typeof s2.rotation.y === 'number') ? Number(s2.rotation.y) : Number(s2.rotY || 0) || 0;
-          const rz2 = Number(s2.rotation?.z ?? 0) || 0;
-          q2 = BABYLON.Quaternion.FromEulerAngles(rx2, ry2, rz2);
-        }
-      } catch {}
-      const parent2 = bySpace.get(sel.id);
-      const box = BABYLON.MeshBuilder.CreateBox(`sel:voxel:multi:${sel.id}:${ix}-${iy}-${iz}`, { size: res * 1.06 }, scene);
-      const mat = new BABYLON.StandardMaterial(`sel:voxel:multi:${sel.id}:${ix}-${iy}-${iz}:mat`, scene);
-      mat.diffuseColor = new BABYLON.Color3(0.25, 0.05, 0.05);
-      mat.emissiveColor = new BABYLON.Color3(0.9, 0.1, 0.1);
-      mat.alpha = 0.35; mat.specularColor = new BABYLON.Color3(0,0,0);
-      try { mat.disableDepthWrite = true; } catch {}
-      mat.backFaceCulling = false; try { mat.zOffset = -2; } catch {}
-      box.material = mat; box.isPickable = false; box.renderingGroupId = 3;
-      try { box.parent = parent2; } catch {}
-      const rotM2 = (() => { try { return BABYLON.Matrix.Compose(new BABYLON.Vector3(1,1,1), q2, BABYLON.Vector3.Zero()); } catch { return BABYLON.Matrix.Identity(); } })();
-      const afterLocal2 = BABYLON.Vector3.TransformCoordinates(new BABYLON.Vector3(lx2, ly2, lz2), rotM2);
-      box.position.set(afterLocal2.x, afterLocal2.y, afterLocal2.z);
-      try { box.rotationQuaternion = BABYLON.Quaternion.Identity(); } catch {}
-      try { state.hl.addMesh(box, redGlow); } catch {}
-      try {
-        const h = (res * 0.52);
-        const c = [
-          new BABYLON.Vector3(-h,-h,-h), new BABYLON.Vector3(+h,-h,-h),
-          new BABYLON.Vector3(-h,+h,-h), new BABYLON.Vector3(+h,+h,-h),
-          new BABYLON.Vector3(-h,-h,+h), new BABYLON.Vector3(+h,-h,+h),
-          new BABYLON.Vector3(-h,+h,+h), new BABYLON.Vector3(+h,+h,+h)
-        ];
-        const edges = [
-          [c[0],c[1]],[c[1],c[3]],[c[3],c[2]],[c[2],c[0]],
-          [c[4],c[5]],[c[5],c[7]],[c[7],c[6]],[c[6],c[4]],
-          [c[0],c[4]],[c[1],c[5]],[c[2],c[6]],[c[3],c[7]]
-        ];
-        const lines = BABYLON.MeshBuilder.CreateLineSystem(`sel:voxel:multi:${sel.id}:${ix}-${iy}-${iz}:edges`, { lines: edges }, scene);
-        lines.color = new BABYLON.Color3(0.95, 0.2, 0.2);
-        lines.isPickable = false; lines.renderingGroupId = 3;
-        try { lines.parent = box; } catch {}
-        lines.position.set(0, 0, 0);
-        try { lines.rotationQuaternion = BABYLON.Quaternion.Identity(); } catch {}
-        const lmat = new BABYLON.StandardMaterial(`sel:voxel:multi:${sel.id}:${ix}-${iy}-${iz}:edges:mat`, scene);
-        lmat.emissiveColor = new BABYLON.Color3(0.95, 0.2, 0.2);
-        lmat.disableDepthWrite = true; try { lmat.zOffset = -2; } catch {}
-        lines.material = lmat;
-        try { state.hl.addMesh(lines, redGlow); } catch {}
-        state.voxSelMeshes.push(box, lines);
-      } catch {}
-    }
-  } catch {}
+  
   // Always glow intersections in yellow
   try {
     for (const x of state?.built?.intersections || []) if (x?.mesh) state.hl.addMesh(x.mesh, yellow);
@@ -938,8 +650,9 @@ function rebuildHalos() {
     }
   } catch {}
 }
+*/
 
-function moveSelection(dx=0, dy=0, dz=0) {
+ function moveSelection(dx=0, dy=0, dz=0) {
   if (_voxOpActive) { try { Log.log('XFORM', 'Move blocked during voxel op', { dx, dy, dz }); } catch {} return; }
   if (!state.selection.size) return;
   const bySpace = new Map((state.barrow.spaces||[]).map(s => [s.id, s]));
@@ -973,9 +686,7 @@ function moveSelection(dx=0, dy=0, dz=0) {
   try { window.dispatchEvent(new CustomEvent('dw:transform', { detail: { kind: 'move', dx, dy, dz, selection: Array.from(state.selection) } })); } catch {}
 }
 
-// Transform buttons handled in eventHandler.mjs
-
-// Pointer selection and double-click handled in eventHandler.mjs
+ 
 
 
 // Compute grid extents to contain all spaces (min 1000 yards)

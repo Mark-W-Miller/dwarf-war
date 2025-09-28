@@ -228,3 +228,28 @@ export function initVoxelHandlers({ scene, engine, camera, state }) {
   return { voxelValueAtWorld, doVoxelPickAtPointer, voxelHitAtPointerForSpace, initVoxelHover };
 }
 
+// Center for Proposed Path (PP) selection: center on selected nodes/segments, or whole path AABB.
+export function getConnectSelectionCenter(state) {
+  try {
+    const path = (state && state._connect && Array.isArray(state._connect.path)) ? state._connect.path : [];
+    const sel = (state && state._connect && state._connect.sel) ? Array.from(state._connect.sel) : [];
+    if (!path || path.length < 2) return null;
+    if (sel && sel.length) {
+      let cx=0, cy=0, cz=0, n=0;
+      for (const sid of sel) {
+        const s = String(sid||'');
+        if (s.startsWith('connect:node:')) {
+          const i = Number(s.split(':').pop()); const p = path[i]; if (!p) continue; cx+=p.x; cy+=p.y; cz+=p.z; n++;
+        } else if (s.startsWith('connect:seg:')) {
+          const i = Number(s.split(':').pop()); const p0 = path[i], p1 = path[i+1]; if (!p0||!p1) continue; cx += (p0.x+p1.x)/2; cy += (p0.y+p1.y)/2; cz += (p0.z+p1.z)/2; n++;
+        }
+      }
+      if (n>0) return new BABYLON.Vector3(cx/n, cy/n, cz/n);
+    }
+    // Fallback to whole path AABB center
+    let minX=Infinity,minY=Infinity,minZ=Infinity,maxX=-Infinity,maxY=-Infinity,maxZ=-Infinity;
+    for (const p of path) { if (!p) continue; if (p.x<minX)minX=p.x; if (p.y<minY)minY=p.y; if (p.z<minZ)minZ=p.z; if(p.x>maxX)maxX=p.x; if(p.y>maxY)maxY=p.y; if(p.z>maxZ)maxZ=p.z; }
+    if (!isFinite(minX)) return null;
+    return new BABYLON.Vector3((minX+maxX)/2, (minY+maxY)/2, (minZ+maxZ)/2);
+  } catch { return null; }
+}
