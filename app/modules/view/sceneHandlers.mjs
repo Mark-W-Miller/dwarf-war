@@ -23,19 +23,10 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
   try { _scryApi = initScryApi({ scene, engine, camera, state, Log }); } catch (e) { logErr('EH:scry:init', e); }
   state._scry = { ball: null, prev: null, exitObs: null, prevWallOpacity: null, prevRockOpacity: null };
 
-  function enterScryMode() { try { _scryApi?.enterScryMode?.(); } catch {} }
-  function exitScryMode() { try { _scryApi?.exitScryMode?.(); } catch {} }
+  function enterScryMode() { try { _scryApi?.enterScryMode?.(); } catch { } }
+  function exitScryMode() { try { _scryApi?.exitScryMode?.(); } catch { } }
 
-  try {
-    scene.onPointerObservable.add((pi) => {
-      try {
-        if (pi.type !== BABYLON.PointerEventTypes.POINTERDOUBLETAP) return;
-        if (state.mode !== 'cavern') return;
-        const pick = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name === 'scryBall');
-        if (pick?.hit && pick.pickedMesh && pick.pickedMesh.name === 'scryBall') enterScryMode();
-      } catch {}
-    });
-  } catch {}
+  // Single onPointerObservable handler below; use a timing window on POINTERDOWN for double‑tap
 
   scene.onPointerObservable.add((pi) => {
     if (_gizmosSuppressed) { return; }
@@ -60,10 +51,10 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
       try {
         const spacePick = scene.pick(scene.pointerX, scene.pointerY, (m) => m && typeof m.name === 'string' && m.name.startsWith('space:'));
         if (spacePick?.hit && spacePick.pickedMesh) {
-          const pickedName = String(spacePick.pickedMesh.name||'');
+          const pickedName = String(spacePick.pickedMesh.name || '');
           _pointerSpaceId = pickedName.slice('space:'.length).split(':')[0];
         }
-      } catch {}
+      } catch { }
       const sid = _pointerSpaceId || state._scry?.spaceId || (Array.from(state.selection || [])[0] || null);
       const s = (state?.barrow?.spaces || []).find(x => x && x.id === sid);
       if (!s || !s.vox || !s.vox.size) return;
@@ -76,11 +67,11 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
         const res = vox.res || s.res || (state?.barrow?.meta?.voxelSize || 1);
         const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), camera);
         const roW = ray.origin.clone(), rdW = ray.direction.clone();
-        const cx = s.origin?.x||0, cy = s.origin?.y||0, cz = s.origin?.z||0;
+        const cx = s.origin?.x || 0, cy = s.origin?.y || 0, cz = s.origin?.z || 0;
         let q = BABYLON.Quaternion.Identity(); const worldAligned = !!(s.vox && s.vox.worldAligned);
-        try { if (!worldAligned) { const rx = Number(s.rotation?.x||0)||0, ry = (typeof s.rotation?.y==='number')?Number(s.rotation.y):Number(s.rotY||0)||0, rz = Number(s.rotation?.z||0)||0; q = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz); } } catch {}
+        try { if (!worldAligned) { const rx = Number(s.rotation?.x || 0) || 0, ry = (typeof s.rotation?.y === 'number') ? Number(s.rotation.y) : Number(s.rotY || 0) || 0, rz = Number(s.rotation?.z || 0) || 0; q = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz); } } catch { }
         const qInv = BABYLON.Quaternion.Inverse(q);
-        const rotInv = (() => { try { return BABYLON.Matrix.Compose(new BABYLON.Vector3(1,1,1), qInv, BABYLON.Vector3.Zero()); } catch { return BABYLON.Matrix.Identity(); } })();
+        const rotInv = (() => { try { return BABYLON.Matrix.Compose(new BABYLON.Vector3(1, 1, 1), qInv, BABYLON.Vector3.Zero()); } catch { return BABYLON.Matrix.Identity(); } })();
         const roL = BABYLON.Vector3.TransformCoordinates(roW.subtract(new BABYLON.Vector3(cx, cy, cz)), rotInv);
         const rdL = BABYLON.Vector3.TransformNormal(rdW, rotInv);
         const minX = -(nx * res) / 2, maxX = +(nx * res) / 2;
@@ -94,7 +85,7 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
         const tmax = Math.min(Math.max(tx1, tx2), Math.max(ty1, ty2), Math.max(tz1, tz2));
         if (tmax >= Math.max(0, tmin)) {
           const EPS = 1e-6; let t = Math.max(tmin, 0) + EPS;
-          const toIdx = (x, y, z) => ({ ix: Math.min(nx-1, Math.max(0, Math.floor((x - minX) / res))), iy: Math.min(ny-1, Math.max(0, Math.floor((y - minY) / res))), iz: Math.min(nz-1, Math.max(0, Math.floor((z - minZ) / res))) });
+          const toIdx = (x, y, z) => ({ ix: Math.min(nx - 1, Math.max(0, Math.floor((x - minX) / res))), iy: Math.min(ny - 1, Math.max(0, Math.floor((y - minY) / res))), iz: Math.min(nz - 1, Math.max(0, Math.floor((z - minZ) / res))) });
           let pos = new BABYLON.Vector3(roL.x + rdL.x * t, roL.y + rdL.y * t, roL.z + rdL.z * t);
           let { ix, iy, iz } = toIdx(pos.x, pos.y, pos.z);
           const stepX = (rdL.x > 0) ? 1 : (rdL.x < 0 ? -1 : 0);
@@ -107,7 +98,7 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
           const tDeltaX = (stepX !== 0) ? Math.abs(res / rdL.x) : Infinity;
           const tDeltaY = (stepY !== 0) ? Math.abs(res / rdL.y) : Infinity;
           const tDeltaZ = (stepZ !== 0) ? Math.abs(res / rdL.z) : Infinity;
-          let hideTop = 0; try { hideTop = Math.max(0, Math.min(ny, Math.floor(Number(s.voxExposeTop || 0) || 0))); } catch {}
+          let hideTop = 0; try { hideTop = Math.max(0, Math.min(ny, Math.floor(Number(s.voxExposeTop || 0) || 0))); } catch { }
           const yCut = ny - hideTop; const data = Array.isArray(vox.data) ? vox.data : [];
           let guard = 0, guardMax = (nx + ny + nz) * 3 + 10;
           while (t <= tmax + EPS && ix >= 0 && iy >= 0 && iz >= 0 && ix < nx && iy < ny && iz < nz && guard++ < guardMax) {
@@ -126,13 +117,21 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
       s.voxPick = pick;
       state.lockedVoxPick = { id: s.id, x: pick.x, y: pick.y, z: pick.z, v: pick.v };
       state.lastVoxPick = { ...state.lockedVoxPick };
-      try { window.dispatchEvent(new CustomEvent('dw:voxelPick', { detail: { id: s.id, i: pick.x, j: pick.y, k: pick.z, v: pick.v } })); } catch {}
-      try { rebuildHalos?.(); } catch {}
+      try { window.dispatchEvent(new CustomEvent('dw:voxelPick', { detail: { id: s.id, i: pick.x, j: pick.y, k: pick.z, v: pick.v } })); } catch { }
+      try { rebuildHalos?.(); } catch { }
       dPick('voxelPick:lock', { id: s.id, x: pick.x, y: pick.y, z: pick.z });
       sLog('cm:lockVoxel', { id: s.id, x: pick.x, y: pick.y, z: pick.z });
       ev.preventDefault(); ev.stopPropagation();
     } catch (e) { logErr('EH:cavern:voxelLock', e); }
   });
+
+  // Failsafe: always reattach camera inputs on pointerup/cancel in case any path detached them
+  try {
+    const canvas = engine.getRenderingCanvas();
+    const reattach = () => { try { camera.inputs?.attached?.pointers?.attachControl(canvas, true); } catch {} };
+    window.addEventListener('pointerup', reattach, { passive: true });
+    window.addEventListener('pointercancel', reattach, { passive: true });
+  } catch {}
 
   try { initViewManipulations({ scene, engine, camera, state, helpers: { getSelectionCenter, getVoxelPickWorldCenter } }); } catch (e) { logErr('EH:view:init', e); }
 
@@ -178,8 +177,8 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
     ensureConnectGizmoFromSel: _gizmo?.ensureConnectGizmoFromSel,
     disposeConnectGizmo: _gizmo?.disposeConnectGizmo,
     setGizmoHudVisible: _gizmo?.setGizmoHudVisible,
-    enterCavernModeForSpace: (id) => { try { _cavernApi?.enterCavernModeForSpace?.(id); } catch {} },
-    exitCavernMode: () => { try { _cavernApi?.exitCavernMode?.(); } catch {} },
+    enterCavernModeForSpace: (id) => { try { _cavernApi?.enterCavernModeForSpace?.(id); } catch { } },
+    exitCavernMode: () => { try { _cavernApi?.exitCavernMode?.(); } catch { } },
     exitScryMode,
     voxelHitAtPointerForSpace: (s) => { try { return _vox?.voxelHitAtPointerForSpace?.(s) || null; } catch { return null; } },
   };
