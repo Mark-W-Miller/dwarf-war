@@ -9,6 +9,7 @@ import path from 'node:path';
 const PORT = process.env.PORT ? Number(process.env.PORT) : 6060;
 const ROOT = path.resolve(process.cwd(), '.');
 const LOG_PATH = path.join(ROOT, '.assistant.log');
+const EXPORT_DIR = path.join(ROOT, 'export');
 
 function append(line) {
   try { fs.appendFileSync(LOG_PATH, line + '\n'); }
@@ -73,6 +74,32 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // Save exported barrow JSON into repo-local exports directory
+  if (pathname === '/export' && req.method === 'POST') {
+    const chunks = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => {
+      try {
+        const raw = Buffer.concat(chunks).toString('utf8');
+        let payload = null;
+        try { payload = JSON.parse(raw); } catch {}
+        const filename = String(payload?.filename || 'barrow.json').replace(/[^a-zA-Z0-9._-]/g, '-');
+        const content = (typeof payload?.content === 'string')
+          ? payload.content
+          : JSON.stringify(payload?.data ?? {}, null, 2);
+        try { fs.mkdirSync(EXPORT_DIR, { recursive: true }); } catch {}
+        const outPath = path.join(EXPORT_DIR, filename);
+        fs.writeFileSync(outPath, content, 'utf8');
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: true, path: path.relative(ROOT, outPath) }));
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: false, error: String(e && e.message ? e.message : e) }));
+      }
+    });
+    return;
+  }
+
   if (pathname === '/log' && req.method === 'GET') {
     try {
       // Clear request via query: /log?session=start
@@ -124,6 +151,7 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`[error-reporter] listening on http://127.0.0.1:${PORT}/log, writing to ${LOG_PATH}`);
+  console.log(`[error-reporter] export endpoint at http://127.0.0.1:${PORT}/export, output dir ${EXPORT_DIR}`);
   // Optional: truncate on startup to avoid stale logs (no marker)
   try { fs.writeFileSync(LOG_PATH, ''); } catch (e) { console.error('truncate failed', e); }
 });

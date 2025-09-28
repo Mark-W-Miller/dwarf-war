@@ -1,5 +1,5 @@
 import { makeDefaultBarrow, mergeInstructions, layoutBarrow } from './modules/barrow/schema.mjs';
-import { loadBarrow, saveBarrow, snapshot } from './modules/barrow/store.mjs';
+import { loadBarrow, saveBarrow, snapshot, inflateAfterLoad } from './modules/barrow/store.mjs';
 import { buildSceneFromBarrow, disposeBuilt } from './modules/barrow/builder.mjs';
 import { Log } from './modules/util/log.mjs';
 import { initCamera } from './modules/view/camera.mjs';
@@ -166,6 +166,38 @@ applyViewToggles();
 applyTextScale?.();
 applyVoxelOpacity?.();
 updateHud();
+
+// Optional: auto-load a saved JSON from the repo's export folder
+// - Honors ?load=<path> query param (relative to server root)
+// - Else tries common defaults: /export/three-spaces.json, then /exports/three-spaces.json
+// When loaded, merges into a fresh default barrow, persists, and rebuilds scene.
+(async function tryLoadExport() {
+  try {
+    const params = new URLSearchParams(location.search || '');
+    const q = params.get('load');
+    const candidates = [];
+    if (q) candidates.push(q);
+    candidates.push('/export/three-spaces.json');
+    candidates.push('/exports/three-spaces.json');
+    for (const rel of candidates) {
+      const url = rel.startsWith('/') ? rel : `/${rel}`;
+      try {
+        const resp = await fetch(url, { cache: 'no-store' });
+        if (!resp.ok) continue;
+        const raw = await resp.json();
+        const data = (() => { try { return inflateAfterLoad(raw); } catch { return raw; } })();
+        // Merge onto a fresh default so required fields exist
+        state.barrow = mergeInstructions(makeDefaultBarrow(), data);
+        saveBarrow(state.barrow); snapshot(state.barrow);
+        rebuildScene();
+        renderDbView(state.barrow);
+        try { Log.log('UI', 'Loaded barrow from export', { url }); } catch {}
+        updateHud();
+        break;
+      } catch {}
+    }
+  } catch (e) { try { Log.log('ERROR', 'Auto-load export failed', { error: String(e && e.message ? e.message : e) }); } catch {} }
+})();
 
 function applyGlowStrength() {
   let strength = 70;

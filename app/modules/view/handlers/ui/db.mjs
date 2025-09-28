@@ -187,14 +187,60 @@ export function initDbUiHandlers(ctx) {
     try { Log.log('UI', 'Reset barrow', {}); } catch {}
   });
 
-  exportBtn?.addEventListener('click', () => {
+  exportBtn?.addEventListener('click', async () => {
     try {
       const toExport = cloneForSave(state.barrow);
+      // Prefer local dev receiver to write file into repo under exports/
+      const id = String(state.barrow.id || 'barrow');
+      const safeId = id.replace(/[^a-zA-Z0-9._-]/g, '-');
+      const ts = new Date();
+      const stamp = [
+        ts.getFullYear(),
+        String(ts.getMonth()+1).padStart(2,'0'),
+        String(ts.getDate()).padStart(2,'0'),
+        '-',
+        String(ts.getHours()).padStart(2,'0'),
+        String(ts.getMinutes()).padStart(2,'0'),
+        String(ts.getSeconds()).padStart(2,'0')
+      ].join('');
+      const filename = `${safeId}-${stamp}.json`;
+      const body = JSON.stringify({ filename, content: JSON.stringify(toExport, null, 2) });
+      let exportedVia = 'download';
+      try {
+        const resp = await fetch('http://localhost:6060/export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+        if (resp && resp.ok) {
+          exportedVia = 'local-export';
+          try {
+            const info = await resp.json().catch(() => null);
+            Log.log('UI', 'Export barrow (server)', { id: state.barrow.id, path: info?.path || `export/${filename}` });
+            return; // done via local server
+          } catch {}
+        }
+      } catch {}
+      // Attempt File System Access API (Chromium): allow user to choose location
+      try {
+        if (window?.showSaveFilePicker) {
+          const handle = await window.showSaveFilePicker({
+            suggestedName: filename,
+            types: [
+              { description: 'JSON', accept: { 'application/json': ['.json'] } }
+            ]
+          });
+          const writable = await handle.createWritable();
+          await writable.write(JSON.stringify(toExport, null, 2));
+          await writable.close();
+          Log.log('UI', 'Export barrow (picker)', { id: state.barrow.id });
+          return;
+        }
+      } catch (e) {
+        // If user cancels or API errors, fall through to download
+      }
+      // Fallback: browser download
       const blob = new Blob([JSON.stringify(toExport, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
-      const a = document.createElement('a'); a.href = url; a.download = `${state.barrow.id || 'barrow'}.json`; a.click();
+      const a = document.createElement('a'); a.href = url; a.download = `${filename}`; a.click();
       setTimeout(() => URL.revokeObjectURL(url), 500);
-      Log.log('UI', 'Export barrow', { id: state.barrow.id });
+      Log.log('UI', 'Export barrow (fallback)', { id: state.barrow.id });
     } catch (e) { Log.log('ERROR', 'Export failed', { error: String(e) }); }
   });
 
