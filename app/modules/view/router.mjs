@@ -53,13 +53,18 @@ function pickRotGizmo({ scene, x, y }) {
   return r?.hit && r.pickedMesh ? r : null;
 }
 function pickMoveGizmo({ scene, x, y }) {
+  // Prefer axis (arrows) first; fall back to the blue disc
+  const ma = scene.pick(x, y,
+    (m) => {
+      const n = m && m.name ? String(m.name) : '';
+      return n.startsWith('moveGizmo:') && !n.startsWith('moveGizmo:disc:');
+    }
+  );
+  if (ma?.hit && ma.pickedMesh) return ma;
   const md = scene.pick(x, y,
     (m) => m && m.name && String(m.name).startsWith('moveGizmo:disc:')
   );
-  const mg = md?.hit ? md : scene.pick(x, y,
-    (m) => m && m.name && String(m.name).startsWith('moveGizmo:')
-  );
-  return mg?.hit && mg.pickedMesh ? mg : null;
+  return md?.hit && md.pickedMesh ? md : null;
 }
 function pickSpace({ scene, state, x, y }) {
   // Primary: triangle-accurate pick against base space meshes only: `space:<id>`
