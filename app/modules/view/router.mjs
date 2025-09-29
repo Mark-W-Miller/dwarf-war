@@ -1,7 +1,7 @@
 // Router orchestrator: delegates hover vs. click/drag to separate modules
 import { log, logErr } from '../util/log.mjs';
 import { routerHandleHover, clearSpaceHover } from './routerHover.mjs';
-import { classifyPointerDown, routerIsOverPPOrGizmo, routerHandleCameraDown, routerHandleCameraMove, routerHandleCameraUp, routerHandlePrimaryClick, routerHandleBrushMove } from './routerClick.mjs';
+import { classifyPointerDown, routerIsOverPPOrGizmo, routerHandleCameraDown, routerHandleCameraMove, routerHandleCameraUp, routerHandlePrimaryClick, routerHandleBrushMove, routerBeginVoxelStroke } from './routerClick.mjs';
 
 function routerLogsEnabled() {
   const v = localStorage.getItem('dw:dev:routerLogs');
@@ -32,7 +32,8 @@ function routerOnPointer(pi, routerState) {
       routerState._down = { x: scene.pointerX, y: scene.pointerY, t: Date.now(), button: e.button, meta: !!e.metaKey, ctrl: !!e.ctrlKey, shift: !!e.shiftKey };
       // Do not start camera if over PP, gizmo, or space
       if (route && (route.hit === 'pp' || route.hit === 'gizmo')) return;
-      if (route && (route.hit === 'space' || route.hit === 'voxel|space')) return;
+      if (route && route.hit === 'voxel|space') { routerBeginVoxelStroke(e, routerState, route); return; }
+      if (route && route.hit === 'space') return;
       routerHandleCameraDown(e, routerState);
     } else if (t === BABYLON.PointerEventTypes.POINTERMOVE) {
       routerHandleCameraMove(routerState);

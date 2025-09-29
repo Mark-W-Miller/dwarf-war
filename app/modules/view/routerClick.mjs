@@ -11,47 +11,59 @@ export function routerHandlePrimaryClick(e, routerState) {
   const isLeft = (e && typeof e.button === 'number') ? (e.button === 0) : true;
   if (!isLeft) return false;
 
-  const mods = { meta: !!e.metaKey, ctrl: !!e.ctrlKey, shift: !!e.shiftKey };
+  const mods = { meta: !!e.metaKey, ctrl: !!e.ctrlKey, shift: !!e.shiftKey, alt: !!e.altKey };
+  const metaOrCtrl = mods.meta || mods.ctrl;
+  const forceSpaceSelection = metaOrCtrl && !mods.shift;
+  const ignorePriorityTargets = metaOrCtrl;
 
-  // 1) PP nodes (Shift toggles, else single select)
-  const pp = pickPPNode({ scene, x, y });
-  if (pp && pp.pickedMesh) {
-    const name = String(pp.pickedMesh.name || '');
-    state._connect = state._connect || {}; if (!(state._connect.sel instanceof Set)) state._connect.sel = new Set();
-    if (mods.shift) {
-      if (state._connect.sel.has(name)) state._connect.sel.delete(name); else state._connect.sel.add(name);
-    } else {
-      state._connect.sel.clear(); state._connect.sel.add(name);
+  // 1) PP nodes (Shift toggles, else single select) — skipped when Cmd/Ctrl held
+  if (!forceSpaceSelection && !ignorePriorityTargets) {
+    const pp = pickPPNode({ scene, x, y });
+    if (pp && pp.pickedMesh) {
+      const name = String(pp.pickedMesh.name || '');
+      state._connect = state._connect || {}; if (!(state._connect.sel instanceof Set)) state._connect.sel = new Set();
+      if (mods.shift) {
+        if (state._connect.sel.has(name)) state._connect.sel.delete(name); else state._connect.sel.add(name);
+      } else {
+        state._connect.sel.clear(); state._connect.sel.add(name);
+      }
+      try { window.dispatchEvent(new CustomEvent('dw:connect:update')); } catch {}
+      log('SELECT', 'pp:select', { name, shift: mods.shift });
+      return true;
     }
-    try { window.dispatchEvent(new CustomEvent('dw:connect:update')); } catch {}
-    log('SELECT', 'pp:select', { name, shift: mods.shift });
-    return true;
   }
 
-  // 2) Space selection (plain click selects; Shift toggles; Cmd/Ctrl also supported)
+  // 2) Voxels (unless Cmd/Ctrl without Shift forces space selection)
   const sp = pickSpace({ scene, state, x, y });
-  if (sp && sp.pickedMesh) {
+  if (!forceSpaceSelection && sp && sp.pickedMesh) {
     const pickedName = String(sp.pickedMesh.name || '');
     const id = pickedName.slice('space:'.length).split(':')[0];
     const space = (state?.barrow?.spaces || []).find(s => s && String(s.id) === String(id)) || null;
     const hasVox = !!(space && space.vox && space.vox.size);
     if (hasVox) {
+      const stroke = routerState._brush || null;
       const hit = voxelHitAtPointerForSpaceClick(routerState, space);
       if (hit) {
-        const addMode = !!mods.shift;
-        ensureVoxSelForClick(routerState, space.id, hit.ix, hit.iy, hit.iz, addMode);
-        // Brush should only start on Shift+Left-Click (add mode)
-        if (addMode) routerState._brush = { active: true, spaceId: space.id, add: true, button: 0 };
-        log('SELECT', 'voxel:click', { id: space.id, i: hit.ix, j: hit.iy, k: hit.iz, add: addMode, brush: !!addMode });
+        const addMode = stroke ? !!stroke.add : !!mods.shift;
+        ensureVoxSelForClick(routerState, space.id, hit.ix, hit.iy, hit.iz, addMode, hit.v);
+        const brushActive = !!(stroke && stroke.spaceId === space.id && stroke.active);
+        log('SELECT', 'voxel:click', { id: space.id, i: hit.ix, j: hit.iy, k: hit.iz, add: addMode, brush: brushActive });
         return true;
       }
     }
-    // Fallback: select the space
+  }
+
+  // 3) Space selection (plain click selects; Shift toggles; Cmd/Ctrl supported)
+  if (sp && sp.pickedMesh) {
+    const pickedName = String(sp.pickedMesh.name || '');
+    const id = pickedName.slice('space:'.length).split(':')[0];
+    if (!(state.selection instanceof Set)) state.selection = new Set(Array.isArray(state.selection) ? state.selection : []);
     if (mods.shift) {
       if (state.selection.has(id)) state.selection.delete(id); else state.selection.add(id);
     } else {
       state.selection.clear(); state.selection.add(id);
     }
+    routerState._brush = null;
     try { window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: Array.from(state.selection) } })); } catch {}
     log('SELECT', 'space:select', { id, shift: mods.shift, meta: mods.meta || mods.ctrl });
     return true;
@@ -247,40 +259,69 @@ function voxelHitAtPointerForSpaceClick(routerState, space) {
   return null;
 }
 
-function ensureVoxSelForClick(routerState, spaceId, ix, iy, iz, addMode) {
+function ensureVoxSelForClick(routerState, spaceId, ix, iy, iz, addMode, voxelValue = null) {
   const { state } = routerState;
   if (!state) return;
   if (!Array.isArray(state.voxSel)) state.voxSel = [];
-  // Clear picks for this space unless in add (brush-extend) mode
-  if (!addMode) state.voxSel = state.voxSel.filter(p => p && p.id !== spaceId);
+  const stroke = routerState?._brush;
+  const isStroke = !!(stroke && stroke.active && stroke.spaceId === spaceId);
+  const shouldClearThisCall = !addMode && (!isStroke || stroke.justStarted === true);
+  // Clear picks for this space unless in add (brush-extend) mode or continuing an active stroke
+  if (shouldClearThisCall) state.voxSel = state.voxSel.filter(p => p && p.id !== spaceId);
   // Avoid duplicates
   const exists = state.voxSel.some(p => p && p.id === spaceId && p.x === ix && p.y === iy && p.z === iz);
-  if (!exists) state.voxSel.push({ id: spaceId, x: ix, y: iy, z: iz });
+  if (!exists) {
+    state.voxSel.push({ id: spaceId, x: ix, y: iy, z: iz });
+    log('VOXEL', 'update', {
+      id: spaceId,
+      size: state.voxSel.length,
+      newest: { id: spaceId, x: ix, y: iy, z: iz, v: voxelValue }
+    });
+  }
 
-  // Mirror voxel selection to scene selection so halos/gizmos stay in sync
-  const prevSelArr = Array.isArray(state.selection)
-    ? state.selection.slice()
-    : (state.selection instanceof Set ? Array.from(state.selection) : []);
+  const prevSelArr = state.selection instanceof Set
+    ? Array.from(state.selection)
+    : Array.isArray(state.selection) ? state.selection.slice() : [];
   if (!(state.selection instanceof Set)) state.selection = new Set(prevSelArr);
-  if (addMode) {
-    state.selection.add(spaceId);
-  } else {
+  let cleared = false;
+  if (state.selection.size) {
     state.selection.clear();
-    state.selection.add(spaceId);
+    cleared = true;
+  } else if (prevSelArr.length) {
+    cleared = true;
   }
-  const nextSelArr = Array.from(state.selection);
-  let selectionChanged = prevSelArr.length !== nextSelArr.length;
-  if (!selectionChanged) {
-    const prevSelSet = new Set(prevSelArr.map(String));
-    for (const id of nextSelArr) {
-      if (!prevSelSet.has(String(id))) { selectionChanged = true; break; }
-    }
-  }
-  if (selectionChanged) {
-    try { window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: nextSelArr } })); } catch {}
+  if (cleared && prevSelArr.length) {
+    window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: [] } }));
   }
 
-  try { window.dispatchEvent(new CustomEvent('dw:transform', { detail: { kind: 'voxsel', id: spaceId, x: ix, y: iy, z: iz, add: addMode } })); } catch {}
+  const spaces = Array.isArray(state?.barrow?.spaces) ? state.barrow.spaces : [];
+  const space = spaces.find((s) => s && String(s.id) === String(spaceId));
+  if (space) {
+    space.voxPick = { x: ix, y: iy, z: iz, v: voxelValue };
+  }
+  state.lastVoxPick = { id: spaceId, x: ix, y: iy, z: iz, v: voxelValue };
+  window.dispatchEvent(new CustomEvent('dw:voxelPick', { detail: { id: spaceId, i: ix, j: iy, k: iz, v: voxelValue } }));
+
+  window.dispatchEvent(new CustomEvent('dw:transform', { detail: { kind: 'voxsel', id: spaceId, x: ix, y: iy, z: iz, add: addMode } }));
+
+  if (isStroke && stroke.justStarted) {
+    stroke.justStarted = false;
+  }
+}
+
+export function routerBeginVoxelStroke(e, routerState, route) {
+  if (!routerState || !route || route.hit !== 'voxel|space') return false;
+  if (e && typeof e.button === 'number' && e.button !== 0) return false;
+  if (e && (e.metaKey || e.ctrlKey) && !(e.shiftKey)) return false;
+  const spaceId = route.id;
+  const { state } = routerState;
+  const space = (state?.barrow?.spaces || []).find(s => s && String(s.id) === String(spaceId)) || null;
+  if (!space || !space.vox || !space.vox.size) return false;
+  const stroke = { active: true, spaceId: space.id, add: !!(e && e.shiftKey), button: 0, justStarted: true };
+  routerState._brush = stroke;
+  const hit = voxelHitAtPointerForSpaceClick(routerState, space);
+  if (hit) ensureVoxSelForClick(routerState, space.id, hit.ix, hit.iy, hit.iz, stroke.add, hit.v);
+  return true;
 }
 
 export function routerHandleBrushMove(routerState) {
@@ -291,5 +332,5 @@ export function routerHandleBrushMove(routerState) {
   if (!space || !space.vox || !space.vox.size) return;
   const hit = voxelHitAtPointerForSpaceClick(routerState, space);
   if (!hit) return;
-  ensureVoxSelForClick(routerState, space.id, hit.ix, hit.iy, hit.iz, !!_brush.add);
+  ensureVoxSelForClick(routerState, space.id, hit.ix, hit.iy, hit.iz, !!_brush.add, hit.v);
 }
