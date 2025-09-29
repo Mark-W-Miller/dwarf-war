@@ -11,6 +11,15 @@ export const Log = (() => {
       const flag = localStorage.getItem('dw:dev:sendLogs');
       if (flag !== '1') return;
     } catch { return; }
+    // Optional class filter: honor dw:log:selected when present
+    try {
+      const cls = obj && (obj.cls || (obj.data && obj.data.cls));
+      const rawSel = localStorage.getItem('dw:log:selected');
+      if (rawSel) {
+        const arr = JSON.parse(rawSel);
+        if (Array.isArray(arr) && cls && !arr.includes(String(cls))) return;
+      }
+    } catch {}
     try {
       const url = 'http://localhost:6060/log';
       const data = { type: 'log', ...obj };
@@ -54,7 +63,14 @@ export const Log = (() => {
       notify();
     },
     log(cls, msg, data) {
-      const e = { time: Date.now(), cls: String(cls || 'LOG'), msg: String(msg || ''), data };
+      // Normalize message: stringify objects to avoid "[object Object]" in UI
+      let msgStr = '';
+      if (typeof msg === 'string') msgStr = msg;
+      else if (msg != null) {
+        try { msgStr = JSON.stringify(msg); }
+        catch { msgStr = String(msg); }
+      }
+      const e = { time: Date.now(), cls: String(cls || 'LOG'), msg: msgStr, data };
       entries.push(e);
       classesRuntime.add(e.cls);
       if (!classesAll.has(e.cls)) { classesAll.add(e.cls); persistAll(); }

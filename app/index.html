@@ -103,31 +103,67 @@
           var _origLog = console.log.bind(console);
           var _origInfo = console.info.bind(console);
           var _origDebug = console.debug ? console.debug.bind(console) : function(){};
+          function fmtArg(a){
+            if (typeof a === 'string') return a;
+            try { return JSON.stringify(a); } catch { try { return String(a); } catch { return '[unprintable]'; } }
+          }
           console.error = function(){
-            try { send({ type: 'console:error', args: Array.from(arguments).map(String) }); } catch {}
+            try { send({ type: 'console:error', args: Array.from(arguments).map(fmtArg) }); } catch {}
             return _origErr.apply(console, arguments);
           };
           console.warn = function(){
-            try { send({ type: 'console:warn', args: Array.from(arguments).map(String) }); } catch {}
+            try { send({ type: 'console:warn', args: Array.from(arguments).map(fmtArg) }); } catch {}
             return _origWarn.apply(console, arguments);
           };
+          function selectedAllowsClass(cls){
+            try {
+              var raw = localStorage.getItem('dw:log:selected');
+              if (!raw) return true; // no selection stored -> allow
+              var arr = JSON.parse(raw);
+              if (Array.isArray(arr)) return !cls || arr.indexOf(String(cls)) !== -1;
+              return true;
+            } catch { return true; }
+          }
           function maybeForward(kind){
             try { return (localStorage.getItem('dw:dev:sendLogs') === '1'); } catch { return false; }
           }
+          function extractClassFromArgs(args){
+            if (!args || !args.length) return null;
+            var first = String(args[0] || '');
+            var m = first.match(/^\[([^\]]+)\]$/);
+            return m ? m[1] : null;
+          }
           console.log = function(){
-            try { if (maybeForward('log')) send({ type: 'console:log', args: Array.from(arguments).map(String) }); } catch {}
+            try {
+              if (maybeForward('log')) {
+                var cls = extractClassFromArgs(arguments);
+                if (selectedAllowsClass(cls)) send({ type: 'console:log', args: Array.from(arguments).map(fmtArg) });
+              }
+            } catch {}
             return _origLog.apply(console, arguments);
           };
           console.info = function(){
-            try { if (maybeForward('info')) send({ type: 'console:info', args: Array.from(arguments).map(String) }); } catch {}
+            try {
+              if (maybeForward('info')) {
+                var cls = extractClassFromArgs(arguments);
+                if (selectedAllowsClass(cls)) send({ type: 'console:info', args: Array.from(arguments).map(fmtArg) });
+              }
+            } catch {}
             return _origInfo.apply(console, arguments);
           };
           if (console.debug) {
             console.debug = function(){
-              try { if (maybeForward('debug')) send({ type: 'console:debug', args: Array.from(arguments).map(String) }); } catch {}
+              try {
+                if (maybeForward('debug')) {
+                  var cls = extractClassFromArgs(arguments);
+                  if (selectedAllowsClass(cls)) send({ type: 'console:debug', args: Array.from(arguments).map(fmtArg) });
+                }
+              } catch {}
               return _origDebug.apply(console, arguments);
             };
           }
+          console.warn = (function(orig){ return function(){ try { if (maybeForward('warn')) { var cls = extractClassFromArgs(arguments); if (selectedAllowsClass(cls)) send({ type: 'console:warn', args: Array.from(arguments).map(fmtArg) }); } } catch {} return orig.apply(console, arguments); }; })(_origWarn);
+          console.error = (function(orig){ return function(){ try { if (maybeForward('error')) { var cls = extractClassFromArgs(arguments); if (selectedAllowsClass(cls)) send({ type: 'console:error', args: Array.from(arguments).map(fmtArg) }); } } catch {} return orig.apply(console, arguments); }; })(_origErr);
         } catch {}
       })();
     </script>
