@@ -248,6 +248,12 @@ function voxelHoverForSpace(routerState, space) {
   if (!space || !space.vox || !space.vox.size) { if (routerLogsEnabled()) log('HOVER_VOXEL', 'noSpaceOrVox', { id: space?.id || null, x, y }); return false; }
   const worldAligned = !!(space.vox && space.vox.worldAligned);
   if (routerLogsEnabled()) log('HOVER_VOXEL', 'start', { id: space.id, hasVox: true, worldAligned, x, y });
+  // Do not highlight voxels for selected spaces (requested behavior)
+  const isSelected = !!(state?.selection && state.selection.has(space.id));
+  if (isSelected) {
+    if (routerLogsEnabled()) log('HOVER_VOXEL', 'selectedSkip', { id: space.id });
+    return false;
+  }
   if (state.lockedVoxPick && state.lockedVoxPick.id === space.id) { if (routerLogsEnabled()) log('HOVER_VOXEL', 'locked', { id: space.id, x, y }); return false; }
   routerState._voxHoverLast = routerState._voxHoverLast || 0;
   const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
