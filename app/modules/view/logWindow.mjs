@@ -117,15 +117,32 @@ export function initLogWindow({ Log }) {
     ro.observe(root);
   } catch {}
 
+  const SELECTED_KEY = 'dw:log:selected';
   const selected = new Set();
+  // Load persisted selection
+  try {
+    const raw = localStorage.getItem(SELECTED_KEY);
+    if (raw) {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) arr.forEach(c => selected.add(String(c)));
+    }
+  } catch {}
   function renderFilters() {
     const classes = Array.from(Log.getClasses()).sort();
-    if (selected.size === 0) classes.forEach(c => selected.add(c)); else classes.forEach(c => { if (!selected.has(c)) selected.add(c); });
+    // If no persisted selection yet, default-select all current classes and persist once
+    if (selected.size === 0 && classes.length > 0) {
+      classes.forEach(c => selected.add(c));
+      try { localStorage.setItem(SELECTED_KEY, JSON.stringify(Array.from(selected))); } catch {}
+    }
     filtersBox.innerHTML='';
     classes.forEach(c => {
       const label=document.createElement('label'); label.style.cssText='display:inline-flex;align-items:center;gap:6px;';
       const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=selected.has(c);
-      cb.addEventListener('change', ()=>{ if(cb.checked) selected.add(c); else selected.delete(c); renderEntries(); });
+      cb.addEventListener('change', ()=>{
+        if(cb.checked) selected.add(c); else selected.delete(c);
+        try { localStorage.setItem(SELECTED_KEY, JSON.stringify(Array.from(selected))); } catch {}
+        renderEntries();
+      });
       label.appendChild(cb); label.appendChild(document.createTextNode(c)); filtersBox.appendChild(label);
     });
   }

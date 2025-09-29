@@ -59,17 +59,32 @@ export function initLogTab(panelContent) {
   // Central tab system handles activation; we only log and render when active
   tabBtn.addEventListener('click', () => { try { Log.log('UI', 'Activate tab', { tab: 'Log' }); } catch {} });
 
+  const SELECTED_KEY = 'dw:log:selected';
   const selected = new Set();
+  // Load persisted selection
+  try {
+    const raw = localStorage.getItem(SELECTED_KEY);
+    if (raw) {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) arr.forEach(c => selected.add(String(c)));
+    }
+  } catch {}
   function renderFilters() {
     const classes = Array.from(Log.getClasses()).sort();
-    // If nothing selected yet, select all. Otherwise, auto-include any new classes by default
-    if (selected.size === 0) classes.forEach(c => selected.add(c));
-    else classes.forEach(c => { if (!selected.has(c)) selected.add(c); });
+    // If no persisted selection yet, default-select all current classes and persist once
+    if (selected.size === 0 && classes.length > 0) {
+      classes.forEach(c => selected.add(c));
+      try { localStorage.setItem(SELECTED_KEY, JSON.stringify(Array.from(selected))); } catch {}
+    }
     filtersBox.innerHTML = '';
     classes.forEach(c => {
       const label = document.createElement('label'); label.style.display = 'inline-flex'; label.style.alignItems = 'center'; label.style.gap = '6px';
       const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = selected.has(c);
-      cb.addEventListener('change', () => { if (cb.checked) selected.add(c); else selected.delete(c); renderEntries(); });
+      cb.addEventListener('change', () => {
+        if (cb.checked) selected.add(c); else selected.delete(c);
+        try { localStorage.setItem(SELECTED_KEY, JSON.stringify(Array.from(selected))); } catch {}
+        renderEntries();
+      });
       label.appendChild(cb); label.appendChild(document.createTextNode(c));
       filtersBox.appendChild(label);
     });

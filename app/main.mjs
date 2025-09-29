@@ -302,6 +302,14 @@ initUIHandlers({
   sceneApi
 });
 
+// After UI handlers are wired, ensure selection side-effects (gizmos) are applied
+try {
+  if (state.selection && state.selection.size > 0) {
+    try { sceneApi.ensureRotWidget?.(); sceneApi.ensureMoveWidget?.(); } catch {}
+    try { window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: Array.from(state.selection) } })); } catch {}
+  }
+} catch {}
+
 // Initialize optional tabs now that tabs exist
 function ensureVoxelTab() {
   try {
