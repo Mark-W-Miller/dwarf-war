@@ -1,7 +1,7 @@
 // Router orchestrator: delegates hover vs. click/drag to separate modules
 import { log, logErr } from '../util/log.mjs';
 import { routerHandleHover, clearSpaceHover } from './routerHover.mjs';
-import { classifyPointerDown, routerIsOverPPOrGizmo, routerHandleCameraDown, routerHandleCameraMove, routerHandleCameraUp } from './routerClick.mjs';
+import { classifyPointerDown, routerIsOverPPOrGizmo, routerHandleCameraDown, routerHandleCameraMove, routerHandleCameraUp, routerHandlePrimaryClick, routerHandleBrushMove } from './routerClick.mjs';
 
 function routerLogsEnabled() {
   const v = localStorage.getItem('dw:dev:routerLogs');
@@ -26,22 +26,38 @@ function routerOnPointer(pi, routerState) {
     const { scene, camera, state, Log, canvas } = routerState;
     const t = pi.type; const e = pi.event || window.event;
     if (t === BABYLON.PointerEventTypes.POINTERDOWN) {
-      if (routerLogsEnabled()) { const route = classifyPointerDown({ scene, state, e }); log('ROUTER', 'route', route); }
-      if (routerIsOverPPOrGizmo(e, routerState)) {
-        camera.inputs?.attached?.pointers?.detachControl(canvas);
-        if (e.pointerId != null && canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId);
-        log('GIZMO', 'pre-capture:router', { pointerId: e.pointerId ?? null });
-        return;
-      }
+      const route = classifyPointerDown({ scene, state, e });
+      if (routerLogsEnabled()) { log('ROUTER', 'route', route); }
+      // Record down info to detect click on pointerup
+      routerState._down = { x: scene.pointerX, y: scene.pointerY, t: Date.now(), button: e.button, meta: !!e.metaKey, ctrl: !!e.ctrlKey, shift: !!e.shiftKey };
+      // Do not start camera if over PP, gizmo, or space
+      if (route && (route.hit === 'pp' || route.hit === 'gizmo')) return;
+      if (route && (route.hit === 'space' || route.hit === 'voxel|space')) return;
       routerHandleCameraDown(e, routerState);
     } else if (t === BABYLON.PointerEventTypes.POINTERMOVE) {
       routerHandleCameraMove(routerState);
+      // Extend voxel brush when active (Shift+LC across voxels)
+      routerHandleBrushMove(routerState);
       routerHandleHover(routerState);
     } else if (t === BABYLON.PointerEventTypes.POINTERUP) {
+      // Detect quick click (small move + short time) for primary actions
+      try {
+        const up = { x: scene.pointerX, y: scene.pointerY, t: Date.now(), button: (pi.event && typeof pi.event.button === 'number') ? pi.event.button : 0 };
+        const dn = routerState._down || null;
+        const dx = dn ? Math.abs(up.x - dn.x) : 9999;
+        const dy = dn ? Math.abs(up.y - dn.y) : 9999;
+        const dt = dn ? (up.t - dn.t) : 9999;
+        const isClick = dn && up.button === dn.button && dx <= 3 && dy <= 3 && dt <= 320;
+        if (isClick) {
+          // Prefer selection/click actions before releasing camera gesture
+          routerHandlePrimaryClick(pi.event || window.event, routerState);
+        }
+      } catch {}
       routerHandleCameraUp(routerState);
+      // End brush
+      try { routerState._brush = null; } catch {}
     }
   } catch (e) { logErr('router:onPointer', e); }
 }
 
 export { classifyPointerDown } from './routerClick.mjs';
-
