@@ -310,21 +310,22 @@ function voxelHoverForSpace(routerState, space) {
       const flat = ix + nx * (iy + ny * iz);
       const v = data[flat] ?? 0;
       if (v !== 0) {
-        const prev = space.voxPick || null;
-        if (!prev || prev.x !== ix || prev.y !== iy || prev.z !== iz) {
-          space.voxPick = { x: ix, y: iy, z: iz, v };
-          try { window.dispatchEvent(new CustomEvent('dw:voxelPick', { detail: { id: space.id, i: ix, j: iy, k: iz, v } })); } catch {}
-          // Compute world-space center of the hovered voxel for diagnostics
-          const lx = minX + (ix + 0.5) * res;
-          const ly = minY + (iy + 0.5) * res;
-          const lz = minZ + (iz + 0.5) * res;
-          const localCenter = new BABYLON.Vector3(lx, ly, lz);
-          let worldCenter = localCenter.clone();
-          if (!worldAligned) {
-            const rotM = BABYLON.Matrix.Compose(new BABYLON.Vector3(1,1,1), q, BABYLON.Vector3.Zero());
-            worldCenter = BABYLON.Vector3.TransformCoordinates(localCenter, rotM);
-          }
-          worldCenter.x += cx; worldCenter.y += cy; worldCenter.z += cz;
+        // Compute world/local center of hovered voxel (diagnostic + transient box)
+        const lx = minX + (ix + 0.5) * res;
+        const ly = minY + (iy + 0.5) * res;
+        const lz = minZ + (iz + 0.5) * res;
+        const localCenter = new BABYLON.Vector3(lx, ly, lz);
+        let worldCenter = localCenter.clone();
+        if (!worldAligned) {
+          const rotM = BABYLON.Matrix.Compose(new BABYLON.Vector3(1,1,1), q, BABYLON.Vector3.Zero());
+          worldCenter = BABYLON.Vector3.TransformCoordinates(localCenter, rotM);
+        }
+        worldCenter.x += cx; worldCenter.y += cy; worldCenter.z += cz;
+
+        // Log only on voxel change; do NOT mutate selection/pick state on hover
+        const last = routerState._voxHoverLastHit || { id: null, i: -1, j: -1, k: -1 };
+        const changed = !(last.id === space.id && last.i === ix && last.j === iy && last.k === iz);
+        if (changed && routerLogsEnabled()) {
           log('HOVER_VOXEL', 'hover', {
             id: space.id,
             i: ix, j: iy, k: iz, v,
@@ -332,15 +333,15 @@ function voxelHoverForSpace(routerState, space) {
             world: { x: worldCenter.x, y: worldCenter.y, z: worldCenter.z },
             res
           });
-
-          // Draw a transient hover voxel box for unselected spaces
-          try {
-            const isSelected = !!(state?.selection && state.selection.has(space.id));
-            if (!isSelected) {
-              ensureVoxelHoverBox(routerState, space, new BABYLON.Vector3(lx, ly, lz), q, res);
-            }
-          } catch {}
         }
+        // Draw a transient hover voxel box for unselected spaces
+        try {
+          const isSelected = !!(state?.selection && state.selection.has(space.id));
+          if (!isSelected) {
+            ensureVoxelHoverBox(routerState, space, new BABYLON.Vector3(lx, ly, lz), q, res);
+          }
+        } catch {}
+        routerState._voxHoverLastHit = { id: space.id, i: ix, j: iy, k: iz };
         return true;
       }
     }
@@ -349,6 +350,7 @@ function voxelHoverForSpace(routerState, space) {
     else { iz += stepZ; t = tMaxZ + EPS; tMaxZ += tDeltaZ; }
   }
   if (routerLogsEnabled()) log('HOVER_VOXEL', 'noVoxelHit', { id: space.id, x, y });
+  routerState._voxHoverLastHit = null;
   return false;
 }
 
