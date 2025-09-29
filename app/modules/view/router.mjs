@@ -7,7 +7,7 @@ export function initRouter(ctx) {
   // Single Babylon onPointerObservable for logging + camera gestures
   const { scene, engine, camera, state, Log } = ctx;
   const canvas = engine.getRenderingCanvas();
-  const routerState = { scene, engine, camera, state, Log, canvas, gesture: { decision: null, ptrId: null, panGuard: null } };
+  const routerState = { scene, engine, camera, state, Log, canvas, gesture: { decision: null, ptrId: null, panGuard: null, lastX: 0, lastY: 0 } };
   scene.onPointerObservable.add((pi) => routerOnPointer(pi, routerState));
 }
 
@@ -71,35 +71,37 @@ function routerOnPointer(pi, rs) {
 }
 
 function routerHandleCameraDown(e, rs) {
-  const { scene, camera, state, canvas } = rs;
-  if (state.mode !== 'edit') return false;
-  const mods = modsOfEvent(e);
-  const emulateRC = (e.button === 0 && !!mods.ctrl && !mods.cmd);
-  const isRightLike = (e.button === 2) || emulateRC;
-  let decision = null;
-  if (e.button === 0 && !mods.cmd && !mods.shift && !mods.ctrl && !mods.alt) decision = 'rotate';
-  else if (isRightLike && !mods.cmd) decision = 'rotate';
-  else if (isRightLike && mods.cmd) decision = 'pan';
-  else return false;
-
-  if (decision === 'pan') {
-    camera.panningMouseButton = 2;
-    const ptr = camera?.inputs?.attached?.pointers;
-    if (ptr && Array.isArray(ptr.buttons)) ptr.buttons = [0];
-    if (ptr && typeof ptr.useCtrlForPanning === 'boolean') ptr.useCtrlForPanning = false;
-  } else {
-    camera.panningMouseButton = 1;
-    rs.gesture.panGuard = { saved: camera.panningSensibility };
-    camera.panningSensibility = 1e9;
-  }
-  rs.gesture.decision = decision;
+  const { scene, camera, canvas } = rs;
+  // Mapping (per user): LC → rotate, RC → pan. No modifiers considered.
+  let decision = 'unknown';
+  if (e.button === 0) decision = 'rotate';
+  else if (e.button === 2) decision = 'pan';
 
   const ptr = camera?.inputs?.attached?.pointers;
-  if (ptr && decision === 'rotate') {
-    const rotateBtn = (e.button === 0) ? 0 : 2;
-    if (Array.isArray(ptr.buttons)) ptr.buttons = [rotateBtn];
-    if (typeof ptr.useCtrlForPanning === 'boolean') ptr.useCtrlForPanning = false;
+  switch (decision) {
+    case 'pan': {
+      // Manual pan using pointer deltas. While panning on RC, disable camera rotation by switching allowed rotate button.
+      rs.gesture.lastX = scene.pointerX;
+      rs.gesture.lastY = scene.pointerY;
+      try { if (ptr && Array.isArray(ptr.buttons)) ptr._savedButtons = [...ptr.buttons]; } catch {}
+      try { if (ptr && Array.isArray(ptr.buttons)) ptr.buttons = [0]; } catch {}
+      break;
+    }
+    case 'rotate': {
+      // Allow rotation on LC by temporarily switching the allowed rotate button to 0, then restore on pointer up.
+      try { if (ptr && Array.isArray(ptr.buttons)) ptr._savedButtons = [...ptr.buttons]; } catch {}
+      try { if (ptr && Array.isArray(ptr.buttons)) ptr.buttons = [0]; } catch {}
+      // Guard against stray pan inertia while rotating
+      rs.gesture.panGuard = { saved: camera.panningSensibility };
+      camera.panningSensibility = 1e9;
+      break;
+    }
+    default: {
+      // Not a camera gesture we own (e.g., LC). Let other handlers run.
+      return false;
+    }
   }
+  rs.gesture.decision = decision;
 
   if (e.pointerId != null && canvas.setPointerCapture) {
     canvas.setPointerCapture(e.pointerId);
@@ -107,7 +109,7 @@ function routerHandleCameraDown(e, rs) {
   }
   camera.inputs?.attached?.pointers?.attachControl(canvas, true);
   ensureTargetDot({ scene, camera });
-  log('CAMERA', decision === 'pan' ? 'start:pan' : 'start:orbit', { button: e.button, mods });
+  log('CAMERA', decision === 'pan' ? 'start:pan' : 'start:orbit', { button: e.button });
   return true;
 }
 
@@ -116,21 +118,43 @@ function routerHandleCameraMove(rs) {
   if (gesture.decision === 'rotate') {
     camera.inertialPanningX = 0;
     camera.inertialPanningY = 0;
+  } else if (gesture.decision === 'pan') {
+    // Manual pan fallback using pointer deltas (invert to match ArcRotateCamera)
+    const lastX = (gesture.lastX ?? scene.pointerX);
+    const lastY = (gesture.lastY ?? scene.pointerY);
+    const dx = scene.pointerX - lastX;
+    const dy = scene.pointerY - lastY;
+    const sens = Math.max(1, Number(camera.panningSensibility) || 40);
+    camera.inertialPanningX -= dx / sens;
+    camera.inertialPanningY -= dy / sens;
+    gesture.lastX = scene.pointerX;
+    gesture.lastY = scene.pointerY;
   }
   // log('CAMERA', 'drag', { decision: gesture.decision, x: scene.pointerX, y: scene.pointerY });
 }
 
 function routerHandleCameraUp(rs) {
   const { camera, canvas, gesture } = rs;
-  camera.panningMouseButton = 1;
+  // Release capture
   if (gesture.ptrId != null && canvas.releasePointerCapture) {
     canvas.releasePointerCapture(gesture.ptrId);
   }
-  camera.inputs?.attached?.pointers?.attachControl(canvas, true);
+  // Restore any temporary camera dynamics
   if (gesture.panGuard && typeof gesture.panGuard.saved === 'number') {
     camera.panningSensibility = gesture.panGuard.saved;
   }
-  rs.gesture = { decision: null, ptrId: null, panGuard: null };
+  // Restore pointer input rotate buttons if we changed them
+  try {
+    const ptr = camera?.inputs?.attached?.pointers;
+    if (ptr && Array.isArray(ptr._savedButtons)) {
+      ptr.buttons = [...ptr._savedButtons];
+      delete ptr._savedButtons;
+    }
+  } catch {}
+  // Ensure camera input remains attached for next gesture
+  camera.inputs?.attached?.pointers?.attachControl(canvas, true);
+  // Reset gesture state
+  rs.gesture = { decision: null, ptrId: null, panGuard: null, lastX: 0, lastY: 0 };
 }
 
 function routerIsOverPPOrGizmo(e, rs) {

@@ -102,7 +102,8 @@ const wGrid = grids.wGrid;
 
 // App state
 const state = {
-  mode: 'edit', // 'edit' | 'game'
+  // View mode: 'war' | 'cavern' | 'scry'
+  mode: 'war',
   running: true,
   barrow: null,
   built: null, // handles to built meshes
@@ -270,7 +271,10 @@ applyGlowStrength();
 
 function updateHud() {
   const barrowName = state.barrow?.id || 'Barrow';
-  const modeLabel = (state.mode === 'cavern') ? 'Cavern' : (state.mode === 'edit' ? 'Edit' : 'Game');
+  let modeLabel = 'War Room';
+  if (state.mode === 'cavern') modeLabel = 'Cavern';
+  else if (state.mode === 'scry') modeLabel = 'Scryball';
+  else if (state.mode === 'war') modeLabel = 'War Room';
   hud.textContent = `Dwarf War • ${barrowName} • ${modeLabel} ${state.running ? '• Running' : '• Paused'}`;
 }
 function setMode(mode) { state.mode = mode; updateHud(); }

@@ -6,17 +6,11 @@ export function initEditUiHandlers(ctx) {
   const { saveBarrow = () => {}, snapshot = () => {}, rebuildScene = () => {}, rebuildHalos = () => {}, scheduleGridUpdate = () => {}, renderDbView = () => {}, pickPointOnPlane = () => null, moveSelection = () => {}, setMode = () => {}, setRunning = () => {}, ensureRotWidget = () => {}, ensureMoveWidget = () => {}, disposeRotWidget = () => {}, disposeMoveWidget = () => {}, applyViewToggles = () => {}, updateGridExtent = () => {}, camApi = {} } = helpers;
 
   const { btnTunnel, btnConnect, btnFinalize, btnEmpty, btnRock, btnWall, minInput } = dom;
-  const { toggleRunBtn, modeRadios, showNamesCb, gridGroundCb, gridXYCb, gridYZCb, axisArrowsCb, resizeGridBtn, spaceTypeEl, spaceNameEl, newSpaceBtn, fitViewBtn, sizeXEl, sizeYEl, sizeZEl, sizeLockEl, tStepEl, txMinus, txPlus, tyMinus, tyPlus, tzMinus, tzPlus } = dom;
+  const { showNamesCb, gridGroundCb, gridXYCb, gridYZCb, axisArrowsCb, resizeGridBtn, spaceTypeEl, spaceNameEl, newSpaceBtn, fitViewBtn, sizeXEl, sizeYEl, sizeZEl, sizeLockEl, tStepEl, txMinus, txPlus, tyMinus, tyPlus, tzMinus, tzPlus } = dom;
 
   if (minInput) minInput.addEventListener('change', () => { try { const v = Math.max(1, Number(minInput.value)||6); localStorage.setItem('dw:ops:minTunnelWidth', String(v)); } catch {} });
 
-  // Mode + Run/Pause
-  Array.isArray(modeRadios) && modeRadios.forEach(r => r && r.addEventListener('change', () => setMode(r.value)));
-  toggleRunBtn?.addEventListener('click', () => {
-    setRunning(!state.running);
-    if (toggleRunBtn) toggleRunBtn.textContent = state.running ? 'Pause' : 'Run';
-    Log?.log('UI', 'Toggle run', { running: state.running });
-  });
+  // Mode controls removed (build later). Run/Pause removed.
 
   // View toggles
   function readBool(key, dflt = true) { try { const v = localStorage.getItem(key); return v == null ? dflt : v !== '0'; } catch { return dflt; } }
