@@ -6,11 +6,13 @@ export function initTabsUI({ renderDbView, state, Log }) {
   const tabsBar = document.createElement('div'); tabsBar.className = 'tabs';
   const tabEditBtn = document.createElement('button'); tabEditBtn.className = 'tab active'; tabEditBtn.dataset.tab = 'tab-edit'; tabEditBtn.textContent = 'Edit';
   const tabDbBtn = document.createElement('button'); tabDbBtn.className = 'tab'; tabDbBtn.dataset.tab = 'tab-db'; tabDbBtn.textContent = 'Database';
+  const tabTestBtn = document.createElement('button'); tabTestBtn.className = 'tab'; tabTestBtn.dataset.tab = 'tab-test'; tabTestBtn.textContent = 'Test';
   const tabSettingsBtn = document.createElement('button'); tabSettingsBtn.className = 'tab'; tabSettingsBtn.dataset.tab = 'tab-settings'; tabSettingsBtn.textContent = 'Settings';
-  tabsBar.appendChild(tabEditBtn); tabsBar.appendChild(tabDbBtn); tabsBar.appendChild(tabSettingsBtn);
+  tabsBar.appendChild(tabEditBtn); tabsBar.appendChild(tabDbBtn); tabsBar.appendChild(tabTestBtn); tabsBar.appendChild(tabSettingsBtn);
 
   const editPane = document.createElement('div'); editPane.id = 'tab-edit'; editPane.className = 'tab-pane active';
   const dbPane = document.createElement('div'); dbPane.id = 'tab-db'; dbPane.className = 'tab-pane';
+  const testPane = document.createElement('div'); testPane.id = 'tab-test'; testPane.className = 'tab-pane';
   const settingsPane = document.createElement('div'); settingsPane.id = 'tab-settings'; settingsPane.className = 'tab-pane';
 
   // Move existing children into editPane
@@ -19,6 +21,7 @@ export function initTabsUI({ renderDbView, state, Log }) {
   panelContent.appendChild(tabsBar);
   panelContent.appendChild(editPane);
   panelContent.appendChild(dbPane);
+  panelContent.appendChild(testPane);
   panelContent.appendChild(settingsPane);
   for (const node of existing) editPane.appendChild(node);
 
@@ -56,6 +59,5 @@ export function initTabsUI({ renderDbView, state, Log }) {
   });
   try { window.dispatchEvent(new CustomEvent('dw:tabsReady', { detail: {} })); } catch {}
 
-  return { editPane, dbPane, settingsPane, tabsBar };
+  return { editPane, dbPane, testPane, settingsPane, tabsBar };
 }
-

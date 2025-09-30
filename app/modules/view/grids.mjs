@@ -138,14 +138,17 @@ export function initGrids(scene) {
       minY = Math.min(minY, vmin.y); maxY = Math.max(maxY, vmax.y);
       minZ = Math.min(minZ, vmin.z); maxZ = Math.max(maxZ, vmax.z);
     }
-    if (meshes.length === 0 || !isFinite(minX)) {
+    const hasContent = meshes.length > 0 && isFinite(minX);
+    if (!hasContent) {
       const minSize = 1000; const s = minSize / 800;
       ground.scaling.x = s; ground.scaling.z = s; vGrid.scaling.x = s; vGrid.scaling.y = s; wGrid.scaling.x = s; wGrid.scaling.y = s;
       // Default arrows to half of minSize minus margin
       const half = minSize / 2; const margin = 10;
       try { arrows.set(half - margin, half - margin, half - margin); } catch {}
+      try { shadowCatcher?.setEnabled(false); } catch {}
       return;
     }
+    try { shadowCatcher?.setEnabled(true); } catch {}
     const pad = 100;
     const maxAbsX = Math.max(Math.abs(minX), Math.abs(maxX));
     const maxAbsY = Math.max(Math.abs(minY), Math.abs(maxY));

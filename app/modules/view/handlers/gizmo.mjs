@@ -42,30 +42,42 @@ export function getVoxelPickWorldCenter(state) {
 
 // Pre-pointer capture for gizmo priority (connect/move/rot)
 export function initGizmoHandlers({ scene, engine, camera, state }) {
-  try {
-    // Keep release wiring here; pre-capture is handled by a central router
-    const release = () => {
-      try { const canvas = engine.getRenderingCanvas(); camera.inputs?.attached?.pointers?.attachControl(canvas, true); } catch {}
-    };
-    window.addEventListener('pointerup', release, { passive: true });
-    window.addEventListener('pointercancel', release, { passive: true });
-  } catch {}
+  // Keep release wiring here; pre-capture is handled by a central router
+  const release = () => {
+    const canvas = engine.getRenderingCanvas();
+    camera.inputs?.attached?.pointers?.attachControl(canvas, true);
+  };
+  window.addEventListener('pointerup', release, { passive: true });
+  window.addEventListener('pointercancel', release, { passive: true });
 }
 
 // Callable by the central router before other handlers run.
 // Detaches camera pointer input and captures pointer if a gizmo part is hit.
 // Returns true if a gizmo element was targeted.
+const GIZMO_ACTIVE_MODES = new Set(['edit', 'war']);
+
 export function preGizmoPreCapture({ scene, engine, camera, state, ev }) {
   try {
-    if (state.mode !== 'edit') return false;
+    if (!GIZMO_ACTIVE_MODES.has(state.mode)) return false;
     if (ev && (ev.metaKey || ev.shiftKey || ev.ctrlKey || ev.altKey)) return false;
-    // Priority: connect gizmo → move disc/axes → rot rings
-    const hitConnect = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('connectGizmo:'));
+    // Priority: connect gizmo arrow → connect disc → move disc/axes → rot rings
+    const arrowPick = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('connectGizmo:arrow:'));
+    const planePick = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name === 'connectGizmo:disc:grab');
+    const fallbackPick = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('connectGizmo:'));
+    const hitConnect = arrowPick?.hit ? arrowPick : (planePick?.hit ? planePick : fallbackPick);
     let hitName = '';
     if (hitConnect?.hit) { hitName = hitConnect?.pickedMesh?.name || ''; }
     else {
-      const hitMoveDisc = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('moveGizmo:disc:'));
-      const hitMove = hitMoveDisc?.hit ? hitMoveDisc : scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('moveGizmo:'));
+      const moveArrowPick = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('moveGizmo:') && !String(m.name).startsWith('moveGizmo:disc:'));
+      const moveDiscGrabPick = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('moveGizmo:disc:') && String(m.name).endsWith(':grab'));
+      let hitMove = moveArrowPick?.hit ? moveArrowPick : null;
+      if (!hitMove?.hit && moveDiscGrabPick?.hit) hitMove = moveDiscGrabPick;
+      if (!hitMove?.hit) {
+        hitMove = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('moveGizmo:disc:'));
+      }
+      if (!hitMove?.hit) {
+        hitMove = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('moveGizmo:'));
+      }
       if (hitMove?.hit) { hitName = hitMove?.pickedMesh?.name || ''; }
       else {
         const hitRot = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('rotGizmo:'));
@@ -162,8 +174,28 @@ export function initTransformGizmos({ scene, engine, camera, state, renderDbView
   function setRingActive(axis) { try { const mats = rotWidget?.mats || {}; const kActive = 1.1, kDim = 0.35; for (const k of ['x','y','z']) { const m = mats[k]; if (!m) continue; const base = (m.metadata && m.metadata.baseColor) ? m.metadata.baseColor : (m.emissiveColor || new BABYLON.Color3(1,1,1)); const kf = (k === axis) ? kActive : kDim; m.emissiveColor = base.scale(kf); m.diffuseColor = base.scale(0.05 + 0.15 * kf); } rotWidget.activeAxis = axis; } catch {} }
 
   // Move widget state and API
-  let moveWidget = { mesh: null, root: null, arrowMeshes: [], disc: null, spaceId: null, dragging: false, preDrag: false, mode: 'axis', downX: 0, downY: 0, startPoint: null, startOrigin: null, offsetVec: null, planeNormal: null, planeY: 0, group: false, groupIDs: [], groupCenter: null, startCenter: null, startById: null, groupKey: '', axis: null, axisStart: 0 };
-  function disposeMoveWidget() { try { try { for (const m of moveWidget.arrowMeshes || []) { try { m.dispose(); } catch {} } } catch {} moveWidget.arrowMeshes = []; try { moveWidget.disc?.dispose?.(); } catch {} if (moveWidget.root) { try { moveWidget.root.dispose(); } catch {} } try { (scene.meshes||[]).filter(m => (m?.name||'').startsWith('moveGizmo:')).forEach(m => { try { m.dispose(); } catch {} }); } catch {} } catch {} moveWidget = { mesh: null, root: null, arrowMeshes: [], disc: null, spaceId: null, dragging: false, preDrag: false, mode: 'axis', downX: 0, downY: 0, startPoint: null, startOrigin: null, offsetVec: null, planeNormal: null, planeY: 0, group: false, groupIDs: [], groupCenter: null, startCenter: null, startById: null, groupKey: '', axis: null, axisStart: 0 }; }
+  let moveWidget = { mesh: null, root: null, arrowMeshes: [], disc: null, discGrab: null, discRadius: 0, spaceId: null, dragging: false, preDrag: false, mode: 'axis', downX: 0, downY: 0, startPoint: null, startOrigin: null, offsetVec: null, planeNormal: null, planeY: 0, group: false, groupIDs: [], groupCenter: null, startCenter: null, startById: null, groupKey: '', axis: null, axisStart: 0 };
+  function disposeMoveWidget() {
+    try {
+      try {
+        for (const m of moveWidget.arrowMeshes || []) {
+          try { m.dispose(); } catch {}
+        }
+      } catch {}
+      moveWidget.arrowMeshes = [];
+      try { moveWidget.disc?.dispose?.(); } catch {}
+      try { moveWidget.discGrab?.dispose?.(); } catch {}
+      if (moveWidget.root) {
+        try { moveWidget.root.dispose(); } catch {}
+      }
+      try {
+        (scene.meshes || []).filter(m => (m?.name || '').startsWith('moveGizmo:')).forEach(m => {
+          try { m.dispose(); } catch {}
+        });
+      } catch {}
+    } catch {}
+    moveWidget = { mesh: null, root: null, arrowMeshes: [], disc: null, discGrab: null, discRadius: 0, spaceId: null, dragging: false, preDrag: false, mode: 'axis', downX: 0, downY: 0, startPoint: null, startOrigin: null, offsetVec: null, planeNormal: null, planeY: 0, group: false, groupIDs: [], groupCenter: null, startCenter: null, startById: null, groupKey: '', axis: null, axisStart: 0 };
+  }
   function ensureMoveWidget() {
     try {
       const sel = Array.from(state.selection || []); const builtSpaces = (state?.built?.spaces || []); const entries = builtSpaces.filter(x => sel.includes(x.id)); if (entries.length < 1) { disposeMoveWidget(); return; }
@@ -177,14 +209,101 @@ export function initTransformGizmos({ scene, engine, camera, state, renderDbView
       }
       if (!moveWidget.root || moveWidget.group !== isGroup || moveWidget.groupKey !== groupKey || (moveWidget.root.isDisposed && moveWidget.root.isDisposed())) {
         disposeMoveWidget(); const scalePct = Number(localStorage.getItem('dw:ui:gizmoScale') || '100') || 100; const gScale=Math.max(0.1,scalePct/100); const len=Math.max(0.8,rad*1.2*gScale); const shaft=Math.max(0.04,len*0.05); const tipLen=Math.max(0.08,len*0.18); const tipDia=shaft*2.2; const root = new BABYLON.TransformNode(`moveGizmo:root:${id}`, scene);
-        const mkArrow=(axis,color)=>{ const name=`moveGizmo:${axis}:${id}`; const shaftMesh=BABYLON.MeshBuilder.CreateCylinder(`${name}:shaft`,{height:len-tipLen,diameter:shaft},scene); const tipMesh=BABYLON.MeshBuilder.CreateCylinder(`${name}:tip`,{height:tipLen,diameterTop:0,diameterBottom:tipDia,tessellation:24},scene); const mat=new BABYLON.StandardMaterial(`${name}:mat`,scene); mat.diffuseColor=color.scale(0.25); mat.emissiveColor=color.scale(0.5); mat.specularColor=new BABYLON.Color3(0,0,0); shaftMesh.material=mat; tipMesh.material=mat; shaftMesh.isPickable=true; tipMesh.isPickable=true; shaftMesh.alwaysSelectAsActiveMesh=true; tipMesh.alwaysSelectAsActiveMesh=true; shaftMesh.renderingGroupId=2; tipMesh.renderingGroupId=2; shaftMesh.parent=root; tipMesh.parent=root; if(axis==='x'){shaftMesh.rotation.z=-Math.PI/2; tipMesh.rotation.z=-Math.PI/2; shaftMesh.position.x=(len-tipLen)/2; tipMesh.position.x=len-tipLen/2;} else if(axis==='y'){shaftMesh.position.y=(len-tipLen)/2; tipMesh.position.y=len-tipLen/2;} else {shaftMesh.rotation.x=Math.PI/2; tipMesh.rotation.x=Math.PI/2; shaftMesh.position.z=(len-tipLen)/2; tipMesh.position.z=len-tipLen/2;} shaftMesh.name=name; tipMesh.name=name; try{moveWidget.arrowMeshes.push(shaftMesh,tipMesh);}catch{}};
+        const mkArrow = (axis, color) => {
+          const name = `moveGizmo:${axis}:${id}`;
+          const shaftMesh = BABYLON.MeshBuilder.CreateCylinder(`${name}:shaft`, { height: len - tipLen, diameter: shaft }, scene);
+          const tipMesh = BABYLON.MeshBuilder.CreateCylinder(`${name}:tip`, { height: tipLen, diameterTop: 0, diameterBottom: tipDia, tessellation: 24 }, scene);
+          const grabMesh = BABYLON.MeshBuilder.CreateCylinder(`${name}:grab`, { height: len, diameter: Math.max(shaft * 3.2, 0.18), tessellation: 16 }, scene);
+          const mat = new BABYLON.StandardMaterial(`${name}:mat`, scene);
+          mat.diffuseColor = color.scale(0.25);
+          mat.emissiveColor = color.scale(0.5);
+          mat.specularColor = new BABYLON.Color3(0, 0, 0);
+          shaftMesh.material = mat;
+          tipMesh.material = mat;
+          grabMesh.material = mat;
+          shaftMesh.isPickable = true;
+          tipMesh.isPickable = true;
+          grabMesh.isPickable = true;
+          grabMesh.isVisible = false;
+          shaftMesh.alwaysSelectAsActiveMesh = true;
+          tipMesh.alwaysSelectAsActiveMesh = true;
+          grabMesh.alwaysSelectAsActiveMesh = true;
+          shaftMesh.renderingGroupId = 3;
+          tipMesh.renderingGroupId = 3;
+          grabMesh.renderingGroupId = 3;
+          shaftMesh.parent = root;
+          tipMesh.parent = root;
+          grabMesh.parent = root;
+          if (axis === 'x') {
+            shaftMesh.rotation.z = -Math.PI / 2;
+            tipMesh.rotation.z = -Math.PI / 2;
+            grabMesh.rotation.z = -Math.PI / 2;
+            const offset = (len - tipLen) / 2;
+            shaftMesh.position.x = offset;
+            tipMesh.position.x = len - tipLen / 2;
+            grabMesh.position.x = offset;
+          } else if (axis === 'y') {
+            shaftMesh.position.y = (len - tipLen) / 2;
+            tipMesh.position.y = len - tipLen / 2;
+            grabMesh.position.y = (len - tipLen) / 2;
+          } else {
+            shaftMesh.rotation.x = Math.PI / 2;
+            tipMesh.rotation.x = Math.PI / 2;
+            grabMesh.rotation.x = Math.PI / 2;
+            const offset = (len - tipLen) / 2;
+            shaftMesh.position.z = offset;
+            tipMesh.position.z = len - tipLen / 2;
+            grabMesh.position.z = offset;
+          }
+          shaftMesh.name = name;
+          tipMesh.name = name;
+          grabMesh.name = name;
+          try { moveWidget.arrowMeshes.push(shaftMesh, tipMesh, grabMesh); } catch {}
+        };
         moveWidget.root=root; moveWidget.mesh=root; moveWidget.spaceId=id; moveWidget.group=isGroup; moveWidget.groupIDs = sel.slice(); moveWidget.groupKey = groupKey; mkArrow('y', new BABYLON.Color3(0.2, 0.95, 0.2));
-        try { const discR=Math.max(0.6,rad*0.9*gScale); const disc=BABYLON.MeshBuilder.CreateDisc(`moveGizmo:disc:${id}`,{radius:discR,tessellation:64},scene); const dmat=new BABYLON.StandardMaterial(`moveGizmo:disc:${id}:mat`,scene); dmat.diffuseColor=new BABYLON.Color3(0.15,0.5,0.95); dmat.emissiveColor=new BABYLON.Color3(0.12,0.42,0.85); dmat.alpha=0.18; dmat.specularColor=new BABYLON.Color3(0,0,0); disc.material=dmat; disc.isPickable=true; disc.alwaysSelectAsActiveMesh=true; disc.renderingGroupId=2; disc.rotation.x=Math.PI/2; moveWidget.disc=disc; } catch {}
+        try {
+          const discR = Math.max(0.6, rad * 0.9 * gScale);
+          const disc = BABYLON.MeshBuilder.CreateDisc(`moveGizmo:disc:${id}`, { radius: discR, tessellation: 64 }, scene);
+          const dmat = new BABYLON.StandardMaterial(`moveGizmo:disc:${id}:mat`, scene);
+          dmat.diffuseColor = new BABYLON.Color3(0.15, 0.5, 0.95);
+          dmat.emissiveColor = new BABYLON.Color3(0.12, 0.42, 0.85);
+          dmat.alpha = 0.18;
+          dmat.specularColor = new BABYLON.Color3(0, 0, 0);
+          disc.material = dmat;
+          disc.isPickable = true;
+          disc.alwaysSelectAsActiveMesh = true;
+          disc.renderingGroupId = 3;
+          disc.rotation.x = Math.PI / 2;
+          moveWidget.disc = disc;
+          moveWidget.discRadius = discR;
+          const discGrab = BABYLON.MeshBuilder.CreateDisc(`moveGizmo:disc:${id}:grab`, { radius: discR * 1.02, tessellation: 48 }, scene);
+          discGrab.isVisible = false;
+          discGrab.isPickable = true;
+          discGrab.alwaysSelectAsActiveMesh = true;
+          discGrab.renderingGroupId = 3;
+          discGrab.rotation.x = Math.PI / 2;
+          discGrab.parent = root;
+          discGrab.material = dmat;
+          moveWidget.discGrab = discGrab;
+        } catch {}
       }
       // Position
       if (isGroup) { try { moveWidget.root.parent=null; moveWidget.root.position.copyFrom(center); } catch {}; moveWidget.groupCenter=center; moveWidget.startCenter=null; }
       else { const mesh=entries[0].mesh; try { moveWidget.root.parent=null; mesh.computeWorldMatrix(true); mesh.refreshBoundingInfo(); const bb=mesh.getBoundingInfo()?.boundingBox; const min=bb?.minimumWorld, max=bb?.maximumWorld; const c=(min&&max)? new BABYLON.Vector3((min.x+max.x)/2,(min.y+max.y)/2,(min.z+max.z)/2) : mesh.position.clone(); moveWidget.root.position.copyFrom(c); } catch {} }
-      try { const p=isGroup ? center : (entries[0]?.mesh?.position || center); moveWidget.planeY = planeY || 0; if (moveWidget.disc) { moveWidget.disc.position.x = p.x; moveWidget.disc.position.y = moveWidget.planeY; moveWidget.disc.position.z = p.z; } } catch {}
+      try {
+        const p = isGroup ? center : (entries[0]?.mesh?.position || center);
+        moveWidget.planeY = planeY || 0;
+        if (moveWidget.disc) {
+          moveWidget.disc.position.x = p.x;
+          moveWidget.disc.position.y = moveWidget.planeY;
+          moveWidget.disc.position.z = p.z;
+        }
+        if (moveWidget.discGrab) {
+          moveWidget.discGrab.position.x = p.x;
+          moveWidget.discGrab.position.y = moveWidget.planeY;
+          moveWidget.discGrab.position.z = p.z;
+        }
+      } catch {}
     } catch { try { disposeMoveWidget(); } catch {} }
   }
 
@@ -256,54 +375,140 @@ export function initTransformGizmos({ scene, engine, camera, state, renderDbView
 
   // ——————————— Connect (PP) gizmo ———————————
   function disposeConnectGizmo() {
-    try {
-      const g = state?._connect?.gizmo; if (!g) return;
-      try { g.parts?.forEach(m => { try { m?.dispose?.(); } catch {} }); } catch {}
-      try { g.root?.dispose?.(); } catch {}
-      state._connect.gizmo = null;
-    } catch {}
+    const gizmo = state?._connect?.gizmo;
+    if (!gizmo) return;
+
+    const parts = Array.isArray(gizmo.parts) ? gizmo.parts : [];
+    for (const part of parts) {
+      part?.dispose?.();
+    }
+
+    gizmo.root?.dispose?.();
+    state._connect.gizmo = null;
   }
+
   function ensureConnectGizmoFromSel() {
-    try {
-      state._connect = state._connect || {};
-      const sel = (state._connect.sel instanceof Set) ? state._connect.sel : null;
-      if (!sel || sel.size === 0) { disposeConnectGizmo(); return; }
-      const nodes = Array.isArray(state._connect.nodes) ? state._connect.nodes : [];
-      const byName = new Map(nodes.map(n => [n?.mesh?.name || `connect:node:${n?.i}`, n?.mesh]).filter(([k,v]) => !!v));
-      let cx=0, cy=0, cz=0, n=0;
-      for (const name of sel) { const m = byName.get(String(name)); if (m && m.position) { cx += m.position.x; cy += m.position.y; cz += m.position.z; n++; } }
-      if (!n) { disposeConnectGizmo(); return; }
-      const center = { x: cx/n, y: cy/n, z: cz/n };
-      const gOld = state._connect.gizmo || {};
-      let root = gOld.root; let parts = gOld.parts || [];
-      if (!root || root.isDisposed?.()) {
-        try { parts.forEach(m => { try { m?.dispose?.(); } catch {} }); } catch {}
-        parts = [];
-        root = new BABYLON.TransformNode('connectGizmo:root', scene);
-        // Disc (XZ move)
-        try {
-          const disc = BABYLON.MeshBuilder.CreateDisc('connectGizmo:disc', { radius: 0.25, tessellation: 48 }, scene);
-          const dmat = new BABYLON.StandardMaterial('connectGizmo:disc:mat', scene);
-          dmat.diffuseColor = new BABYLON.Color3(0.15, 0.5, 0.95);
-          dmat.emissiveColor = new BABYLON.Color3(0.12, 0.42, 0.85);
-          dmat.alpha = 0.22; dmat.specularColor = new BABYLON.Color3(0,0,0);
-          dmat.disableDepthWrite = true; disc.zOffset = 8;
-          disc.material = dmat; disc.isPickable = true; disc.alwaysSelectAsActiveMesh = true; disc.renderingGroupId = 2; disc.rotation.x = Math.PI/2; disc.parent = root; parts.push(disc);
-        } catch {}
-        // Y arrow
-        try {
-          const shaft = BABYLON.MeshBuilder.CreateCylinder('connectGizmo:arrow:y:shaft', { height: 0.5, diameter: 0.03, tessellation: 16 }, scene);
-          const tip = BABYLON.MeshBuilder.CreateCylinder('connectGizmo:arrow:y:tip', { height: 0.12, diameterTop: 0, diameterBottom: 0.08, tessellation: 16 }, scene);
-          const amat = new BABYLON.StandardMaterial('connectGizmo:arrow:y:mat', scene);
-          amat.diffuseColor = new BABYLON.Color3(0.2, 0.95, 0.2); amat.emissiveColor = new BABYLON.Color3(0.18, 0.8, 0.18);
-          shaft.material = amat; tip.material = amat; shaft.isPickable = true; tip.isPickable = true; shaft.renderingGroupId=2; tip.renderingGroupId=2; try { shaft.zOffset = 8; tip.zOffset = 8; } catch {}
-          shaft.parent = root; tip.parent = root; shaft.position.y = 0.25; tip.position.y = 0.56; parts.push(shaft, tip);
-        } catch {}
-        state._connect.gizmo = { root, parts };
+    state._connect = state._connect || {};
+    const sel = (state._connect.sel instanceof Set) ? state._connect.sel : null;
+    if (!sel || sel.size === 0) { disposeConnectGizmo(); return; }
+
+    const nodes = Array.isArray(state._connect.nodes) ? state._connect.nodes : [];
+    const path = Array.isArray(state._connect.path) ? state._connect.path : [];
+    const byName = new Map(nodes
+      .map((n) => [n?.mesh?.name || `connect:node:${n?.i}`, n?.mesh])
+      .filter(([, mesh]) => !!mesh)
+    );
+
+    let cx = 0, cy = 0, cz = 0, count = 0;
+    for (const rawName of sel) {
+      const name = String(rawName);
+      let px = null, py = null, pz = null;
+      const mesh = byName.get(name);
+      if (mesh?.position) {
+        px = mesh.position.x;
+        py = mesh.position.y;
+        pz = mesh.position.z;
+      } else if (name.startsWith('connect:node:')) {
+        const idx = Number(name.split(':').pop());
+        if (Number.isFinite(idx) && path[idx]) {
+          const p = path[idx];
+          px = Number(p.x) || 0;
+          py = Number(p.y) || 0;
+          pz = Number(p.z) || 0;
+        }
+      } else if (name.startsWith('connect:seg:')) {
+        const idx = Number(name.split(':').pop());
+        if (Number.isFinite(idx) && path[idx] && path[idx + 1]) {
+          const p0 = path[idx];
+          const p1 = path[idx + 1];
+          px = ((Number(p0.x) || 0) + (Number(p1.x) || 0)) / 2;
+          py = ((Number(p0.y) || 0) + (Number(p1.y) || 0)) / 2;
+          pz = ((Number(p0.z) || 0) + (Number(p1.z) || 0)) / 2;
+        }
       }
-      try { root.position.set(center.x, center.y, center.z); } catch {}
-      try { state._connect.gizmo.center = { x: center.x, y: center.y, z: center.z }; } catch {}
-    } catch {}
+
+      if (px != null && py != null && pz != null) {
+        cx += px;
+        cy += py;
+        cz += pz;
+        count += 1;
+      }
+    }
+
+    if (!count) {
+      disposeConnectGizmo();
+      return;
+    }
+
+    const center = { x: cx / count, y: cy / count, z: cz / count };
+    const existing = state._connect.gizmo || {};
+    let root = existing.root;
+    let parts = Array.isArray(existing.parts) ? existing.parts : [];
+
+    if (!root || root.isDisposed?.()) {
+      for (const part of parts) {
+        part?.dispose?.();
+      }
+      parts = [];
+
+      root = new BABYLON.TransformNode('connectGizmo:root', scene);
+
+      const disc = BABYLON.MeshBuilder.CreateDisc('connectGizmo:disc', { radius: 1.0, tessellation: 64 }, scene);
+      const discMat = new BABYLON.StandardMaterial('connectGizmo:disc:mat', scene);
+      discMat.diffuseColor = new BABYLON.Color3(0.15, 0.5, 0.95);
+      discMat.emissiveColor = new BABYLON.Color3(0.12, 0.42, 0.85);
+      discMat.alpha = 0.22;
+      discMat.specularColor = new BABYLON.Color3(0, 0, 0);
+      discMat.disableDepthWrite = true;
+      disc.zOffset = 8;
+      disc.material = discMat;
+      disc.isPickable = false;
+      disc.alwaysSelectAsActiveMesh = true;
+      disc.renderingGroupId = 3;
+      disc.rotation.x = Math.PI / 2;
+      disc.parent = root;
+      parts.push(disc);
+
+      const planeGrab = BABYLON.MeshBuilder.CreateDisc('connectGizmo:disc:grab', { radius: 1.05, tessellation: 24 }, scene);
+      planeGrab.isVisible = false;
+      planeGrab.isPickable = true;
+      planeGrab.alwaysSelectAsActiveMesh = true;
+      planeGrab.renderingGroupId = 3;
+      planeGrab.rotation.x = Math.PI / 2;
+      planeGrab.parent = root;
+      parts.push(planeGrab);
+
+      const shaft = BABYLON.MeshBuilder.CreateCylinder('connectGizmo:arrow:y:shaft', { height: 1.0, diameter: 0.08, tessellation: 24 }, scene);
+      const tip = BABYLON.MeshBuilder.CreateCylinder('connectGizmo:arrow:y:tip', { height: 0.24, diameterTop: 0, diameterBottom: 0.2, tessellation: 24 }, scene);
+      const grab = BABYLON.MeshBuilder.CreateCylinder('connectGizmo:arrow:y:grab', { height: 1.05, diameter: 0.4, tessellation: 16 }, scene);
+      const arrowMat = new BABYLON.StandardMaterial('connectGizmo:arrow:y:mat', scene);
+      arrowMat.diffuseColor = new BABYLON.Color3(0.2, 0.95, 0.2);
+      arrowMat.emissiveColor = new BABYLON.Color3(0.18, 0.8, 0.18);
+      shaft.material = arrowMat;
+      tip.material = arrowMat;
+      shaft.isPickable = true;
+      tip.isPickable = true;
+      grab.isPickable = true;
+      grab.isVisible = false;
+      shaft.renderingGroupId = 3;
+      tip.renderingGroupId = 3;
+      grab.renderingGroupId = 3;
+      shaft.zOffset = 8;
+      tip.zOffset = 8;
+      grab.zOffset = 8;
+      shaft.parent = root;
+      tip.parent = root;
+      grab.parent = root;
+      shaft.position.y = 0.5;
+      tip.position.y = 1.12;
+      grab.position.y = 0.5;
+      parts.push(shaft, tip, grab);
+
+      state._connect.gizmo = { root, parts };
+    }
+
+    root.position.set(center.x, center.y, center.z);
+    state._connect.gizmo.center = { x: center.x, y: center.y, z: center.z };
   }
 
   // ——————————— Live intersection preview (selected vs others) ———————————
@@ -480,11 +685,13 @@ export function initTransformGizmos({ scene, engine, camera, state, renderDbView
   scene.onPointerObservable.add((pi) => {
     try {
       // Widget actions only in Edit mode
-      if (state.mode !== 'edit') return;
+      if (!GIZMO_ACTIVE_MODES.has(state.mode)) return;
       const type = pi.type;
       // Connect gizmo press (PP)
       if (type === BABYLON.PointerEventTypes.POINTERDOWN) {
-        const hitConn = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('connectGizmo:'));
+        const hitArrow = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('connectGizmo:arrow:'));
+        const hitPlane = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name === 'connectGizmo:disc:grab');
+        const hitConn = hitArrow?.hit ? hitArrow : (hitPlane?.hit ? hitPlane : scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('connectGizmo:')));
         if (hitConn?.hit && hitConn.pickedMesh) {
           try { pi.event?.stopImmediatePropagation?.(); pi.event?.stopPropagation?.(); pi.event?.preventDefault?.(); pi.skipOnPointerObservable = true; } catch {}
           const ev = pi.event || window.event;
@@ -494,13 +701,25 @@ export function initTransformGizmos({ scene, engine, camera, state, renderDbView
             const center = (state?._connect?.gizmo?.center) ? new BABYLON.Vector3(state._connect.gizmo.center.x, state._connect.gizmo.center.y, state._connect.gizmo.center.z) : new BABYLON.Vector3(0,0,0);
             const widget = (state._connect._drag = state._connect._drag || {});
             widget.active = true; widget.mode = null; widget.axisStart = 0; widget.startPick = null; widget.sens = (() => { try { return Math.max(0.05, Math.min(2.0, Number(localStorage.getItem('dw:ui:ppMoveSens') || '1.0'))); } catch { return 1.0; } })() * (ev && ev.altKey ? 0.25 : 1.0);
-            if (hitConn.pickedMesh.name === 'connectGizmo:disc') {
-              widget.mode = 'plane'; widget.planeN = new BABYLON.Vector3(0,1,0); widget.planeP = new BABYLON.Vector3(0, center.y, 0);
-              widget.startPick = pickPointOnPlane(widget.planeN, widget.planeP) || center.clone();
-            } else {
+            const meshName = String(hitConn.pickedMesh.name || '');
+            let axisMode = !meshName.startsWith('connectGizmo:disc');
+            if (!axisMode) {
+              const pickPoint = hitConn.pickedPoint;
+              if (pickPoint && center) {
+                const dx = pickPoint.x - center.x;
+                const dz = pickPoint.z - center.z;
+                const radial = Math.hypot(dx, dz);
+                if (radial <= 0.35) axisMode = true;
+              }
+            }
+
+            if (axisMode) {
               widget.mode = 'y'; const axis = new BABYLON.Vector3(0,1,0); const view = camera.getForwardRay()?.direction || new BABYLON.Vector3(0,0,1);
               let n = BABYLON.Vector3.Cross(axis, BABYLON.Vector3.Cross(view, axis)); if (n.lengthSquared() < 1e-4) n = BABYLON.Vector3.Cross(axis, new BABYLON.Vector3(0,1,0)); if (n.lengthSquared() < 1e-4) n = BABYLON.Vector3.Cross(axis, new BABYLON.Vector3(1,0,0)); try { n.normalize(); } catch {}
               widget.planeN = n; widget.planeP = center.clone(); const sp = pickPointOnPlane(widget.planeN, widget.planeP) || center.clone(); widget.startPick = sp; widget.axisStart = BABYLON.Vector3.Dot(sp, axis);
+            } else {
+              widget.mode = 'plane'; widget.planeN = new BABYLON.Vector3(0,1,0); widget.planeP = new BABYLON.Vector3(0, center.y, 0);
+              widget.startPick = pickPointOnPlane(widget.planeN, widget.planeP) || center.clone();
             }
             try { const canvas = engine.getRenderingCanvas(); camera.inputs?.attached?.pointers?.detachControl(canvas); if (ev && ev.pointerId != null && canvas.setPointerCapture) canvas.setPointerCapture(ev.pointerId); } catch {}
             return;
@@ -573,14 +792,35 @@ export function initTransformGizmos({ scene, engine, camera, state, renderDbView
           }
         }
         // Move widget press
-        let pick2 = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('moveGizmo:disc:'));
-        if (!pick2?.hit) pick2 = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('moveGizmo:'));
+        const moveArrowPick = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('moveGizmo:') && !String(m.name).startsWith('moveGizmo:disc:'));
+        const moveDiscGrabPick = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('moveGizmo:disc:') && String(m.name).endsWith(':grab'));
+        let pick2 = moveArrowPick?.hit ? moveArrowPick : null;
+        if (!pick2?.hit && moveDiscGrabPick?.hit) {
+          pick2 = moveDiscGrabPick;
+        }
+        if (!pick2?.hit) {
+          pick2 = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('moveGizmo:disc:'));
+        }
+        if (!pick2?.hit) {
+          pick2 = scene.pick(scene.pointerX, scene.pointerY, (m) => m && m.name && String(m.name).startsWith('moveGizmo:'));
+        }
         if (pick2?.hit && pick2.pickedMesh && String(pick2.pickedMesh.name||'').startsWith('moveGizmo:')) {
           try { pi.event?.stopImmediatePropagation?.(); pi.event?.stopPropagation?.(); pi.event?.preventDefault?.(); pi.skipOnPointerObservable = true; } catch {}
           moveWidget.preDrag = true; moveWidget.downX = scene.pointerX; moveWidget.downY = scene.pointerY;
           const _nm = String(pick2.pickedMesh.name||'');
           try { const m = _nm.match(/^moveGizmo:(y):/i); moveWidget.axis = m ? m[1].toLowerCase() : null; } catch { moveWidget.axis = null; }
           moveWidget.mode = _nm.startsWith('moveGizmo:disc:') ? 'plane' : 'axis';
+          if (moveWidget.mode === 'plane' && pick2.pickedPoint) {
+            const center = moveWidget.root?.position || new BABYLON.Vector3(0, 0, 0);
+            const dx = pick2.pickedPoint.x - center.x;
+            const dz = pick2.pickedPoint.z - center.z;
+            const radial = Math.hypot(dx, dz);
+            const axisSnap = Math.max(0.35, (moveWidget.discRadius || 1) * 0.3);
+            if (radial <= axisSnap) {
+              moveWidget.mode = 'axis';
+              moveWidget.axis = moveWidget.axis || 'y';
+            }
+          }
           pickLog('preDrag:move', { x: moveWidget.downX, y: moveWidget.downY, mode: moveWidget.mode, axis: moveWidget.axis });
           mLog('press', { picked: _nm, mode: moveWidget.mode, axis: moveWidget.axis });
         }

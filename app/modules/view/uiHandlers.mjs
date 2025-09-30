@@ -4,6 +4,7 @@ import { initSelectionUI, initPointerSelection } from './handlers/ui/selection.m
 import { buildTabPanel } from './tabPanel.mjs';
 import { initEditUiHandlers } from './handlers/ui/edit.mjs';
 import { initDbUiHandlers } from './handlers/ui/db.mjs';
+import { initTestTab } from './testTab.mjs';
 import { renderDbView } from './dbTab.mjs';
 
 export function initUIHandlers({ scene, engine, camApi, camera, state, helpers, sceneApi }) {
@@ -93,6 +94,7 @@ export function initUIHandlers({ scene, engine, camApi, camera, state, helpers, 
     try {
       const created = buildTabPanel({ renderDbView, state, Log }) || {};
       const editDom = created.editDom || null;
+      try { initTestTab({ pane: created.testPane, scene, camera, state }); } catch (e) { logErr('EH:testTab:init', e); }
       initEditUiHandlers({
         scene, engine, camera, state, Log,
         dom: editDom,
@@ -119,4 +121,3 @@ export function initUIHandlers({ scene, engine, camApi, camera, state, helpers, 
     });
   } catch (e) { logErr('EH:dbUi:init', e); }
 }
-

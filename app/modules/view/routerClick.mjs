@@ -7,13 +7,14 @@ import { pickPPNode, pickConnectGizmo, pickRotGizmo, pickMoveGizmo, pickSpace } 
 // ————— Primary click actions (selection) —————
 export function routerHandlePrimaryClick(e, routerState) {
   const { scene, state } = routerState;
+  const sceneApi = routerState.sceneApi || state?._sceneApi || null;
   const x = scene.pointerX, y = scene.pointerY;
   const isLeft = (e && typeof e.button === 'number') ? (e.button === 0) : true;
   if (!isLeft) return false;
 
   const mods = { meta: !!e.metaKey, ctrl: !!e.ctrlKey, shift: !!e.shiftKey, alt: !!e.altKey };
   const metaOrCtrl = mods.meta || mods.ctrl;
-  const forceSpaceSelection = metaOrCtrl && !mods.shift;
+  const forceSpaceSelection = metaOrCtrl;
   const ignorePriorityTargets = metaOrCtrl;
 
   // 1) PP nodes (Shift toggles, else single select) — skipped when Cmd/Ctrl held
@@ -21,13 +22,29 @@ export function routerHandlePrimaryClick(e, routerState) {
     const pp = pickPPNode({ scene, x, y });
     if (pp && pp.pickedMesh) {
       const name = String(pp.pickedMesh.name || '');
-      state._connect = state._connect || {}; if (!(state._connect.sel instanceof Set)) state._connect.sel = new Set();
+      state._connect = state._connect || {};
+      if (!(state._connect.sel instanceof Set)) state._connect.sel = new Set();
+      // Clear space/voxel selections when focusing PP nodes
+      if (!(state.selection instanceof Set)) state.selection = new Set(Array.isArray(state.selection) ? state.selection : []);
+      const clearedSpaceSel = state.selection.size > 0;
+      state.selection.clear();
+      try { sceneApi?.disposeMoveWidget?.(); } catch {}
+      try { sceneApi?.disposeRotWidget?.(); } catch {}
+      state.voxSel = [];
+      state.lastVoxPick = null;
+      routerState._brush = null;
+      if (clearedSpaceSel) {
+        dispatchWindowEvent('dw:selectionChange', { selection: [] });
+      }
+      try { sceneApi?.disposeConnectGizmo?.(); } catch {}
+      try { sceneApi?.updateContactShadowPlacement?.(); } catch {}
+      dispatchWindowEvent('dw:transform', { kind: 'voxsel:clear' });
       if (mods.shift) {
         if (state._connect.sel.has(name)) state._connect.sel.delete(name); else state._connect.sel.add(name);
       } else {
         state._connect.sel.clear(); state._connect.sel.add(name);
       }
-      try { window.dispatchEvent(new CustomEvent('dw:connect:update')); } catch {}
+      dispatchWindowEvent('dw:connect:update');
       log('SELECT', 'pp:select', { name, shift: mods.shift });
       return true;
     }
@@ -55,16 +72,24 @@ export function routerHandlePrimaryClick(e, routerState) {
 
   // 3) Space selection (plain click selects; Shift toggles; Cmd/Ctrl supported)
   if (sp && sp.pickedMesh) {
+    if (!metaOrCtrl) {
+      return false;
+    }
     const pickedName = String(sp.pickedMesh.name || '');
     const id = pickedName.slice('space:'.length).split(':')[0];
     if (!(state.selection instanceof Set)) state.selection = new Set(Array.isArray(state.selection) ? state.selection : []);
     if (mods.shift) {
-      if (state.selection.has(id)) state.selection.delete(id); else state.selection.add(id);
+      state.selection.add(id);
     } else {
-      state.selection.clear(); state.selection.add(id);
+    state.selection.clear();
+    try { sceneApi?.disposeMoveWidget?.(); } catch {}
+    try { sceneApi?.disposeRotWidget?.(); } catch {}
+    try { sceneApi?.disposeConnectGizmo?.(); } catch {}
+    try { sceneApi?.updateContactShadowPlacement?.(); } catch {}
+    state.selection.add(id);
     }
     routerState._brush = null;
-    try { window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: Array.from(state.selection) } })); } catch {}
+    dispatchWindowEvent('dw:selectionChange', { selection: Array.from(state.selection) });
     log('SELECT', 'space:select', { id, shift: mods.shift, meta: mods.meta || mods.ctrl });
     return true;
   }
@@ -86,12 +111,15 @@ export function classifyPointerDown({ scene, state, e }) {
   const mods = modsOfEvent(e || {});
   const pp = pickPPNode({ scene, x, y });
   if (pp) return { phase, mode, hit: 'pp', name: pp.pickedMesh?.name || null, x, y, mods };
-  const cg = pickConnectGizmo({ scene, x, y });
-  if (cg) return { phase, mode, hit: 'gizmo', name: cg.pickedMesh?.name || null, x, y, mods };
-  const rg = pickRotGizmo({ scene, x, y });
-  if (rg) return { phase, mode, hit: 'gizmo', name: rg.pickedMesh?.name || null, x, y, mods };
-  const mg = pickMoveGizmo({ scene, x, y });
-  if (mg) return { phase, mode, hit: 'gizmo', name: mg.pickedMesh?.name || null, x, y, mods };
+  const gizmo2Active = !!(state?._testGizmo?.isActive?.());
+  if (!gizmo2Active) {
+    const cg = pickConnectGizmo({ scene, x, y });
+    if (cg) return { phase, mode, hit: 'gizmo', name: cg.pickedMesh?.name || null, x, y, mods };
+    const rg = pickRotGizmo({ scene, x, y });
+    if (rg) return { phase, mode, hit: 'gizmo', name: rg.pickedMesh?.name || null, x, y, mods };
+    const mg = pickMoveGizmo({ scene, x, y });
+    if (mg) return { phase, mode, hit: 'gizmo', name: mg.pickedMesh?.name || null, x, y, mods };
+  }
   const sp = pickSpace({ scene, state, x, y });
   if (sp) {
     const pickedName = String(sp.pickedMesh?.name || '');
@@ -310,7 +338,7 @@ function ensureVoxSelForClick(routerState, spaceId, ix, iy, iz, addMode, voxelVa
   }
   if (cleared && prevSelArr.length) {
     log('VOXEL_SELECT', 'selection:event', { selection: [] });
-    window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: [] } }));
+    dispatchWindowEvent('dw:selectionChange', { selection: [] });
   }
 
   const spaces = Array.isArray(state?.barrow?.spaces) ? state.barrow.spaces : [];
@@ -319,9 +347,9 @@ function ensureVoxSelForClick(routerState, spaceId, ix, iy, iz, addMode, voxelVa
     space.voxPick = { x: ix, y: iy, z: iz, v: voxelValue };
   }
   state.lastVoxPick = { id: spaceId, x: ix, y: iy, z: iz, v: voxelValue };
-  window.dispatchEvent(new CustomEvent('dw:voxelPick', { detail: { id: spaceId, i: ix, j: iy, k: iz, v: voxelValue } }));
+  dispatchWindowEvent('dw:voxelPick', { id: spaceId, i: ix, j: iy, k: iz, v: voxelValue });
 
-  window.dispatchEvent(new CustomEvent('dw:transform', { detail: { kind: 'voxsel', id: spaceId, x: ix, y: iy, z: iz, add: addMode } }));
+  dispatchWindowEvent('dw:transform', { kind: 'voxsel', id: spaceId, x: ix, y: iy, z: iz, add: addMode });
 
   if (isStroke && stroke.justStarted) {
     stroke.justStarted = false;
@@ -331,7 +359,7 @@ function ensureVoxSelForClick(routerState, spaceId, ix, iy, iz, addMode, voxelVa
 export function routerBeginVoxelStroke(e, routerState, route) {
   if (!routerState || !route || route.hit !== 'voxel|space') return false;
   if (e && typeof e.button === 'number' && e.button !== 0) return false;
-  if (e && (e.metaKey || e.ctrlKey) && !(e.shiftKey)) return false;
+  if (e && (e.metaKey || e.ctrlKey)) return false;
   const spaceId = route.id;
   const { state } = routerState;
   const space = (state?.barrow?.spaces || []).find(s => s && String(s.id) === String(spaceId)) || null;
@@ -359,4 +387,8 @@ export function routerHandleBrushMove(routerState) {
     return;
   }
   ensureVoxSelForClick(routerState, space.id, hit.ix, hit.iy, hit.iz, !!_brush.add, hit.v);
+}
+
+function dispatchWindowEvent(name, detail) {
+  window.dispatchEvent(new CustomEvent(name, { detail }));
 }

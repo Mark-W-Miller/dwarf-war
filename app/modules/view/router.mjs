@@ -1,7 +1,7 @@
 // Router orchestrator: delegates hover vs. click/drag to separate modules
 import { log, logErr } from '../util/log.mjs';
 import { routerHandleHover, clearSpaceHover } from './routerHover.mjs';
-import { classifyPointerDown, routerIsOverPPOrGizmo, routerHandleCameraDown, routerHandleCameraMove, routerHandleCameraUp, routerHandlePrimaryClick, routerHandleBrushMove, routerBeginVoxelStroke } from './routerClick.mjs';
+import { classifyPointerDown, routerHandleCameraDown, routerHandleCameraMove, routerHandleCameraUp, routerHandlePrimaryClick, routerHandleBrushMove, routerBeginVoxelStroke } from './routerClick.mjs';
 
 function routerLogsEnabled() {
   const v = localStorage.getItem('dw:dev:routerLogs');
@@ -15,7 +15,8 @@ export function initRouter(ctx) {
     gesture: { decision: null, ptrId: null, panGuard: null, lastX: 0, lastY: 0 },
     hover: { kind: null, axis: null, mat: null },
     hoverSpace: { id: null, mesh: null },
-    ppHover: { mat: null, name: null }
+    ppHover: { mat: null, name: null },
+    sceneApi: state?._sceneApi || null
   };
   scene.onPointerObservable.add((pi) => routerOnPointer(pi, routerState));
   window.addEventListener('dw:selectionChange', () => { clearSpaceHover(routerState); });
@@ -25,6 +26,22 @@ function routerOnPointer(pi, routerState) {
   try {
     const { scene, camera, state, Log, canvas } = routerState;
     const t = pi.type; const e = pi.event || window.event;
+    const gizmo2 = state?._testGizmo || null;
+    if (gizmo2?.isActive?.()) {
+      let handled = false;
+      if (t === BABYLON.PointerEventTypes.POINTERMOVE) {
+        handled = gizmo2.handleMouseOver?.(e) ?? gizmo2.handlePointerMove?.(e) ?? false;
+      } else if (t === BABYLON.PointerEventTypes.POINTERDOWN) {
+        handled = gizmo2.handleMouseDown?.(e) ?? gizmo2.handlePointerDown?.(e) ?? false;
+      } else if (t === BABYLON.PointerEventTypes.POINTERUP) {
+        handled = gizmo2.handleMouseUp?.(e) ?? gizmo2.handlePointerUp?.(e) ?? false;
+      }
+      handled = !!handled;
+      if (handled) {
+        pi.skipOnPointerObservable = true;
+        return;
+      }
+    }
     if (t === BABYLON.PointerEventTypes.POINTERDOWN) {
       const route = classifyPointerDown({ scene, state, e });
       if (routerLogsEnabled()) { log('ROUTER', 'route', route); }

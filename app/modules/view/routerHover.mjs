@@ -204,6 +204,7 @@ function setHoverRotAxis(routerState, axis) {
   const { scene } = routerState;
   dimRotRings(scene);
   setRotRingActive(scene, axis);
+  routerState.hover = { kind: 'rotAxis', axis, mat: null };
   log('HOVER', 'gizmo:rot', { axis });
 }
 function setHoverMoveAxis(routerState, mesh) {
@@ -217,6 +218,7 @@ function setHoverMoveAxis(routerState, mesh) {
   if (nm.startsWith('moveGizmo:x:') || nm.startsWith('moveGizmo:X:')) axis = 'x';
   else if (nm.startsWith('moveGizmo:y:') || nm.startsWith('moveGizmo:Y:')) axis = 'y';
   else if (nm.startsWith('moveGizmo:z:') || nm.startsWith('moveGizmo:Z:')) axis = 'z';
+  routerState.hover = { kind: 'moveAxis', axis, mat };
   log('HOVER', 'gizmo:moveAxis', { name: nm, axis });
 }
 function resetMoveMat(mat) {
@@ -231,6 +233,7 @@ function setHoverMoveDisc(routerState, mesh) {
   const base = mat.metadata?.baseColor || mat.emissiveColor || new BABYLON.Color3(0.12,0.42,0.85);
   mat.emissiveColor = base.scale(1.35);
   if (typeof mat.alpha === 'number') mat.alpha = Math.min(0.5, (mat.metadata.baseAlpha ?? mat.alpha) * 1.6);
+  routerState.hover = { kind: 'moveDisc', axis: null, mat };
   log('HOVER', 'gizmo:moveDisc', { name: String(mesh?.name || '') });
 }
 function resetDiscMat(mat) {
@@ -403,6 +406,10 @@ export function routerHandleHover(routerState) {
   // Pointer position (screen)
   const x = scene.pointerX;
   const y = scene.pointerY;
+  const gizmo2Active = !!(state?._testGizmo?.isActive?.());
+  if (gizmo2Active) {
+    clearGizmoHover(routerState);
+  }
 
   // 1) PP node hover (highest priority)
   const ppHit = pickPPNode({ scene, x, y });
@@ -413,30 +420,34 @@ export function routerHandleHover(routerState) {
     return;
   }
 
-  // 2) Gizmo hover (move axes/disc, then rotation rings)
-  const moveHit = pickMoveGizmo({ scene, x, y });
-  if (moveHit && moveHit.pickedMesh) {
-    const name = String(moveHit.pickedMesh.name || '');
-    clearPPHover(routerState);
-    clearSpaceHover(routerState);
-    clearVoxelHover(routerState);
-    if (name.startsWith('moveGizmo:disc:')) setHoverMoveDisc(routerState, moveHit.pickedMesh);
-    else setHoverMoveAxis(routerState, moveHit.pickedMesh);
-    return;
-  }
-
-  const rotHit = pickRotGizmo({ scene, x, y });
-  if (rotHit && rotHit.pickedMesh) {
-    const name = String(rotHit.pickedMesh.name || '');
-    const axis = name.startsWith('rotGizmo:Y:') ? 'y'
-               : name.startsWith('rotGizmo:X:') ? 'x'
-               : name.startsWith('rotGizmo:Z:') ? 'z' : null;
-    if (axis) {
+  if (!gizmo2Active) {
+    // 2) Gizmo hover (move axes/disc, then rotation rings)
+    const moveHit = pickMoveGizmo({ scene, x, y });
+    if (moveHit && moveHit.pickedMesh) {
+      const name = String(moveHit.pickedMesh.name || '');
       clearPPHover(routerState);
+      clearGizmoHover(routerState);
       clearSpaceHover(routerState);
       clearVoxelHover(routerState);
-      setHoverRotAxis(routerState, axis);
+      if (name.startsWith('moveGizmo:disc:')) setHoverMoveDisc(routerState, moveHit.pickedMesh);
+      else setHoverMoveAxis(routerState, moveHit.pickedMesh);
       return;
+    }
+
+    const rotHit = pickRotGizmo({ scene, x, y });
+    if (rotHit && rotHit.pickedMesh) {
+      const name = String(rotHit.pickedMesh.name || '');
+      const axis = name.startsWith('rotGizmo:Y:') ? 'y'
+                 : name.startsWith('rotGizmo:X:') ? 'x'
+                 : name.startsWith('rotGizmo:Z:') ? 'z' : null;
+      if (axis) {
+        clearPPHover(routerState);
+        clearGizmoHover(routerState);
+        clearSpaceHover(routerState);
+        clearVoxelHover(routerState);
+        setHoverRotAxis(routerState, axis);
+        return;
+      }
     }
   }
 

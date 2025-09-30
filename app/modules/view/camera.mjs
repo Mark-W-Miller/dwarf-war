@@ -157,6 +157,18 @@ export function initCamera(scene, canvas, Log) {
   function fitViewSmart(barrow) {
     try {
       const spaces = Array.isArray(barrow?.spaces) ? barrow.spaces : [];
+      if (!spaces.length) {
+        camera.target.set(0, 0, 0);
+        const baseRadius = Math.max(24, camera.radius || 24);
+        camera.radius = baseRadius;
+        if (!isFinite(camera.upperRadiusLimit) || camera.upperRadiusLimit < baseRadius * 2) {
+          camera.upperRadiusLimit = baseRadius * 2;
+        }
+        if (!isFinite(camera.maxZ) || camera.maxZ < baseRadius * 3) {
+          camera.maxZ = baseRadius * 3;
+        }
+        return;
+      }
       // Compute extents as before over spaces
       let minX = Infinity, minY = Infinity, minZ = Infinity;
       let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
@@ -171,7 +183,8 @@ export function initCamera(scene, canvas, Log) {
       }
       if (!isFinite(minX) || !isFinite(maxX)) { if (spaces.length) return fitViewAll(spaces, voxelSize); }
       const span = Math.max(maxX - minX, maxY - minY, maxZ - minZ);
-      const radius = Math.max(10, span * 1.3 + 15);
+      const resolvedSpan = isFinite(span) && span > 0 ? span : 10;
+      const radius = Math.max(10, resolvedSpan * 1.3 + 15);
       // Center on caverns COM when available; fallback to spaces mid-point
       let tx, ty, tz;
       const cavs = Array.isArray(barrow?.caverns) ? barrow.caverns : [];
@@ -191,7 +204,7 @@ export function initCamera(scene, canvas, Log) {
       if (camera.upperRadiusLimit < radius * 1.2) camera.upperRadiusLimit = radius * 1.2;
       const desiredMaxZ = Math.max(1000, radius * 3);
       if (camera.maxZ < desiredMaxZ) camera.maxZ = desiredMaxZ;
-      if (Log) Log.log('UI', 'Fit view (smart)', { target: { x: tx, y: ty, z: tz }, span, radius, used: haveCav ? 'cavernsCOM' : 'spacesMid' });
+      if (Log) Log.log('UI', 'Fit view (smart)', { target: { x: tx, y: ty, z: tz }, span: resolvedSpan, radius, used: haveCav ? 'cavernsCOM' : 'spacesMid' });
     } catch (e) { try { if (Log) Log.log('ERROR', 'fitViewSmart', { error: String(e) }); } catch {} }
   }
 

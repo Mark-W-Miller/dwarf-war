@@ -158,6 +158,21 @@ state.built = buildSceneFromBarrow(scene, state.barrow);
 renderDbView(state.barrow);
 grids.updateUnitGrids(state.barrow?.meta?.voxelSize || 1);
 try { grids.updateGridExtent(state.built); } catch {}
+
+function ensureDefaultViewTogglesForEmptyScene() {
+  const hasContent = !!(
+    (state?.built?.spaces && state.built.spaces.length) ||
+    (state?.built?.caverns && state.built.caverns.length) ||
+    (state?.built?.carddons && state.built.carddons.length)
+  );
+  if (hasContent) return;
+  const keys = ['dw:ui:gridGround', 'dw:ui:gridXY', 'dw:ui:gridYZ', 'dw:ui:axisArrows'];
+  for (const key of keys) {
+    try { localStorage.setItem(key, '1'); } catch {}
+  }
+}
+
+ensureDefaultViewTogglesForEmptyScene();
 try { if (ground) ground.receiveShadows = true; } catch {}
 camApi.applyZoomBase();
 camApi.applyPanBase();
@@ -405,6 +420,7 @@ initSettingsTab(camApi, { applyTextScale, applyGridArrowVisuals, rebuildScene, a
 // Apply grid/arrow visuals on startup
 applyGridArrowVisuals();
 applyAxisRadius();
+applyViewToggles();
 
 // Zoom/pan helpers now live in camApi (camera module)
 
@@ -423,10 +439,23 @@ function updateUnitGrids() {
 function applyViewToggles() {
   // Grid visibility
   try {
-    const gOn = localStorage.getItem('dw:ui:gridGround') !== '0';
-    const xyOn = localStorage.getItem('dw:ui:gridXY') !== '0';
-    const yzOn = localStorage.getItem('dw:ui:gridYZ') !== '0';
-    const axOn = localStorage.getItem('dw:ui:axisArrows') !== '0';
+    const hasContent = !!(
+      (state?.built?.spaces && state.built.spaces.length) ||
+      (state?.built?.caverns && state.built.caverns.length) ||
+      (state?.built?.carddons && state.built.carddons.length)
+    );
+    const readToggle = (key, dflt = true) => {
+      const raw = localStorage.getItem(key);
+      if (!hasContent && raw === '0') {
+        try { localStorage.setItem(key, '1'); } catch {}
+        return true;
+      }
+      return raw == null ? dflt : raw !== '0';
+    };
+    const gOn = readToggle('dw:ui:gridGround', true);
+    const xyOn = readToggle('dw:ui:gridXY', true);
+    const yzOn = readToggle('dw:ui:gridYZ', true);
+    const axOn = readToggle('dw:ui:axisArrows', true);
     if (ground) ground.setEnabled(!!gOn);
     if (vGrid) vGrid.setEnabled(!!xyOn);
     if (wGrid) wGrid.setEnabled(!!yzOn);

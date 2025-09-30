@@ -59,7 +59,7 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
     _vox.initVoxelHover({ isGizmoBusy: () => { try { return !!(_gizmo?.rotWidget?.dragging || _gizmo?.moveWidget?.dragging); } catch { return false; } } });
   } catch (e) { logErr('EH:voxel:init', e); }
 
-  return {
+  const api = {
     // exposure for UI module
     isGizmosSuppressed: () => _gizmosSuppressed,
     getRotWidget: () => _gizmo?.rotWidget,
@@ -81,4 +81,6 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
     exitScryMode,
     voxelHitAtPointerForSpace: (s) => { try { return _vox?.voxelHitAtPointerForSpace?.(s) || null; } catch { return null; } },
   };
+  try { state._sceneApi = api; } catch {}
+  return api;
 }

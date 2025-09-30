@@ -384,14 +384,52 @@ export function initEditUiHandlers(ctx) {
       Log?.log('UI', 'Connect: click', {});
       const sel = Array.from(state.selection || []);
       const picks = Array.isArray(state.voxSel) ? state.voxSel : [];
-      const bySpace = new Map(); for (const p of picks) { if (p && p.id != null) { if (!bySpace.has(p.id)) bySpace.set(p.id, []); bySpace.get(p.id).push(p); } }
-      let aId = null, bId = null; const distinct = Array.from(bySpace.keys());
-      if (distinct.length === 2) { aId = distinct[0]; bId = distinct[1]; Log?.log('UI', 'Connect: using voxel picks', { aId, bId }); }
-      else if (sel.length === 2 && bySpace.has(sel[0]) && bySpace.has(sel[1])) { aId = sel[0]; bId = sel[1]; Log?.log('UI','Connect: using selected spaces', { aId, bId }); }
-      else { Log?.log('ERROR','Connect: need voxels in two spaces', { uniqueSpaces: distinct.length, sel: sel.length }); return; }
-      const byId = new Map((state?.barrow?.spaces||[]).map(s => [s.id, s])); const A = byId.get(aId), B = byId.get(bId); if (!A||!B) return;
+      const bySpace = new Map();
+      for (const p of picks) {
+        if (!p || p.id == null) continue;
+        if (!bySpace.has(p.id)) bySpace.set(p.id, []);
+        bySpace.get(p.id).push(p);
+      }
+
+      let source = 'vox';
+      if (bySpace.size < 2 && sel.length === 2) {
+        for (const id of sel) {
+          if (!bySpace.has(id)) bySpace.set(id, []);
+        }
+        source = picks.length ? 'mixed' : 'selection';
+      }
+
+      const distinct = Array.from(bySpace.keys());
+      if (distinct.length !== 2) {
+        Log?.log('ERROR', 'Connect: need voxels in two spaces', { uniqueSpaces: distinct.length, sel: sel.length });
+        return;
+      }
+
+      const [aId, bId] = distinct;
+      if (source === 'vox') Log?.log('UI', 'Connect: using voxel picks', { aId, bId });
+      else if (source === 'mixed') Log?.log('UI', 'Connect: using vox/selection mix', { aId, bId });
+      else Log?.log('UI', 'Connect: using selected spaces', { aId, bId });
+
+      const byId = new Map((state?.barrow?.spaces || []).map(s => [s.id, s]));
+      const A = byId.get(aId), B = byId.get(bId); if (!A || !B) return;
       function centerOfPicks(sid) {
-        try { const arr = (bySpace.get(sid)||[]); if (!arr.length) return null; let sx=0,sy=0,sz=0; for(const p of arr){ sx+=p.x; sy+=p.y; sz+=p.z; } const cx=Math.round(sx/arr.length), cy=Math.round(sy/arr.length), cz=Math.round(sz/arr.length); return worldPointFromVoxelIndex(byId.get(sid), cx, cy, cz); } catch { return null; }
+        try {
+          const arr = bySpace.get(sid) || [];
+          if (!arr.length) {
+            const space = byId.get(sid);
+            if (!space) return null;
+            return new BABYLON.Vector3(space.origin?.x || 0, space.origin?.y || 0, space.origin?.z || 0);
+          }
+          let sx = 0, sy = 0, sz = 0;
+          for (const p of arr) { sx += p.x; sy += p.y; sz += p.z; }
+          const cx = Math.round(sx / arr.length);
+          const cy = Math.round(sy / arr.length);
+          const cz = Math.round(sz / arr.length);
+          const s = byId.get(sid);
+          const world = worldPointFromVoxelIndex(s, cx, cy, cz);
+          if (world) return world;
+          return new BABYLON.Vector3(s?.origin?.x || 0, s?.origin?.y || 0, s?.origin?.z || 0);
+        } catch { return null; }
       }
       const pA = centerOfPicks(aId); const pB = centerOfPicks(bId); if (!pA||!pB) return;
       // Obstacles: AABBs of all spaces except the endpoints
