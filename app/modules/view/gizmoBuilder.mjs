@@ -56,7 +56,7 @@ function pickPointOnPlane({ scene, camera, normal, point }) {
   } catch { return null; }
 }
 
-export function createGizmoBuilder({ scene, camera, log = defaultLog }) {
+export function createGizmoBuilder({ scene, camera, log = defaultLog, translationHandler = null }) {
   if (!scene || !camera) throw new Error('createGizmoBuilder: scene and camera required');
   const engine = scene.getEngine();
   const canvas = engine?.getRenderingCanvas?.() || null;
@@ -71,9 +71,9 @@ export function createGizmoBuilder({ scene, camera, log = defaultLog }) {
     'move:x': true,
     'move:y': true,
     'move:z': true,
-    'rotate:x': true,
-    'rotate:y': true,
-    'rotate:z': true,
+    'rotate:x': false,
+    'rotate:y': false,
+    'rotate:z': false,
     'plane:ground': true
   };
 
@@ -91,7 +91,10 @@ export function createGizmoBuilder({ scene, camera, log = defaultLog }) {
     startPosition: null,
     startVector: null,
     startRotation: null,
-    pointerId: null
+    pointerId: null,
+    translationHandler: translationHandler || null,
+    translationContext: null,
+    appliedOffset: new BABYLON.Vector3(0, 0, 0)
   };
 
   function isGroupEnabled(group) {
@@ -131,6 +134,7 @@ export function createGizmoBuilder({ scene, camera, log = defaultLog }) {
   }
   if (active) {
     if (entry.type === 'axis') updateAxisEntry(entry);
+    else if (entry.type === 'plane') updatePlaneEntry(entry);
   }
 }
 
@@ -192,11 +196,10 @@ function updateAxisEntry(entry) {
   const invMatrix = BABYLON.Matrix.Identity();
   invRoot.toRotationMatrix(invMatrix);
   const rootScale = root.scaling || new BABYLON.Vector3(1, 1, 1);
-  const uniformScale = Math.max(Math.abs(rootScale.x), Math.abs(rootScale.y), Math.abs(rootScale.z)) || 1;
 
   const applyTransform = ({ mesh, offset, baseQuat }) => {
     if (!mesh || mesh.isDisposed?.()) return;
-    const worldOffset = offset.clone().scale(uniformScale);
+    const worldOffset = offset;
     const localPos = BABYLON.Vector3.TransformCoordinates(worldOffset, invMatrix);
     mesh.position.copyFrom(localPos);
     const localQuat = invRoot.multiply(baseQuat);
@@ -205,6 +208,37 @@ function updateAxisEntry(entry) {
 
   for (const t of entry.transforms || []) applyTransform(t);
   if (entry.pickTransform) applyTransform(entry.pickTransform);
+}
+
+function updatePlaneEntry(entry) {
+  if (!entry || entry.type !== 'plane') return;
+  if (entry.enabled === false) return;
+  const align = entry.worldAlign;
+  if (!align || !Array.isArray(align.meshes) || !align.meshes.length) return;
+  const baseQuat = align.baseQuat || BABYLON.Quaternion.Identity();
+  const position = root.getAbsolutePosition ? root.getAbsolutePosition() : root.position;
+  const scaleVec = root.scaling || new BABYLON.Vector3(1, 1, 1);
+  const uniform = Math.max(Math.abs(scaleVec.x || 0), Math.abs(scaleVec.y || 0), Math.abs(scaleVec.z || 0)) || 1;
+  for (const mesh of align.meshes) {
+    if (!mesh || mesh.isDisposed?.()) continue;
+    mesh.position.copyFrom(position);
+    mesh.scaling.set(uniform, uniform, uniform);
+    mesh.rotationQuaternion = mesh.rotationQuaternion || new BABYLON.Quaternion();
+    mesh.rotationQuaternion.copyFrom(baseQuat);
+  }
+}
+
+function applyTranslationDelta(totalDelta) {
+  const handler = dragState.translationHandler;
+  const context = dragState.translationContext;
+  if (!handler || !context || typeof handler.apply !== 'function') return;
+  const prev = dragState.appliedOffset || new BABYLON.Vector3(0, 0, 0);
+  const deltaStep = totalDelta.clone();
+  deltaStep.subtractInPlace(prev);
+  if (deltaStep.lengthSquared() < 1e-6) return;
+  try { handler.apply(context, totalDelta, deltaStep); }
+  catch (e) { try { log('GIZMO_ERR', 'translate:apply', { error: String(e && e.message ? e.message : e) }); } catch {} }
+  dragState.appliedOffset = totalDelta.clone();
 }
 
   function makeAxis(axisKey) {
@@ -270,12 +304,14 @@ function updateAxisEntry(entry) {
   Object.keys(AXIS_CONFIG).forEach(makeAxis);
 
   for (const cfg of PLANE_CONFIG) {
+    if (cfg.visible === false) continue;
     let mat = null;
     const visuals = [];
     let worldMeshes = [];
     let updateObserver = null;
     let entryRef = null;
     let pickMesh = null;
+    let baseQuat = null;
 
     if (cfg.visible !== false) {
       mat = new BABYLON.StandardMaterial(`gizmo2:${cfg.key}:mat`, scene);
@@ -305,7 +341,7 @@ function updateAxisEntry(entry) {
     }
 
     if (cfg.lockWorldNormal && cfg.visible !== false) {
-      const baseQuat = BABYLON.Quaternion.RotationAxis(new BABYLON.Vector3(1, 0, 0), Math.PI / 2);
+      baseQuat = BABYLON.Quaternion.RotationAxis(new BABYLON.Vector3(1, 0, 0), Math.PI / 2);
       worldMeshes = [...visuals];
       if (pickMesh && !visuals.includes(pickMesh)) worldMeshes.push(pickMesh);
       for (const mesh of worldMeshes) {
@@ -314,18 +350,7 @@ function updateAxisEntry(entry) {
         mesh.rotationQuaternion.copyFrom(baseQuat);
       }
       updateObserver = scene.onBeforeRenderObservable.add(() => {
-        if (!entryRef || entryRef.enabled === false) return;
-        const pos = root.getAbsolutePosition ? root.getAbsolutePosition() : root.position;
-        const scaleVec = root.scaling || new BABYLON.Vector3(1, 1, 1);
-        const uniform = Math.max(Math.abs(scaleVec.x || 0), Math.abs(scaleVec.y || 0), Math.abs(scaleVec.z || 0)) || 1;
-        for (const mesh of worldMeshes) {
-          if (!mesh || mesh.isDisposed?.()) continue;
-          mesh.position.copyFrom(pos);
-          mesh.position.y = pos.y;
-          mesh.scaling.set(uniform, uniform, uniform);
-          mesh.rotationQuaternion = mesh.rotationQuaternion || new BABYLON.Quaternion();
-          mesh.rotationQuaternion.copyFrom(baseQuat);
-        }
+        updatePlaneEntry(entryRef);
       });
     }
 
@@ -343,11 +368,12 @@ function updateAxisEntry(entry) {
       lockWorldNormal: !!cfg.lockWorldNormal,
       group: cfg.key === 'plane:xz' ? 'plane:ground' : `plane:${cfg.axisLabel.toLowerCase()}`,
       observer: updateObserver,
-      worldMeshes
+      worldAlign: cfg.lockWorldNormal && cfg.visible !== false ? { meshes: worldMeshes, baseQuat, pickMesh } : null
     };
     entryRef = entry;
     handles.set(cfg.key, entry);
     applyHandleState(cfg.key);
+    if (entry.worldAlign) updatePlaneEntry(entry);
   }
 
   function makeRotation(axisKey) {
@@ -406,6 +432,14 @@ function updateAxisEntry(entry) {
     dragState.startVector = null;
     dragState.startRotation = null;
     dragState.pointerId = null;
+    if (dragState.translationHandler && typeof dragState.translationHandler.commit === 'function' && dragState.translationContext && dragState.appliedOffset.lengthSquared() > 1e-6) {
+      try { dragState.translationHandler.commit(dragState.translationContext, dragState.appliedOffset.clone()); }
+      catch (e) { try { log('GIZMO_ERR', 'translate:commit', { error: String(e && e.message ? e.message : e) }); } catch {} }
+    } else if (dragState.translationHandler && typeof dragState.translationHandler.cancel === 'function' && dragState.translationContext) {
+      try { dragState.translationHandler.cancel(dragState.translationContext); } catch {}
+    }
+    dragState.translationContext = null;
+    dragState.appliedOffset = new BABYLON.Vector3(0, 0, 0);
   }
 
   function beginDrag(handleKey, pickedPoint, pointerId) {
@@ -417,6 +451,12 @@ function updateAxisEntry(entry) {
     dragState.startPosition = root.position.clone();
     dragState.startVector = null;
     dragState.startRotation = null;
+    dragState.appliedOffset = new BABYLON.Vector3(0, 0, 0);
+    dragState.translationContext = null;
+    if (dragState.translationHandler && typeof dragState.translationHandler.begin === 'function' && (entry.type === 'axis' || entry.type === 'plane')) {
+      try { dragState.translationContext = dragState.translationHandler.begin({ kind: entry.type }); }
+      catch (e) { try { log('GIZMO_ERR', 'translate:begin', { error: String(e && e.message ? e.message : e) }); } catch {} }
+    }
 
     const rotationMatrix = BABYLON.Matrix.Identity();
     if (root.rotationQuaternion) {
@@ -441,7 +481,12 @@ function updateAxisEntry(entry) {
       dragState.axisDir = null;
       const planeNormal = entry.lockWorldNormal ? entry.normal.clone() : BABYLON.Vector3.TransformNormal(entry.normal.clone(), rotationMatrix);
       dragState.planeNormal = planeNormal.normalize();
-      dragState.planePoint = pickedPoint ? pickedPoint.clone() : root.position.clone();
+      if (entry.lockWorldNormal) {
+        const pos = root.getAbsolutePosition ? root.getAbsolutePosition() : root.position;
+        dragState.planePoint = pos.clone();
+      } else {
+        dragState.planePoint = pickedPoint ? pickedPoint.clone() : root.position.clone();
+      }
     } else if (entry.type === 'rotation') {
       dragState.kind = 'rotation';
       dragState.axis = entry.axis;
@@ -475,6 +520,7 @@ function updateAxisEntry(entry) {
       const delta = pick.subtract(dragState.startPick);
       const scalar = BABYLON.Vector3.Dot(delta, dragState.axisDir);
       const newPos = dragState.startPosition.add(dragState.axisDir.scale(scalar));
+      applyTranslationDelta(newPos.subtract(dragState.startPosition));
       root.position.copyFrom(newPos);
       log('drag:update', { kind: 'axis', axis: dragState.axis, value: scalar, position: { x: newPos.x, y: newPos.y, z: newPos.z } });
     } else if (dragState.kind === 'plane') {
@@ -482,6 +528,7 @@ function updateAxisEntry(entry) {
       const normal = dragState.planeNormal;
       const projection = delta.subtract(normal.scale(BABYLON.Vector3.Dot(delta, normal)));
       const newPos = dragState.startPosition.add(projection);
+      applyTranslationDelta(newPos.subtract(dragState.startPosition));
       root.position.copyFrom(newPos);
       log('drag:update', { kind: 'plane', axis: dragState.axis, position: { x: newPos.x, y: newPos.y, z: newPos.z } });
     } else if (dragState.kind === 'rotation' && dragState.axisDir) {
@@ -511,11 +558,60 @@ function updateAxisEntry(entry) {
     }
   }
 
-  const pickPredicate = (m) => m && typeof m.name === 'string' && m.name.startsWith('gizmo2:');
+  const pickPredicate = (m) => {
+    if (!m || typeof m.name !== 'string') return false;
+    const name = m.name;
+    if (!name.startsWith('gizmo2:')) return false;
+    if (name.includes('plane:xy')) return false; // block invisible XY plane disc from capture
+    return true;
+  };
+
+  const planeGroundPredicate = (m) => {
+    if (!m || typeof m.name !== 'string') return false;
+    const name = m.name;
+    if (!name.startsWith('gizmo2:plane:xz')) return false;
+    if (!isGroupEnabled('plane:ground')) return false;
+    return true;
+  };
+
+  function pickPriority(name) {
+    if (!name) return -1;
+    if (name.includes('plane:xz')) return 400;
+    if (name.includes(':plane')) return 350;
+    if (name.includes(':axis:')) return 300;
+    if (name.includes(':rot:')) return 200;
+    return 100;
+  }
 
   function pickGizmo() {
-    try { return scene.pick(scene.pointerX, scene.pointerY, pickPredicate); }
-    catch { return null; }
+    try {
+      if (isGroupEnabled('plane:ground')) {
+        const planeFirst = scene.pick(scene.pointerX, scene.pointerY, planeGroundPredicate);
+        if (planeFirst?.hit) return planeFirst;
+      }
+      const picks = scene.multiPick?.(scene.pointerX, scene.pointerY, pickPredicate) || [];
+      if (!picks.length) {
+        const single = scene.pick(scene.pointerX, scene.pointerY, pickPredicate);
+        return single?.hit ? single : null;
+      }
+      let best = null;
+      let bestPriority = -Infinity;
+      let bestDist = Infinity;
+      for (const info of picks) {
+        if (!info?.hit) continue;
+        const name = String(info.pickedMesh?.name || '');
+        const pri = pickPriority(name);
+        if (pri > bestPriority || (pri === bestPriority && info.distance < bestDist)) {
+          best = info;
+          bestPriority = pri;
+          bestDist = info.distance;
+        }
+      }
+      return best;
+    } catch (e) {
+      try { log('GIZMO_ERR', 'pickGizmo', { error: String(e && e.message ? e.message : e) }); } catch {}
+      return null;
+    }
   }
 
   function handleMouseOver(ev) {
@@ -524,7 +620,18 @@ function updateAxisEntry(entry) {
       updateDrag();
       return true;
     }
+    const planeEnabled = isGroupEnabled('plane:ground');
+    if (!planeEnabled && hoverHandle === 'plane:xz') resetHighlight();
     const pick = pickGizmo();
+    try {
+      log('HOVER_DETAIL', {
+        event: 'plane:hover:raw',
+        hit: !!pick?.hit,
+        mesh: pick?.pickedMesh?.name || null,
+        activeHandle: hoverHandle,
+        planeEnabled
+      });
+    } catch {}
     if (pick?.hit && pick.pickedMesh) {
       const name = String(pick.pickedMesh.name || '');
       if (name.includes(':axis:')) {
@@ -546,12 +653,52 @@ function updateAxisEntry(entry) {
       if (name.includes(':plane')) {
         const planeKey = name.includes('plane:xy') ? 'plane:xy' : name.includes('plane:yz') ? 'plane:yz' : 'plane:xz';
         const entry = handles.get(planeKey);
-        if (!entry || entry.enabled === false) { resetHighlight(); return false; }
+        if (!entry || entry.enabled === false) {
+          try {
+            log('HOVER_DETAIL', {
+              event: 'plane:hover:skip',
+              handle: planeKey,
+              enabled: !!entry?.enabled,
+              hasEntry: !!entry,
+              pickName: name
+            });
+          } catch {}
+      resetHighlight();
+      return false;
+        }
+        if (entry.worldAlign) updatePlaneEntry(entry);
         setHighlight(planeKey);
+        try {
+          const hoverEntry = handles.get(planeKey);
+          log('HOVER_DETAIL', {
+            event: 'plane:hover:setHighlight',
+            handle: planeKey,
+            worldAlign: !!entry.worldAlign,
+            enabled: !!entry.enabled,
+            hoverHandle
+          });
+        } catch {}
         return true;
       }
     }
+    if (!planeEnabled) {
+      try {
+        log('HOVER_DETAIL', {
+          event: 'plane:hover:skipDisabled',
+          planeEnabled,
+          mesh: pick?.pickedMesh?.name || null
+        });
+      } catch {}
+      return false;
+    }
     resetHighlight();
+    try {
+      log('HOVER_DETAIL', {
+        event: 'plane:hover:miss',
+        reason: pick?.hit ? 'non-plane-mesh' : 'no-hit',
+        pickName: pick?.pickedMesh?.name || null
+      });
+    } catch {}
     return false;
   }
 
@@ -575,10 +722,41 @@ function updateAxisEntry(entry) {
       }
     }
 
+    const planeEnabled = isGroupEnabled('plane:ground');
+    try {
+      log('HOVER_DETAIL', {
+        event: 'plane:down:raw',
+        handleKey,
+        hoverHandle,
+        mesh: name,
+        hit: !!pick?.hit,
+        planeEnabled
+      });
+    } catch {}
+
+    if (!planeEnabled && name.includes(':plane')) {
+      try { log('plane:down:unresolved', { name }); } catch {}
+      return false;
+    }
+
     if (handleKey && handles.has(handleKey)) {
       const entry = handles.get(handleKey);
-      if (!entry || entry.enabled === false) return false;
+      if (!entry || entry.enabled === false) {
+        try { log('HOVER_DETAIL', { event: 'plane:down:skip', handle: handleKey, enabled: !!entry?.enabled, hasEntry: !!entry }); } catch {}
+        return false;
+      }
+      if (entry.type === 'plane' && entry.worldAlign) updatePlaneEntry(entry);
       beginDrag(handleKey, pick.pickedPoint, ev?.pointerId ?? null);
+      if (entry.type === 'plane') {
+        try {
+          log('HOVER_DETAIL', {
+            event: 'plane:down',
+            handle: handleKey,
+            worldAlign: !!entry.worldAlign,
+            highlighted: hoverHandle === handleKey
+          });
+        } catch {}
+      }
       return true;
     }
     return false;

@@ -26,7 +26,7 @@ function routerOnPointer(pi, routerState) {
   try {
     const { scene, camera, state, Log, canvas } = routerState;
     const t = pi.type; const e = pi.event || window.event;
-    const gizmo2 = state?._testGizmo || null;
+    const gizmo2 = state?._selectionGizmo || state?._testGizmo || null;
     if (gizmo2?.isActive?.()) {
       let handled = false;
       if (t === BABYLON.PointerEventTypes.POINTERMOVE) {

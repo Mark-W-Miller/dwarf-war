@@ -406,7 +406,7 @@ export function routerHandleHover(routerState) {
   // Pointer position (screen)
   const x = scene.pointerX;
   const y = scene.pointerY;
-  const gizmo2Active = !!(state?._testGizmo?.isActive?.());
+  const gizmo2Active = !!((state?._selectionGizmo || state?._testGizmo)?.isActive?.());
   if (gizmo2Active) {
     clearGizmoHover(routerState);
   }

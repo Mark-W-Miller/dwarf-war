@@ -304,7 +304,7 @@ const sceneApi = initSceneHandlers({
   camApi,
   camera,
   state,
-  helpers: { setMode, rebuildScene, rebuildHalos, scheduleGridUpdate }
+  helpers: { setMode, rebuildScene, rebuildHalos, scheduleGridUpdate, moveSelection }
 });
 
 initUIHandlers({

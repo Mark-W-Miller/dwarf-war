@@ -58,6 +58,7 @@ const GIZMO_ACTIVE_MODES = new Set(['edit', 'war']);
 
 export function preGizmoPreCapture({ scene, engine, camera, state, ev }) {
   try {
+    if ((state?._selectionGizmo || state?._testGizmo)?.isActive?.()) return false;
     if (!GIZMO_ACTIVE_MODES.has(state.mode)) return false;
     if (ev && (ev.metaKey || ev.shiftKey || ev.ctrlKey || ev.altKey)) return false;
     // Priority: connect gizmo arrow → connect disc → move disc/axes → rot rings

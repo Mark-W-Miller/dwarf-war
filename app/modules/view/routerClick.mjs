@@ -111,7 +111,7 @@ export function classifyPointerDown({ scene, state, e }) {
   const mods = modsOfEvent(e || {});
   const pp = pickPPNode({ scene, x, y });
   if (pp) return { phase, mode, hit: 'pp', name: pp.pickedMesh?.name || null, x, y, mods };
-  const gizmo2Active = !!(state?._testGizmo?.isActive?.());
+  const gizmo2Active = !!((state?._selectionGizmo || state?._testGizmo)?.isActive?.());
   if (!gizmo2Active) {
     const cg = pickConnectGizmo({ scene, x, y });
     if (cg) return { phase, mode, hit: 'gizmo', name: cg.pickedMesh?.name || null, x, y, mods };
