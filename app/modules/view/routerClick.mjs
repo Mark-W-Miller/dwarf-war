@@ -78,19 +78,25 @@ export function routerHandlePrimaryClick(e, routerState) {
     const pickedName = String(sp.pickedMesh.name || '');
     const id = pickedName.slice('space:'.length).split(':')[0];
     if (!(state.selection instanceof Set)) state.selection = new Set(Array.isArray(state.selection) ? state.selection : []);
+    const previouslySelected = state.selection.has(id);
     if (mods.shift) {
-      state.selection.add(id);
+      if (state.selection.has(id)) {
+        state.selection.delete(id);
+      } else {
+        state.selection.add(id);
+      }
     } else {
-    state.selection.clear();
-    try { sceneApi?.disposeMoveWidget?.(); } catch {}
-    try { sceneApi?.disposeRotWidget?.(); } catch {}
-    try { sceneApi?.disposeConnectGizmo?.(); } catch {}
-    try { sceneApi?.updateContactShadowPlacement?.(); } catch {}
-    state.selection.add(id);
+      state.selection.clear();
+      try { sceneApi?.disposeMoveWidget?.(); } catch {}
+      try { sceneApi?.disposeRotWidget?.(); } catch {}
+      try { sceneApi?.disposeConnectGizmo?.(); } catch {}
+      try { sceneApi?.updateContactShadowPlacement?.(); } catch {}
+      state.selection.add(id);
     }
     routerState._brush = null;
+    const removed = mods.shift && previouslySelected && !state.selection.has(id);
     dispatchWindowEvent('dw:selectionChange', { selection: Array.from(state.selection) });
-    log('SELECT', 'space:select', { id, shift: mods.shift, meta: mods.meta || mods.ctrl });
+    log('SELECT', removed ? 'space:deselect' : 'space:select', { id, shift: mods.shift, meta: mods.meta || mods.ctrl });
     return true;
   }
 
@@ -130,19 +136,29 @@ export function classifyPointerDown({ scene, state, e }) {
   return { phase, mode, hit: 'empty|camera', x, y, mods };
 }
 
+const TARGET_PREF_KEY = 'dw:ui:targetDot';
 export function ensureTargetDot({ scene, camera }) {
+  try { if (localStorage.getItem(TARGET_PREF_KEY) === '0') return; }
+  catch {}
   let dot = scene.getMeshByName('cam:targetDot');
   if (!dot) {
-    const s = BABYLON.MeshBuilder.CreateSphere('cam:targetDot', { diameter: 0.6, segments: 16 }, scene);
+    const s = BABYLON.MeshBuilder.CreateSphere('cam:targetDot', { diameter: 0.24, segments: 16 }, scene);
     const m = new BABYLON.StandardMaterial('cam:targetDot:mat', scene);
     m.emissiveColor = new BABYLON.Color3(1.0, 0.5, 0.05);
     m.diffuseColor = new BABYLON.Color3(0.2, 0.1, 0.0);
     m.specularColor = new BABYLON.Color3(0, 0, 0);
     s.material = m; s.isPickable = false; s.renderingGroupId = 3;
+    dot = s;
   }
   scene.onBeforeRenderObservable.add(() => {
-    const d = scene.getMeshByName('cam:targetDot');
-    if (d) d.position.copyFrom(camera.target);
+    try {
+      const d = scene.getMeshByName('cam:targetDot');
+      if (!d) return;
+      d.position.copyFrom(camera.target);
+      const radius = (typeof camera.radius === 'number' && isFinite(camera.radius)) ? camera.radius : BABYLON.Vector3.Distance(camera.position, camera.target);
+      const scale = Math.max(0.08, (radius || 1) * 0.012);
+      d.scaling.set(scale, scale, scale);
+    } catch {}
   });
 }
 
@@ -224,9 +240,10 @@ export function routerHandleCameraUp(routerState) {
 
 // ————— Primary click actions (selection) —————
 // Local DDA to hit a voxel in the given space at the current pointer
-function voxelHitAtPointerForSpaceClick(routerState, space) {
+function voxelHitAtPointerForSpaceClick(routerState, space, options = {}) {
   const { scene, camera, state } = routerState;
   if (!space || !space.vox || !space.vox.size) return null;
+  const preferEmpty = !!options.preferEmpty;
   const vox = decompressVox(space.vox);
   const nx = Math.max(1, vox.size?.x || 1);
   const ny = Math.max(1, vox.size?.y || 1);
@@ -274,16 +291,30 @@ function voxelHitAtPointerForSpaceClick(routerState, space) {
   const yCut = ny - hideTop;
   const data = Array.isArray(vox.data) ? vox.data : [];
   let guard = 0, guardMax = (nx + ny + nz) * 3 + 10;
+  let firstSolid = null;
+  let emptyBeforeSolid = false;
+  let seenSolid = false;
   while (t <= tmax + EPS && ix >= 0 && iy >= 0 && iz >= 0 && ix < nx && iy < ny && iz < nz && guard++ < guardMax) {
     if (iy < yCut) {
       const flat = ix + nx * (iy + ny * iz);
       const v = data[flat] ?? 0;
-      if (v !== 0) return { ix, iy, iz, v };
+      if (v !== 0) {
+        if (!preferEmpty) {
+          return { ix, iy, iz, v, emptyBeforeSolid };
+        }
+        if (!firstSolid) firstSolid = { ix, iy, iz, v, emptyBeforeSolid };
+        seenSolid = true;
+      } else if (preferEmpty && seenSolid) {
+        return { ix, iy, iz, v, emptyBeforeSolid };
+      } else if (!seenSolid) {
+        emptyBeforeSolid = true;
+      }
     }
     if (tMaxX <= tMaxY && tMaxX <= tMaxZ) { ix += stepX; t = tMaxX + EPS; tMaxX += tDeltaX; }
     else if (tMaxY <= tMaxX && tMaxY <= tMaxZ) { iy += stepY; t = tMaxY + EPS; tMaxY += tDeltaY; }
     else { iz += stepZ; t = tMaxZ + EPS; tMaxZ += tDeltaZ; }
   }
+  if (preferEmpty && firstSolid) return firstSolid;
   return null;
 }
 
@@ -364,13 +395,15 @@ export function routerBeginVoxelStroke(e, routerState, route) {
   const { state } = routerState;
   const space = (state?.barrow?.spaces || []).find(s => s && String(s.id) === String(spaceId)) || null;
   if (!space || !space.vox || !space.vox.size) return false;
-  const stroke = { active: true, spaceId: space.id, add: !!(e && e.shiftKey), button: 0, justStarted: true };
+  const stroke = { active: true, spaceId: space.id, add: !!(e && e.shiftKey), button: 0, justStarted: true, allowEmptyAfterSolid: false };
   routerState._brush = stroke;
   const hit = voxelHitAtPointerForSpaceClick(routerState, space);
   if (!hit) {
     log('VOXEL_SELECT', 'stroke-miss', { spaceId: space.id, add: stroke.add, pointer: { x: scene.pointerX, y: scene.pointerY } });
+    routerState._brush = null;
     return true;
   }
+  stroke.allowEmptyAfterSolid = !!(hit.v && hit.v !== 0 && !hit.emptyBeforeSolid);
   ensureVoxSelForClick(routerState, space.id, hit.ix, hit.iy, hit.iz, stroke.add, hit.v);
   return true;
 }
@@ -381,10 +414,14 @@ export function routerHandleBrushMove(routerState) {
   const { scene, state } = routerState;
   const space = (state?.barrow?.spaces || []).find(s => s && String(s.id) === String(_brush.spaceId)) || null;
   if (!space || !space.vox || !space.vox.size) return;
-  const hit = voxelHitAtPointerForSpaceClick(routerState, space);
+  const allowEmpty = !!_brush.allowEmptyAfterSolid;
+  const hit = voxelHitAtPointerForSpaceClick(routerState, space, { preferEmpty: allowEmpty });
   if (!hit) {
     log('VOXEL_SELECT', 'brush-miss', { spaceId: space.id, add: !!_brush.add, pointer: { x: scene.pointerX, y: scene.pointerY } });
     return;
+  }
+  if (!allowEmpty && hit.v && hit.v !== 0 && !hit.emptyBeforeSolid) {
+    _brush.allowEmptyAfterSolid = true;
   }
   ensureVoxSelForClick(routerState, space.id, hit.ix, hit.iy, hit.iz, !!_brush.add, hit.v);
 }

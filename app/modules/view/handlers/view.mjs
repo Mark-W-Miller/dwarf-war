@@ -11,6 +11,25 @@ export function initViewManipulations({ scene, engine, camera, state, helpers })
   // Camera gesture handling is centralized in routeDebug now.
   let _targetDot = null;
   let _targetDotObs = null;
+  const TARGET_PREF_KEY = 'dw:ui:targetDot';
+  const readPref = () => {
+    try { return localStorage.getItem(TARGET_PREF_KEY) !== '0'; }
+    catch { return true; }
+  };
+  let _targetDotVisible = readPref();
+
+  function disposeTargetDot() {
+    if (_targetDotObs) {
+      try { scene.onBeforeRenderObservable.remove(_targetDotObs); }
+      catch {}
+      _targetDotObs = null;
+    }
+    if (_targetDot && !_targetDot.isDisposed?.()) {
+      try { _targetDot.dispose(); }
+      catch {}
+    }
+    _targetDot = null;
+  }
 
   // modsOf/comboName centralized in util/log.mjs
   function isGizmoHitAt(e) {
@@ -31,9 +50,13 @@ export function initViewManipulations({ scene, engine, camera, state, helpers })
   }
 
   function ensureTargetDot() {
+    if (!_targetDotVisible) {
+      disposeTargetDot();
+      return null;
+    }
     try {
       if (_targetDot && !_targetDot.isDisposed()) return _targetDot;
-      const s = BABYLON.MeshBuilder.CreateSphere('cam:targetDot', { diameter: 0.6, segments: 16 }, scene);
+      const s = BABYLON.MeshBuilder.CreateSphere('cam:targetDot', { diameter: 0.24, segments: 16 }, scene);
       const m = new BABYLON.StandardMaterial('cam:targetDot:mat', scene);
       m.emissiveColor = new BABYLON.Color3(1.0, 0.5, 0.05); // bright orange
       m.diffuseColor = new BABYLON.Color3(0.2, 0.1, 0.0);
@@ -42,7 +65,12 @@ export function initViewManipulations({ scene, engine, camera, state, helpers })
       _targetDot = s;
       try { if (_targetDotObs) scene.onBeforeRenderObservable.remove(_targetDotObs); } catch {}
       _targetDotObs = scene.onBeforeRenderObservable.add(() => {
-        try { s.position.copyFrom(camera.target); } catch {}
+        try {
+          s.position.copyFrom(camera.target);
+          const radius = (typeof camera.radius === 'number' && isFinite(camera.radius)) ? camera.radius : BABYLON.Vector3.Distance(camera.position, camera.target);
+          const scale = Math.max(0.08, (radius || 1) * 0.012);
+          s.scaling.set(scale, scale, scale);
+        } catch {}
       });
       return s;
     } catch { return null; }
@@ -54,4 +82,24 @@ export function initViewManipulations({ scene, engine, camera, state, helpers })
 
   // Ensure target dot exists and follows camera target
   try { ensureTargetDot(); } catch {}
+
+  function setTargetDotVisible(on) {
+    const next = !!on;
+    if (_targetDotVisible === next) return;
+    _targetDotVisible = next;
+    try { localStorage.setItem(TARGET_PREF_KEY, next ? '1' : '0'); }
+    catch {}
+    if (next) ensureTargetDot();
+    else disposeTargetDot();
+  }
+
+  function isTargetDotVisible() {
+    return !!_targetDotVisible;
+  }
+
+  return {
+    setTargetDotVisible,
+    isTargetDotVisible,
+    refreshTargetDot: () => { if (_targetDotVisible) ensureTargetDot(); }
+  };
 }

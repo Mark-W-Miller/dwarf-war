@@ -3,6 +3,12 @@ import { Log } from '../../util/log.mjs';
 export function createRebuildHalos({ scene, state }) {
   return function rebuildHalos() {
     const report = (ctx, e) => { try { Log.log('ERROR', ctx, { error: String(e && e.message ? e.message : e), stack: e && e.stack ? String(e.stack) : undefined }); } catch {} };
+    let highlightAdded = false;
+    const addHighlight = (mesh, color) => {
+      if (!mesh) return;
+      try { state.hl.addMesh(mesh, color); highlightAdded = true; }
+      catch (e) { report('HILITE:addMesh', e); }
+    };
     try { const selArr = Array.from(state.selection || []); Log.log('HILITE', 'rebuild:start', { sel: selArr, last: state.lastVoxPick || null, locked: state.lockedVoxPick || null }); } catch {}
     for (const [id, mesh] of state.halos) { try { mesh.dispose(); } catch {} }
     state.halos.clear();
@@ -24,7 +30,7 @@ export function createRebuildHalos({ scene, state }) {
     try { for (const part of (state?.built?.voxParts || [])) { try { part.renderOutline = false; } catch {} } } catch {}
     for (const id of state.selection) {
       const m = bySpace.get(id) || byCav.get(id); if (!m) continue;
-      try { state.hl.addMesh(m, blue); } catch {}
+      addHighlight(m, blue);
       try { for (const part of (state?.built?.voxParts || [])) { const nm = String(part?.name || ''); if (nm.startsWith(`space:${id}:`)) { try { part.outlineColor = subtleBlue; part.renderOutline = true; part.outlineWidth = 0.02; } catch {} } } } catch {}
       try {
         const s = (state.barrow.spaces||[]).find(x => x.id === id);
@@ -81,7 +87,7 @@ export function createRebuildHalos({ scene, state }) {
             try { box.parent = parent; } catch (e) { report('HILITE:box:parent', e); }
             box.position.set(afterLocal.x, afterLocal.y, afterLocal.z);
             try { box.rotationQuaternion = BABYLON.Quaternion.Identity(); } catch (e) { report('HILITE:box:rot', e); }
-            try { state.hl.addMesh(box, redGlow); } catch (e) { report('HILITE:hl:add:box', e); }
+            addHighlight(box, redGlow);
             try { const wm = parent?.getWorldMatrix?.() || BABYLON.Matrix.Identity(); const wpos = BABYLON.Vector3.TransformCoordinates(afterLocal, wm); Log.log('HILITE', 'voxel:draw', { id, world: { x: wpos.x, y: wpos.y, z: wpos.z }, local: { x: afterLocal.x, y: afterLocal.y, z: afterLocal.z } }); } catch (e) { report('HILITE:voxel:draw:log', e); }
             try { const h = (res * 0.52); const c = [ new BABYLON.Vector3(-h,-h,-h), new BABYLON.Vector3(+h,-h,-h), new BABYLON.Vector3(-h,+h,-h), new BABYLON.Vector3(+h,+h,-h), new BABYLON.Vector3(-h,-h,+h), new BABYLON.Vector3(+h,-h,+h), new BABYLON.Vector3(-h,+h,+h), new BABYLON.Vector3(+h,+h,+h) ]; const edges = [[c[0],c[1]],[c[1],c[3]],[c[3],c[2]],[c[2],c[0]],[c[4],c[5]],[c[5],c[7]],[c[7],c[6]],[c[6],c[4]],[c[0],c[4]],[c[1],c[5]],[c[2],c[6]],[c[3],c[7]]]; const lines = BABYLON.MeshBuilder.CreateLineSystem(`sel:voxel:${id}:edges`, { lines: edges }, scene); lines.color = new BABYLON.Color3(0.95, 0.2, 0.2); lines.isPickable = false; lines.renderingGroupId = 3; try { lines.parent = box; } catch (e) { report('HILITE:lines:parent', e); } lines.position.set(0, 0, 0); try { lines.rotationQuaternion = BABYLON.Quaternion.Identity(); } catch (e) { report('HILITE:lines:rot', e); } const lmat = new BABYLON.StandardMaterial(`sel:voxel:${id}:edges:mat`, scene); lmat.emissiveColor = new BABYLON.Color3(0.95, 0.2, 0.2); lmat.disableDepthWrite = true; try { lmat.zOffset = -2; } catch (e) { report('HILITE:lines:z', e); } lines.material = lmat; } catch (e) { report('HILITE:lines', e); }
             try { state.voxHl.set(id, box); } catch {}
@@ -89,7 +95,7 @@ export function createRebuildHalos({ scene, state }) {
         }
       } catch {}
     }
-    try { for (const x of state?.built?.intersections || []) if (x?.mesh) state.hl.addMesh(x.mesh, yellow); } catch {}
+    try { for (const x of state?.built?.intersections || []) if (x?.mesh) addHighlight(x.mesh, yellow); } catch {}
     const voxSelArr = Array.isArray(state.voxSel) ? state.voxSel : [];
     if (voxSelArr.length) {
       const voxSelBySpace = new Map();
@@ -181,7 +187,7 @@ export function createRebuildHalos({ scene, state }) {
         }
       }
     }
-    try { if (state?._scry?.scryMode && state?._scry?.ball) { const color = new BABYLON.Color3(0.4, 0.85, 1.0); state.hl.addMesh(state._scry.ball, color); try { state._scry.ball.outlineColor = color; state._scry.ball.outlineWidth = 0.02; state._scry.ball.renderOutline = true; } catch {} } } catch {}
+    try { if (state?._scry?.scryMode && state?._scry?.ball) { const color = new BABYLON.Color3(0.4, 0.85, 1.0); addHighlight(state._scry.ball, color); try { state._scry.ball.outlineColor = color; state._scry.ball.outlineWidth = 0.02; state._scry.ball.renderOutline = true; } catch {} } } catch {}
 
     // Also render a locked voxel highlight even if its space is not selected
     try {
@@ -217,7 +223,7 @@ export function createRebuildHalos({ scene, state }) {
                   try { box.parent = parent; } catch {}
                   box.position.set(afterLocal.x, afterLocal.y, afterLocal.z);
                   try { box.rotationQuaternion = BABYLON.Quaternion.Identity(); } catch {}
-                  try { state.hl.addMesh(box, redGlow); } catch {}
+                  addHighlight(box, redGlow);
                   try {
                     const h = (res * 0.52);
                     const c = [ new BABYLON.Vector3(-h,-h,-h), new BABYLON.Vector3(+h,-h,-h), new BABYLON.Vector3(-h,+h,-h), new BABYLON.Vector3(+h,+h,-h), new BABYLON.Vector3(-h,-h,+h), new BABYLON.Vector3(+h,-h,+h), new BABYLON.Vector3(-h,+h,+h), new BABYLON.Vector3(+h,+h,+h) ];
@@ -270,7 +276,7 @@ export function createRebuildHalos({ scene, state }) {
         try { box.parent = parent; } catch {}
         box.position.set(afterLocal.x, afterLocal.y, afterLocal.z);
         try { box.rotationQuaternion = BABYLON.Quaternion.Identity(); } catch {}
-        try { state.hl.addMesh(box, redGlow); } catch {}
+        addHighlight(box, redGlow);
         try {
           const h = (res * 0.52);
           const c = [ new BABYLON.Vector3(-h,-h,-h), new BABYLON.Vector3(+h,-h,-h), new BABYLON.Vector3(-h,+h,-h), new BABYLON.Vector3(+h,+h,-h), new BABYLON.Vector3(-h,-h,+h), new BABYLON.Vector3(+h,-h,+h), new BABYLON.Vector3(-h,+h,+h), new BABYLON.Vector3(+h,+h,+h) ];
@@ -284,5 +290,7 @@ export function createRebuildHalos({ scene, state }) {
         try { state.voxHl.set(id, box); } catch {}
       }
     } catch {}
+
+    try { state.hl.isEnabled = !!highlightAdded; } catch {}
   };
 }

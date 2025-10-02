@@ -30,6 +30,12 @@ const ROTATION_CONFIG = {
   z: { color: new BABYLON.Color3(0.45, 0.65, 0.95), axis: new BABYLON.Vector3(0, 0, 1), rotation: { x: Math.PI / 2, y: 0, z: 0 } }
 };
 
+const PLANE_PRIMARY_AXIS = {
+  'plane:xy': 'z',
+  'plane:yz': 'x',
+  'plane:xz': 'y'
+};
+
 function defaultLog(evt, data) {
   try { Log.log('GIZMO_2', evt, data); }
   catch { console.log('GIZMO_2', evt, data); }
@@ -56,7 +62,7 @@ function pickPointOnPlane({ scene, camera, normal, point }) {
   } catch { return null; }
 }
 
-export function createGizmoBuilder({ scene, camera, log = defaultLog, translationHandler = null }) {
+export function createGizmoBuilder({ scene, camera, log = defaultLog, translationHandler = null, rotationHandler = null }) {
   if (!scene || !camera) throw new Error('createGizmoBuilder: scene and camera required');
   const engine = scene.getEngine();
   const canvas = engine?.getRenderingCanvas?.() || null;
@@ -94,7 +100,11 @@ export function createGizmoBuilder({ scene, camera, log = defaultLog, translatio
     pointerId: null,
     translationHandler: translationHandler || null,
     translationContext: null,
-    appliedOffset: new BABYLON.Vector3(0, 0, 0)
+    appliedOffset: new BABYLON.Vector3(0, 0, 0),
+    rotationHandler: rotationHandler || null,
+    rotationContext: null,
+    appliedRotation: 0,
+    lastRotationAngle: 0
   };
 
   function isGroupEnabled(group) {
@@ -135,6 +145,7 @@ export function createGizmoBuilder({ scene, camera, log = defaultLog, translatio
   if (active) {
     if (entry.type === 'axis') updateAxisEntry(entry);
     else if (entry.type === 'plane') updatePlaneEntry(entry);
+    else if (entry.type === 'rotation') updateRotationEntry(entry);
   }
 }
 
@@ -228,6 +239,35 @@ function updatePlaneEntry(entry) {
   }
 }
 
+function updateRotationEntry(entry) {
+  if (!entry || entry.type !== 'rotation') return;
+  if (entry.enabled === false) return;
+  const position = root.getAbsolutePosition ? root.getAbsolutePosition() : root.position;
+  const meshes = entry.meshes || [];
+  const baseQuat = entry.baseQuat || BABYLON.Quaternion.Identity();
+  const baseScale = entry.baseScale || new BABYLON.Vector3(1, 1, 1);
+  const rootScale = root.scaling || new BABYLON.Vector3(1, 1, 1);
+  const uniform = Math.max(Math.abs(rootScale.x || 0), Math.abs(rootScale.y || 0), Math.abs(rootScale.z || 0)) || 1;
+  const targetScale = baseScale.clone();
+  targetScale.scaleInPlace(uniform);
+  for (const mesh of meshes) {
+    if (!mesh || mesh.isDisposed?.()) continue;
+    try { mesh.position.copyFrom(position); } catch {}
+    try { mesh.scaling.copyFrom(targetScale); } catch {}
+    mesh.rotationQuaternion = mesh.rotationQuaternion || new BABYLON.Quaternion();
+    try { mesh.rotationQuaternion.copyFrom(baseQuat); } catch {}
+  }
+  if (entry.pick && !meshes.includes(entry.pick)) {
+    const mesh = entry.pick;
+    if (mesh && !mesh.isDisposed?.()) {
+      try { mesh.position.copyFrom(position); } catch {}
+      try { mesh.scaling.copyFrom(targetScale); } catch {}
+      mesh.rotationQuaternion = mesh.rotationQuaternion || new BABYLON.Quaternion();
+      try { mesh.rotationQuaternion.copyFrom(baseQuat); } catch {}
+    }
+  }
+}
+
 function applyTranslationDelta(totalDelta) {
   const handler = dragState.translationHandler;
   const context = dragState.translationContext;
@@ -249,20 +289,21 @@ function applyTranslationDelta(totalDelta) {
     mat.specularColor = new BABYLON.Color3(0, 0, 0);
     materials.push(mat);
 
-    const shaftLen = 2.0;
-    const tipLen = 0.6;
-    const grabLen = shaftLen + tipLen + 0.2;
-    const shaft = BABYLON.MeshBuilder.CreateCylinder(`gizmo2:axis:${axisKey}:shaft`, { height: shaftLen, diameter: 0.1, tessellation: 32 }, scene);
+    const lengthScale = 0.5;
+    const shaftLen = 2.0 * lengthScale;
+    const tipLen = 0.6 * lengthScale;
+    const grabLen = (shaftLen + tipLen + 0.2) * lengthScale;
+    const shaft = BABYLON.MeshBuilder.CreateCylinder(`gizmo2:axis:${axisKey}:shaft`, { height: shaftLen, diameter: 0.1 * lengthScale, tessellation: 32 }, scene);
     shaft.material = mat; shaft.parent = root; shaft.alwaysSelectAsActiveMesh = true;
     shaft.isPickable = true;
     shaft.rotationQuaternion = AXIS_BASE_QUAT[axisKey].clone();
 
-    const tip = BABYLON.MeshBuilder.CreateCylinder(`gizmo2:axis:${axisKey}:tip`, { height: tipLen, diameterTop: 0, diameterBottom: 0.34, tessellation: 32 }, scene);
+    const tip = BABYLON.MeshBuilder.CreateCylinder(`gizmo2:axis:${axisKey}:tip`, { height: tipLen, diameterTop: 0, diameterBottom: 0.34 * lengthScale, tessellation: 32 }, scene);
     tip.material = mat; tip.parent = root; tip.alwaysSelectAsActiveMesh = true;
     tip.isPickable = true;
     tip.rotationQuaternion = AXIS_BASE_QUAT[axisKey].clone();
 
-    const grab = BABYLON.MeshBuilder.CreateCylinder(`gizmo2:axis:${axisKey}:grab`, { height: grabLen, diameter: 0.6, tessellation: 16 }, scene);
+    const grab = BABYLON.MeshBuilder.CreateCylinder(`gizmo2:axis:${axisKey}:grab`, { height: grabLen, diameter: 0.6 * lengthScale, tessellation: 16 }, scene);
     grab.isVisible = false; grab.parent = root; grab.alwaysSelectAsActiveMesh = true;
     grab.isPickable = true;
     grab.rotationQuaternion = AXIS_BASE_QUAT[axisKey].clone();
@@ -387,13 +428,13 @@ function applyTranslationDelta(totalDelta) {
 
     const ring = BABYLON.MeshBuilder.CreateTorus(`gizmo2:rot:${axisKey}:ring`, { diameter: 2.0, thickness: 0.06, tessellation: 128 }, scene);
     ring.material = mat;
-    ring.parent = root;
+    ring.parent = null;
     ring.alwaysSelectAsActiveMesh = true;
     ring.isPickable = true;
     ring.renderingGroupId = 3;
-    ring.rotation.x = cfg.rotation.x;
-    ring.rotation.y = cfg.rotation.y;
-    ring.rotation.z = cfg.rotation.z;
+    const baseQuat = BABYLON.Quaternion.FromEulerAngles(cfg.rotation.x, cfg.rotation.y, cfg.rotation.z);
+    ring.rotationQuaternion = baseQuat.clone();
+    ring.rotation.set(0, 0, 0);
 
     const entry = {
       type: 'rotation',
@@ -406,10 +447,15 @@ function applyTranslationDelta(totalDelta) {
       baseDiffuse: mat.diffuseColor.clone(),
       baseAlpha: mat.alpha,
       highlightScale: 2.8,
-      group: `rotate:${axisKey}`
+      group: `rotate:${axisKey}`,
+      baseQuat,
+      baseScale: ring.scaling.clone(),
+      lockWorldAxis: true
     };
+    entry.observer = scene.onBeforeRenderObservable.add(() => updateRotationEntry(entry));
     handles.set(`rot:${axisKey}`, entry);
     applyHandleState(`rot:${axisKey}`);
+    updateRotationEntry(entry);
   }
 
   Object.keys(ROTATION_CONFIG).forEach(makeRotation);
@@ -417,7 +463,10 @@ function applyTranslationDelta(totalDelta) {
   function endDrag() {
     if (!dragState.active) return;
     dragState.active = false;
-    log('drag:end', { kind: dragState.kind, axis: dragState.axis });
+    const prevKind = dragState.kind;
+    const prevAxis = dragState.axis;
+    const prevAxisDir = dragState.axisDir ? dragState.axisDir.clone() : null;
+    log('drag:end', { kind: prevKind, axis: prevAxis });
     try {
       const ptrInputs = camera?.inputs?.attached?.pointers;
       if (ptrInputs && canvas) ptrInputs.attachControl(canvas, true);
@@ -432,6 +481,17 @@ function applyTranslationDelta(totalDelta) {
     dragState.startVector = null;
     dragState.startRotation = null;
     dragState.pointerId = null;
+    if (dragState.rotationHandler && dragState.rotationContext) {
+      const totalAngle = dragState.appliedRotation || 0;
+      const hasRotation = Math.abs(totalAngle) > 1e-4;
+      if (prevKind === 'rotation' && hasRotation && typeof dragState.rotationHandler.commit === 'function') {
+        try { dragState.rotationHandler.commit(dragState.rotationContext, totalAngle, { axis: prevAxis, axisDir: prevAxisDir }); }
+        catch (e) { try { log('GIZMO_ERR', 'rotate:commit', { error: String(e && e.message ? e.message : e) }); } catch {} }
+      } else if (typeof dragState.rotationHandler.cancel === 'function') {
+        try { dragState.rotationHandler.cancel(dragState.rotationContext); }
+        catch (e) { try { log('GIZMO_ERR', 'rotate:cancel', { error: String(e && e.message ? e.message : e) }); } catch {} }
+      }
+    }
     if (dragState.translationHandler && typeof dragState.translationHandler.commit === 'function' && dragState.translationContext && dragState.appliedOffset.lengthSquared() > 1e-6) {
       try { dragState.translationHandler.commit(dragState.translationContext, dragState.appliedOffset.clone()); }
       catch (e) { try { log('GIZMO_ERR', 'translate:commit', { error: String(e && e.message ? e.message : e) }); } catch {} }
@@ -440,6 +500,9 @@ function applyTranslationDelta(totalDelta) {
     }
     dragState.translationContext = null;
     dragState.appliedOffset = new BABYLON.Vector3(0, 0, 0);
+    dragState.rotationContext = null;
+    dragState.appliedRotation = 0;
+    dragState.lastRotationAngle = 0;
   }
 
   function beginDrag(handleKey, pickedPoint, pointerId) {
@@ -453,6 +516,9 @@ function applyTranslationDelta(totalDelta) {
     dragState.startRotation = null;
     dragState.appliedOffset = new BABYLON.Vector3(0, 0, 0);
     dragState.translationContext = null;
+    dragState.rotationContext = null;
+    dragState.appliedRotation = 0;
+    dragState.lastRotationAngle = 0;
     if (dragState.translationHandler && typeof dragState.translationHandler.begin === 'function' && (entry.type === 'axis' || entry.type === 'plane')) {
       try { dragState.translationContext = dragState.translationHandler.begin({ kind: entry.type }); }
       catch (e) { try { log('GIZMO_ERR', 'translate:begin', { error: String(e && e.message ? e.message : e) }); } catch {} }
@@ -490,17 +556,26 @@ function applyTranslationDelta(totalDelta) {
     } else if (entry.type === 'rotation') {
       dragState.kind = 'rotation';
       dragState.axis = entry.axis;
-      const axisDir = BABYLON.Vector3.TransformNormal(entry.axisDir.clone(), rotationMatrix).normalize();
+      let axisDir = entry.axisDir.clone();
+      if (!entry.lockWorldAxis) {
+        axisDir = BABYLON.Vector3.TransformNormal(axisDir, rotationMatrix);
+      }
+      axisDir.normalize();
       dragState.axisDir = axisDir;
       dragState.planeNormal = axisDir.clone();
-      dragState.planePoint = root.position.clone();
-      dragState.startRotation = root.rotationQuaternion ? root.rotationQuaternion.clone() : BABYLON.Quaternion.Identity();
-      const startPoint = pickedPoint || pickPointOnPlane({ scene, camera, normal: axisDir, point: root.position.clone() });
+      const pivot = root.getAbsolutePosition ? root.getAbsolutePosition() : root.position;
+      dragState.planePoint = pivot.clone();
+      dragState.startRotation = BABYLON.Quaternion.Identity();
+      const startPoint = pickedPoint || pickPointOnPlane({ scene, camera, normal: axisDir, point: pivot.clone() });
       if (startPoint) {
-        const vec = startPoint.subtract(root.position);
+        const vec = startPoint.subtract(pivot);
         if (vec.lengthSquared() > 1e-6) {
           dragState.startVector = vec;
         }
+      }
+      if (dragState.rotationHandler && typeof dragState.rotationHandler.begin === 'function') {
+        try { dragState.rotationContext = dragState.rotationHandler.begin({ axis: entry.axis, axisDir: axisDir.clone(), center: pivot.clone() }); }
+        catch (e) { try { log('GIZMO_ERR', 'rotate:begin', { error: String(e && e.message ? e.message : e) }); } catch {} }
       }
     }
 
@@ -548,13 +623,18 @@ function applyTranslationDelta(totalDelta) {
       const det = BABYLON.Vector3.Dot(cross, dragState.axisDir);
       const angle = Math.atan2(det, dot);
       if (!isFinite(angle)) return;
-      const deltaRot = BABYLON.Quaternion.RotationAxis(dragState.axisDir, angle);
-      const startRot = dragState.startRotation.clone();
-      const newRot = deltaRot.multiply(startRot);
-      if (!root.rotationQuaternion) root.rotationQuaternion = BABYLON.Quaternion.Identity();
-      root.rotationQuaternion.copyFrom(newRot);
-      const degrees = angle * (180 / Math.PI);
-      log('drag:update', { kind: 'rotation', axis: dragState.axis, angle, degrees });
+      let deltaAngle = angle - dragState.lastRotationAngle;
+      if (deltaAngle > Math.PI) deltaAngle -= Math.PI * 2;
+      else if (deltaAngle < -Math.PI) deltaAngle += Math.PI * 2;
+      dragState.lastRotationAngle = angle;
+      if (Math.abs(deltaAngle) < 1e-5) return;
+      dragState.appliedRotation += deltaAngle;
+      if (dragState.rotationHandler && dragState.rotationContext && typeof dragState.rotationHandler.apply === 'function') {
+        try { dragState.rotationHandler.apply(dragState.rotationContext, dragState.appliedRotation, deltaAngle, { axis: dragState.axis, axisDir: dragState.axisDir.clone() }); }
+        catch (e) { try { log('GIZMO_ERR', 'rotate:apply', { error: String(e && e.message ? e.message : e) }); } catch {} }
+      }
+      const degrees = dragState.appliedRotation * (180 / Math.PI);
+      log('drag:update', { kind: 'rotation', axis: dragState.axis, angle: dragState.appliedRotation, degrees });
     }
   }
 
@@ -585,28 +665,82 @@ function applyTranslationDelta(totalDelta) {
 
   function pickGizmo() {
     try {
+      const candidates = [];
+      const seenMeshes = new Set();
+      const pushCandidate = (info) => {
+        if (!info?.hit || !info.pickedMesh) return;
+        const mesh = info.pickedMesh;
+        if (seenMeshes.has(mesh)) return;
+        seenMeshes.add(mesh);
+        candidates.push(info);
+      };
+
       if (isGroupEnabled('plane:ground')) {
-        const planeFirst = scene.pick(scene.pointerX, scene.pointerY, planeGroundPredicate);
-        if (planeFirst?.hit) return planeFirst;
+        const planeGround = scene.pick(scene.pointerX, scene.pointerY, planeGroundPredicate);
+        pushCandidate(planeGround);
       }
-      const picks = scene.multiPick?.(scene.pointerX, scene.pointerY, pickPredicate) || [];
-      if (!picks.length) {
+
+      const multi = scene.multiPick?.(scene.pointerX, scene.pointerY, pickPredicate) || [];
+      if (Array.isArray(multi)) {
+        for (const info of multi) pushCandidate(info);
+      }
+
+      if (!candidates.length) {
         const single = scene.pick(scene.pointerX, scene.pointerY, pickPredicate);
-        return single?.hit ? single : null;
+        pushCandidate(single);
       }
+
+      if (!candidates.length) return null;
+
+      const axisHits = new Set();
+      for (const info of candidates) {
+        const name = String(info?.pickedMesh?.name || '');
+        if (name.includes(':axis:')) {
+          const axisKey = name.split(':')[2];
+          if (axisKey) axisHits.add(axisKey);
+        }
+      }
+
+      const rootPos = root.getAbsolutePosition ? root.getAbsolutePosition() : root.position;
+      const scaleVec = root.scaling || new BABYLON.Vector3(1, 1, 1);
+      const approxScale = Math.max(0.0001, Math.max(Math.abs(scaleVec.x || 0), Math.abs(scaleVec.y || 0), Math.abs(scaleVec.z || 0)));
+
       let best = null;
       let bestPriority = -Infinity;
       let bestDist = Infinity;
-      for (const info of picks) {
+
+      for (const info of candidates) {
         if (!info?.hit) continue;
         const name = String(info.pickedMesh?.name || '');
-        const pri = pickPriority(name);
+        if (!name.startsWith('gizmo2:')) continue;
+
+        let pri = pickPriority(name);
+        if (pri < 0) continue;
+
+        if (name.includes(':plane')) {
+          const planeKey = name.includes('plane:xy') ? 'plane:xy' : name.includes('plane:yz') ? 'plane:yz' : name.includes('plane:xz') ? 'plane:xz' : null;
+          if (planeKey) {
+            const axisKey = PLANE_PRIMARY_AXIS[planeKey];
+            if (axisKey && axisHits.has(axisKey) && info.pickedPoint && rootPos) {
+              const relative = info.pickedPoint.subtract(rootPos);
+              let radial = Infinity;
+              if (planeKey === 'plane:xz') radial = Math.sqrt(relative.x * relative.x + relative.z * relative.z);
+              else if (planeKey === 'plane:xy') radial = Math.sqrt(relative.x * relative.x + relative.y * relative.y);
+              else if (planeKey === 'plane:yz') radial = Math.sqrt(relative.y * relative.y + relative.z * relative.z);
+              const axisRadius = 0.025 * approxScale;
+              const biasRadius = Math.max(0.18, axisRadius * 3 + 0.1);
+              if (isFinite(radial) && radial <= biasRadius) pri -= 120;
+            }
+          }
+        }
+
         if (pri > bestPriority || (pri === bestPriority && info.distance < bestDist)) {
           best = info;
           bestPriority = pri;
           bestDist = info.distance;
         }
       }
+
       return best;
     } catch (e) {
       try { log('GIZMO_ERR', 'pickGizmo', { error: String(e && e.message ? e.message : e) }); } catch {}

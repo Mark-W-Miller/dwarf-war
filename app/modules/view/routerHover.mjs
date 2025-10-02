@@ -241,119 +241,273 @@ function resetDiscMat(mat) {
 }
 
 // ————— Voxels —————
-function voxelHoverForSpace(routerState, space) {
-  const { scene, camera, state } = routerState;
-  const x = scene.pointerX, y = scene.pointerY;
-  // Default ON: only a stored '0' disables
-  let lv = null; try { lv = localStorage.getItem('dw:ui:hoverVoxel'); } catch {}
-  const enabled = (lv == null || lv === '' || lv === '1');
-  if (!enabled) { if (routerLogsEnabled()) log('HOVER_VOXEL', 'off', { id: space?.id || null, x, y, pref: lv }); return false; }
-  if (!space || !space.vox || !space.vox.size) { if (routerLogsEnabled()) log('HOVER_VOXEL', 'noSpaceOrVox', { id: space?.id || null, x, y }); return false; }
-  const worldAligned = !!(space.vox && space.vox.worldAligned);
-  if (routerLogsEnabled()) log('HOVER_VOXEL', 'start', { id: space.id, hasVox: true, worldAligned, x, y });
-  // Do not highlight voxels for selected spaces (requested behavior)
-  const isSelected = !!(state?.selection && state.selection.has(space.id));
-  if (isSelected) {
-    if (routerLogsEnabled()) log('HOVER_VOXEL', 'selectedSkip', { id: space.id });
-    return false;
+function isVoxelHoverEnabled(space, x, y) {
+  let pref = null;
+  try { pref = localStorage.getItem('dw:ui:hoverVoxel'); }
+  catch {}
+  const enabled = pref == null || pref === '' || pref === '1';
+  if (!enabled && routerLogsEnabled()) {
+    log('HOVER_VOXEL', 'off', { id: space?.id || null, x, y, pref });
   }
-  if (state.lockedVoxPick && state.lockedVoxPick.id === space.id) { if (routerLogsEnabled()) log('HOVER_VOXEL', 'locked', { id: space.id, x, y }); return false; }
+  return enabled;
+}
+
+function isSpaceBlockedFromHover(state, space, x, y) {
+  if (!space || !space.vox || !space.vox.size) {
+    if (routerLogsEnabled()) log('HOVER_VOXEL', 'noSpaceOrVox', { id: space?.id || null, x, y });
+    return true;
+  }
+  if (state?.selection && state.selection.has(space.id)) {
+    if (routerLogsEnabled()) log('HOVER_VOXEL', 'selectedSkip', { id: space.id });
+    return true;
+  }
+  if (state.lockedVoxPick && state.lockedVoxPick.id === space.id) {
+    if (routerLogsEnabled()) log('HOVER_VOXEL', 'locked', { id: space.id, x, y });
+    return true;
+  }
+  return false;
+}
+
+function isHoverThrottled(routerState) {
   routerState._voxHoverLast = routerState._voxHoverLast || 0;
   const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-  if (now - routerState._voxHoverLast < 25) { if (routerLogsEnabled()) log('HOVER_VOXEL', 'throttleSkip', { id: space.id, dt: now - routerState._voxHoverLast }); return true; }
+  const elapsed = now - routerState._voxHoverLast;
+  if (elapsed < 25) {
+    if (routerLogsEnabled()) log('HOVER_VOXEL', 'throttleSkip', { dt: elapsed });
+    return true;
+  }
   routerState._voxHoverLast = now;
+  return false;
+}
 
+function buildVoxelHoverContext({ scene, camera, state, space }) {
   const vox = decompressVox(space.vox);
   const nx = Math.max(1, vox.size?.x || 1);
   const ny = Math.max(1, vox.size?.y || 1);
   const nz = Math.max(1, vox.size?.z || 1);
   const res = vox.res || space.res || (state?.barrow?.meta?.voxelSize || 1);
+
   const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), camera);
-  const roW = ray.origin, rdW = ray.direction;
-  const cx = space.origin?.x||0, cy = space.origin?.y||0, cz = space.origin?.z||0;
-  let q = BABYLON.Quaternion.Identity();
+  const originWorld = ray.origin;
+  const dirWorld = ray.direction;
+
+  const cx = space.origin?.x || 0;
+  const cy = space.origin?.y || 0;
+  const cz = space.origin?.z || 0;
+
+  const worldAligned = !!(space.vox && space.vox.worldAligned);
+  let rotation = BABYLON.Quaternion.Identity();
   if (!worldAligned) {
     const rx = Number(space.rotation?.x ?? 0) || 0;
     const ry = (space.rotation && typeof space.rotation.y === 'number') ? Number(space.rotation.y) : Number(space.rotY || 0) || 0;
     const rz = Number(space.rotation?.z ?? 0) || 0;
-    q = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz);
+    rotation = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz);
   }
-  const rotInv = BABYLON.Matrix.Compose(new BABYLON.Vector3(1,1,1), BABYLON.Quaternion.Inverse(q), BABYLON.Vector3.Zero());
-  const roL = BABYLON.Vector3.TransformCoordinates(roW.subtract(new BABYLON.Vector3(cx, cy, cz)), rotInv);
-  const rdL = BABYLON.Vector3.TransformNormal(rdW, rotInv);
-  const minX = -(nx * res) / 2, maxX = +(nx * res) / 2;
-  const minY = -(ny * res) / 2, maxY = +(ny * res) / 2;
-  const minZ = -(nz * res) / 2, maxZ = +(nz * res) / 2;
+
+  const inverseRotation = BABYLON.Matrix.Compose(
+    new BABYLON.Vector3(1, 1, 1),
+    BABYLON.Quaternion.Inverse(rotation),
+    BABYLON.Vector3.Zero()
+  );
+
+  const originLocal = BABYLON.Vector3.TransformCoordinates(
+    originWorld.subtract(new BABYLON.Vector3(cx, cy, cz)),
+    inverseRotation
+  );
+  const directionLocal = BABYLON.Vector3.TransformNormal(dirWorld, inverseRotation);
+
+  const minX = -(nx * res) / 2;
+  const minY = -(ny * res) / 2;
+  const minZ = -(nz * res) / 2;
+  const maxX = -minX;
+  const maxY = -minY;
+  const maxZ = -minZ;
+
   const inv = (v) => (Math.abs(v) < 1e-12 ? Infinity : 1 / v);
-  const tx1 = (minX - roL.x) * inv(rdL.x), tx2 = (maxX - roL.x) * inv(rdL.x);
-  const ty1 = (minY - roL.y) * inv(rdL.y), ty2 = (maxY - roL.y) * inv(rdL.y);
-  const tz1 = (minZ - roL.z) * inv(rdL.z), tz2 = (maxZ - roL.z) * inv(rdL.z);
+  const tx1 = (minX - originLocal.x) * inv(directionLocal.x);
+  const tx2 = (maxX - originLocal.x) * inv(directionLocal.x);
+  const ty1 = (minY - originLocal.y) * inv(directionLocal.y);
+  const ty2 = (maxY - originLocal.y) * inv(directionLocal.y);
+  const tz1 = (minZ - originLocal.z) * inv(directionLocal.z);
+  const tz2 = (maxZ - originLocal.z) * inv(directionLocal.z);
+
   const tmin = Math.max(Math.min(tx1, tx2), Math.min(ty1, ty2), Math.min(tz1, tz2));
   const tmax = Math.min(Math.max(tx1, tx2), Math.max(ty1, ty2), Math.max(tz1, tz2));
-  if (!(tmax >= Math.max(0, tmin))) { if (routerLogsEnabled()) log('HOVER_VOXEL', 'aabbMiss', { id: space.id, x, y }); return false; }
-  const EPS = 1e-6; let t = Math.max(tmin, 0) + EPS;
-  const toIdx = (x, y, z) => ({ ix: Math.min(nx-1, Math.max(0, Math.floor((x - minX) / res))), iy: Math.min(ny-1, Math.max(0, Math.floor((y - minY) / res))), iz: Math.min(nz-1, Math.max(0, Math.floor((z - minZ) / res))) });
-  let pos = new BABYLON.Vector3(roL.x + rdL.x * t, roL.y + rdL.y * t, roL.z + rdL.z * t);
-  let { ix, iy, iz } = toIdx(pos.x, pos.y, pos.z);
-  const stepX = (rdL.x > 0) ? 1 : (rdL.x < 0 ? -1 : 0);
-  const stepY = (rdL.y > 0) ? 1 : (rdL.y < 0 ? -1 : 0);
-  const stepZ = (rdL.z > 0) ? 1 : (rdL.z < 0 ? -1 : 0);
-  const nextBound = (i, step, min) => min + (i + (step > 0 ? 1 : 0)) * res;
-  let tMaxX = (stepX !== 0) ? (nextBound(ix, stepX, minX) - roL.x) / rdL.x : Infinity;
-  let tMaxY = (stepY !== 0) ? (nextBound(iy, stepY, minY) - roL.y) / rdL.y : Infinity;
-  let tMaxZ = (stepZ !== 0) ? (nextBound(iz, stepZ, minZ) - roL.z) / rdL.z : Infinity;
-  const tDeltaX = (stepX !== 0) ? Math.abs(res / rdL.x) : Infinity;
-  const tDeltaY = (stepY !== 0) ? Math.abs(res / rdL.y) : Infinity;
-  const tDeltaZ = (stepZ !== 0) ? Math.abs(res / rdL.z) : Infinity;
-  let hideTop = 0; try { hideTop = Math.max(0, Math.min(ny, Math.floor(Number(space.voxExposeTop || 0) || 0))); } catch {}
-  const yCut = ny - hideTop; const data = Array.isArray(vox.data) ? vox.data : [];
-  let guard = 0, guardMax = (nx + ny + nz) * 3 + 10;
-  while (t <= tmax + EPS && ix >= 0 && iy >= 0 && iz >= 0 && ix < nx && iy < ny && iz < nz && guard++ < guardMax) {
-    if (iy < yCut) {
-      const flat = ix + nx * (iy + ny * iz);
-      const v = data[flat] ?? 0;
-      if (v !== 0) {
-        // Compute world/local center of hovered voxel (diagnostic + transient box)
-        const lx = minX + (ix + 0.5) * res;
-        const ly = minY + (iy + 0.5) * res;
-        const lz = minZ + (iz + 0.5) * res;
-        const localCenter = new BABYLON.Vector3(lx, ly, lz);
-        let worldCenter = localCenter.clone();
-        if (!worldAligned) {
-          const rotM = BABYLON.Matrix.Compose(new BABYLON.Vector3(1,1,1), q, BABYLON.Vector3.Zero());
-          worldCenter = BABYLON.Vector3.TransformCoordinates(localCenter, rotM);
-        }
-        worldCenter.x += cx; worldCenter.y += cy; worldCenter.z += cz;
+  if (!(tmax >= Math.max(0, tmin))) return null;
 
-        // Log only on voxel change; do NOT mutate selection/pick state on hover
-        const last = routerState._voxHoverLastHit || { id: null, i: -1, j: -1, k: -1 };
-        const changed = !(last.id === space.id && last.i === ix && last.j === iy && last.k === iz);
-        if (changed && routerLogsEnabled()) {
-          log('HOVER_VOXEL', 'hover', {
-            id: space.id,
-            i: ix, j: iy, k: iz, v,
-            x: scene.pointerX, y: scene.pointerY,
-            world: { x: worldCenter.x, y: worldCenter.y, z: worldCenter.z },
-            res
-          });
-        }
-        // Draw a transient hover voxel box for unselected spaces
-        try {
-          const isSelected = !!(state?.selection && state.selection.has(space.id));
-          if (!isSelected) {
-            ensureVoxelHoverBox(routerState, space, new BABYLON.Vector3(lx, ly, lz), q, res);
-          }
-        } catch {}
-        routerState._voxHoverLastHit = { id: space.id, i: ix, j: iy, k: iz };
+  const EPS = 1e-6;
+  let t = Math.max(tmin, 0) + EPS;
+
+  const firstPoint = new BABYLON.Vector3(
+    originLocal.x + directionLocal.x * t,
+    originLocal.y + directionLocal.y * t,
+    originLocal.z + directionLocal.z * t
+  );
+
+  const toIndex = (lx, ly, lz) => ({
+    ix: Math.min(nx - 1, Math.max(0, Math.floor((lx - minX) / res))),
+    iy: Math.min(ny - 1, Math.max(0, Math.floor((ly - minY) / res))),
+    iz: Math.min(nz - 1, Math.max(0, Math.floor((lz - minZ) / res)))
+  });
+
+  const cell = toIndex(firstPoint.x, firstPoint.y, firstPoint.z);
+  const stepX = directionLocal.x > 0 ? 1 : directionLocal.x < 0 ? -1 : 0;
+  const stepY = directionLocal.y > 0 ? 1 : directionLocal.y < 0 ? -1 : 0;
+  const stepZ = directionLocal.z > 0 ? 1 : directionLocal.z < 0 ? -1 : 0;
+  const nextBound = (i, step, min) => min + (i + (step > 0 ? 1 : 0)) * res;
+
+  let tMaxX = stepX !== 0 ? (nextBound(cell.ix, stepX, minX) - originLocal.x) / directionLocal.x : Infinity;
+  let tMaxY = stepY !== 0 ? (nextBound(cell.iy, stepY, minY) - originLocal.y) / directionLocal.y : Infinity;
+  let tMaxZ = stepZ !== 0 ? (nextBound(cell.iz, stepZ, minZ) - originLocal.z) / directionLocal.z : Infinity;
+  const tDeltaX = stepX !== 0 ? Math.abs(res / directionLocal.x) : Infinity;
+  const tDeltaY = stepY !== 0 ? Math.abs(res / directionLocal.y) : Infinity;
+  const tDeltaZ = stepZ !== 0 ? Math.abs(res / directionLocal.z) : Infinity;
+
+  let hideTop = 0;
+  try { hideTop = Math.max(0, Math.min(ny, Math.floor(Number(space.voxExposeTop || 0) || 0))); }
+  catch {}
+  const yCut = ny - hideTop;
+  const data = Array.isArray(vox.data) ? vox.data : [];
+
+  if (routerLogsEnabled()) {
+    log('HOVER_VOXEL', 'start', {
+      id: space.id,
+      hasVox: true,
+      worldAligned,
+      x: scene.pointerX,
+      y: scene.pointerY
+    });
+  }
+
+  return {
+    dims: { x: nx, y: ny, z: nz },
+    res,
+    boundsMin: { x: minX, y: minY, z: minZ },
+    data,
+    yCut,
+    world: {
+      aligned: worldAligned,
+      quaternion: rotation,
+      origin: { x: cx, y: cy, z: cz }
+    },
+    ray: {
+      cell,
+      step: { x: stepX, y: stepY, z: stepZ },
+      tMax: { x: tMaxX, y: tMaxY, z: tMaxZ },
+      tDelta: { x: tDeltaX, y: tDeltaY, z: tDeltaZ },
+      t,
+      limit: tmax,
+      EPS
+    },
+    pointer: { x: scene.pointerX, y: scene.pointerY }
+  };
+}
+
+function renderVoxelHover(routerState, state, space, voxelInfo, voxelValue) {
+  const { ix, iy, iz, res, minX, minY, minZ, world } = voxelInfo;
+  const localCenter = new BABYLON.Vector3(
+    minX + (ix + 0.5) * res,
+    minY + (iy + 0.5) * res,
+    minZ + (iz + 0.5) * res
+  );
+
+  let worldCenter = localCenter.clone();
+  if (!world.aligned) {
+    const rotationMatrix = BABYLON.Matrix.Compose(
+      new BABYLON.Vector3(1, 1, 1),
+      world.quaternion,
+      BABYLON.Vector3.Zero()
+    );
+    worldCenter = BABYLON.Vector3.TransformCoordinates(localCenter, rotationMatrix);
+  }
+  worldCenter.x += world.origin.x;
+  worldCenter.y += world.origin.y;
+  worldCenter.z += world.origin.z;
+
+  const lastHit = routerState._voxHoverLastHit || { id: null, i: -1, j: -1, k: -1 };
+  const changed = !(lastHit.id === space.id && lastHit.i === ix && lastHit.j === iy && lastHit.k === iz);
+  if (changed && routerLogsEnabled()) {
+    log('HOVER_VOXEL', 'hover', {
+      id: space.id,
+      i: ix,
+      j: iy,
+      k: iz,
+      v: voxelValue,
+      pointer: { x: routerState.scene.pointerX, y: routerState.scene.pointerY },
+      world: { x: worldCenter.x, y: worldCenter.y, z: worldCenter.z },
+      res
+    });
+  }
+
+  try {
+    const isSelected = !!(state?.selection && state.selection.has(space.id));
+    if (!isSelected) {
+      ensureVoxelHoverBox(routerState, space, localCenter, world.quaternion, res);
+    }
+  } catch {}
+
+  routerState._voxHoverLastHit = { id: space.id, i: ix, j: iy, k: iz };
+}
+
+function voxelHoverForSpace(routerState, space) {
+  const { scene, camera, state } = routerState;
+  const pointerX = scene.pointerX;
+  const pointerY = scene.pointerY;
+
+  if (!isVoxelHoverEnabled(space, pointerX, pointerY)) return false;
+  if (isSpaceBlockedFromHover(state, space, pointerX, pointerY)) return false;
+  if (isHoverThrottled(routerState)) return true;
+
+  const context = buildVoxelHoverContext({ scene, camera, state, space });
+  if (!context) {
+    if (routerLogsEnabled()) log('HOVER_VOXEL', 'aabbMiss', { id: space.id, x: pointerX, y: pointerY });
+    return false;
+  }
+
+  const {
+    dims, res, boundsMin, data, yCut,
+    world, ray
+  } = context;
+
+  let { ix, iy, iz } = ray.cell;
+  let { t } = ray;
+  const { limit: tLimit, EPS } = ray;
+  let { x: tMaxX, y: tMaxY, z: tMaxZ } = ray.tMax;
+  const { x: tDeltaX, y: tDeltaY, z: tDeltaZ } = ray.tDelta;
+  const { x: stepX, y: stepY, z: stepZ } = ray.step;
+
+  const nx = dims.x, ny = dims.y, nz = dims.z;
+  const minX = boundsMin.x, minY = boundsMin.y, minZ = boundsMin.z;
+  let guard = 0;
+  const guardMax = (nx + ny + nz) * 3 + 10;
+
+  while (t <= tLimit + EPS && ix >= 0 && iy >= 0 && iz >= 0 && ix < nx && iy < ny && iz < nz && guard++ < guardMax) {
+    if (iy < yCut) {
+      const flatIndex = ix + nx * (iy + ny * iz);
+      const voxelValue = data[flatIndex] ?? 0;
+      if (voxelValue !== 0) {
+        renderVoxelHover(routerState, state, space, {
+          ix, iy, iz,
+          res,
+          minX, minY, minZ,
+          world
+        }, voxelValue);
         return true;
       }
     }
-    if (tMaxX <= tMaxY && tMaxX <= tMaxZ) { ix += stepX; t = tMaxX + EPS; tMaxX += tDeltaX; }
-    else if (tMaxY <= tMaxX && tMaxY <= tMaxZ) { iy += stepY; t = tMaxY + EPS; tMaxY += tDeltaY; }
-    else { iz += stepZ; t = tMaxZ + EPS; tMaxZ += tDeltaZ; }
+
+    if (tMaxX <= tMaxY && tMaxX <= tMaxZ) {
+      ix += stepX; t = tMaxX + EPS; tMaxX += tDeltaX;
+    } else if (tMaxY <= tMaxX && tMaxY <= tMaxZ) {
+      iy += stepY; t = tMaxY + EPS; tMaxY += tDeltaY;
+    } else {
+      iz += stepZ; t = tMaxZ + EPS; tMaxZ += tDeltaZ;
+    }
   }
-  if (routerLogsEnabled()) log('HOVER_VOXEL', 'noVoxelHit', { id: space.id, x, y });
+
+  if (routerLogsEnabled()) log('HOVER_VOXEL', 'noVoxelHit', { id: space.id, x: pointerX, y: pointerY });
   routerState._voxHoverLastHit = null;
+  clearVoxelHover(routerState);
   return false;
 }
 
@@ -406,6 +560,22 @@ export function routerHandleHover(routerState) {
   // Pointer position (screen)
   const x = scene.pointerX;
   const y = scene.pointerY;
+  let rawPick = null;
+  try { rawPick = scene.pick(x, y, null); }
+  catch (e) {
+    try { log('HOVER_DETAIL', 'rawPick:error', { error: String(e && e.message ? e.message : e) }); } catch {}
+  }
+  if (typeof window !== 'undefined') {
+    try {
+      window.dwHoverDebug = rawPick?.hit && rawPick.pickedMesh ? {
+        name: rawPick.pickedMesh.name || null,
+        id: rawPick.pickedMesh.id || null,
+        renderGroup: typeof rawPick.pickedMesh.renderingGroupId === 'number' ? rawPick.pickedMesh.renderingGroupId : null,
+        parent: rawPick.pickedMesh.parent ? (rawPick.pickedMesh.parent.name || rawPick.pickedMesh.parent.id || null) : null,
+        pointer: { x, y }
+      } : null;
+    } catch {}
+  }
   const gizmo2Active = !!((state?._selectionGizmo || state?._testGizmo)?.isActive?.());
   if (gizmo2Active) {
     clearGizmoHover(routerState);
@@ -477,6 +647,23 @@ export function routerHandleHover(routerState) {
   // 4) Miss — clear all hover visuals
   const prevSpaceId = routerState?.hoverSpace?.id || null;
   log('HOVER', 'miss:all', { x, y, prevSpaceId, prevHoverKind: routerState?.hover?.kind || null });
+  if (routerLogsEnabled()) {
+    try {
+      if (rawPick?.hit && rawPick.pickedMesh) {
+        const mesh = rawPick.pickedMesh;
+        log('HOVER_DETAIL', 'miss:raw', {
+          mesh: mesh.name || null,
+          id: mesh.id || null,
+          hasParent: !!mesh.parent,
+          renderGroup: typeof mesh.renderingGroupId === 'number' ? mesh.renderingGroupId : null
+        });
+      } else {
+        log('HOVER_DETAIL', 'miss:raw:none', { x, y });
+      }
+    } catch (e) {
+      log('HOVER_DETAIL', 'miss:raw:error', { error: String(e && e.message ? e.message : e) });
+    }
+  }
   clearPPHover(routerState);
   clearGizmoHover(routerState);
   clearSpaceHover(routerState);

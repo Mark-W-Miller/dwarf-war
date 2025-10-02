@@ -555,6 +555,7 @@ try {
       // Persist selection into DB meta so refresh restores it
       try { state.barrow.meta = state.barrow.meta || {}; state.barrow.meta.selected = sel.map(String); } catch {}
       try { saveBarrow(state.barrow); } catch {}
+      try { rebuildHalos(); } catch {}
     } catch {}
   });
   } catch {}

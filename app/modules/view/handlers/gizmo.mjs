@@ -55,6 +55,7 @@ export function initGizmoHandlers({ scene, engine, camera, state }) {
 // Detaches camera pointer input and captures pointer if a gizmo part is hit.
 // Returns true if a gizmo element was targeted.
 const GIZMO_ACTIVE_MODES = new Set(['edit', 'war']);
+const CONNECT_GIZMO_SCALE = 3;
 
 export function preGizmoPreCapture({ scene, engine, camera, state, ev }) {
   try {
@@ -453,6 +454,7 @@ export function initTransformGizmos({ scene, engine, camera, state, renderDbView
       parts = [];
 
       root = new BABYLON.TransformNode('connectGizmo:root', scene);
+      root.scaling.set(CONNECT_GIZMO_SCALE, CONNECT_GIZMO_SCALE, CONNECT_GIZMO_SCALE);
 
       const disc = BABYLON.MeshBuilder.CreateDisc('connectGizmo:disc', { radius: 1.0, tessellation: 64 }, scene);
       const discMat = new BABYLON.StandardMaterial('connectGizmo:disc:mat', scene);
@@ -506,6 +508,8 @@ export function initTransformGizmos({ scene, engine, camera, state, renderDbView
       parts.push(shaft, tip, grab);
 
       state._connect.gizmo = { root, parts };
+    } else {
+      try { root.scaling.set(CONNECT_GIZMO_SCALE, CONNECT_GIZMO_SCALE, CONNECT_GIZMO_SCALE); } catch {}
     }
 
     root.position.set(center.x, center.y, center.z);
@@ -657,12 +661,26 @@ export function initTransformGizmos({ scene, engine, camera, state, renderDbView
   // Update selection OBB lines live (dispose and rebuild for selected ids)
   function updateSelectionObbLive() {
     try {
-      const ids = Array.from(state.selection || []);
-      if (!ids.length) return;
+      const ids = new Set(Array.from(state.selection || []));
+      const map = state.selObb instanceof Map ? state.selObb : (state.selObb = new Map());
+      if (!ids.size) {
+        for (const [, mesh] of Array.from(map.entries())) {
+          try { mesh?.dispose?.(); } catch {}
+        }
+        map.clear();
+        return;
+      }
+
+      for (const [id, mesh] of Array.from(map.entries())) {
+        if (ids.has(id)) continue;
+        try { mesh?.dispose?.(); } catch {}
+        map.delete(id);
+      }
+
       const byId = new Map((state.barrow.spaces||[]).map(s => [s.id, s]));
       for (const id of ids) {
         const s = byId.get(id); if (!s) continue;
-        try { const prev = state.selObb?.get?.(id); if (prev) { prev.dispose?.(); state.selObb.delete?.(id); } } catch {}
+        try { const prev = map.get(id); if (prev) { prev.dispose?.(); map.delete(id); } } catch {}
         const sr = s.res || (state.barrow?.meta?.voxelSize || 1);
         const w = (s.size?.x||0) * sr, h = (s.size?.y||0) * sr, d = (s.size?.z||0) * sr;
         const hx = w/2, hy = h/2, hz = d/2;
@@ -678,7 +696,7 @@ export function initTransformGizmos({ scene, engine, camera, state, renderDbView
         const lines = BABYLON.MeshBuilder.CreateLineSystem(`sel:obb:${id}`, { lines: edges }, scene);
         lines.color = new BABYLON.Color3(0.1, 0.9, 0.9);
         lines.isPickable = false; lines.renderingGroupId = 3;
-        try { state.selObb?.set?.(id, lines); } catch {}
+        try { map.set(id, lines); } catch {}
       }
     } catch {}
   }
@@ -885,12 +903,30 @@ export function initTransformGizmos({ scene, engine, camera, state, renderDbView
           if (d.mode === 'plane') { const dv = p.subtract(sp); dx = dv.x * (d.sens||1); dy = 0; dz = dv.z * (d.sens||1); }
           else { const axis = new BABYLON.Vector3(0,1,0); const sNow = BABYLON.Vector3.Dot(p, axis); dy = (sNow - (d.axisStart||0)) * (d.sens||1); }
           try {
-            state._connect = state._connect || {}; const sel = (state._connect.sel instanceof Set) ? state._connect.sel : null; if (!sel || !sel.size) return;
+            state._connect = state._connect || {};
+            const sel = (state._connect.sel instanceof Set) ? state._connect.sel : null;
+            if (!sel || !sel.size) return;
             const path = Array.isArray(state._connect.path) ? state._connect.path : [];
-            for (const name of sel) { const parts = String(name).split(':'); const i = Number(parts[2] || NaN); if (!isFinite(i) || !path[i]) continue; path[i].x += dx; path[i].y += dy; path[i].z += dz; }
+            const selectedIndices = new Set();
+            for (const name of sel) {
+              const parts = String(name).split(':');
+              const i = Number(parts[2] || NaN);
+              if (!Number.isFinite(i) || !path[i]) continue;
+              path[i].x += dx;
+              path[i].y += dy;
+              path[i].z += dz;
+              selectedIndices.add(i);
+            }
             // Update node meshes
             const nodes = Array.isArray(state._connect.nodes) ? state._connect.nodes : [];
-            for (const n of nodes) { try { const i = n?.i; const m = n?.mesh; if (m && path[i]) m.position.set(path[i].x, path[i].y, path[i].z); } catch {} }
+            for (const n of nodes) {
+              try {
+                const i = Number(n?.i);
+                const m = n?.mesh;
+                if (!Number.isFinite(i) || !selectedIndices.has(i) || !m || !path[i]) continue;
+                m.position.set(path[i].x, path[i].y, path[i].z);
+              } catch {}
+            }
             // Update line instance
             let line = null; try { const prop = (state._connect.props||[]).find(p2 => p2 && p2.name === 'connect:proposal'); line = prop?.mesh || null; } catch {}
             if (line) { try { const pts = path.map(p3 => new BABYLON.Vector3(p3.x, p3.y, p3.z)); BABYLON.MeshBuilder.CreateLines('connect:proposal', { points: pts, updatable: true, instance: line }, scene); } catch {} }

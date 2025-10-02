@@ -6,7 +6,7 @@ export function initEditUiHandlers(ctx) {
   const { saveBarrow = () => {}, snapshot = () => {}, rebuildScene = () => {}, rebuildHalos = () => {}, scheduleGridUpdate = () => {}, renderDbView = () => {}, pickPointOnPlane = () => null, moveSelection = () => {}, setMode = () => {}, setRunning = () => {}, ensureRotWidget = () => {}, ensureMoveWidget = () => {}, disposeRotWidget = () => {}, disposeMoveWidget = () => {}, applyViewToggles = () => {}, updateGridExtent = () => {}, camApi = {} } = helpers;
 
   const { btnTunnel, btnConnect, btnFinalize, btnEmpty, btnRock, btnWall, minInput } = dom;
-  const { showNamesCb, gridGroundCb, gridXYCb, gridYZCb, axisArrowsCb, resizeGridBtn, spaceTypeEl, spaceNameEl, newSpaceBtn, fitViewBtn, sizeXEl, sizeYEl, sizeZEl, sizeLockEl, tStepEl, txMinus, txPlus, tyMinus, tyPlus, tzMinus, tzPlus } = dom;
+  const { showNamesCb, gridGroundCb, gridXYCb, gridYZCb, axisArrowsCb, targetDotCb, resizeGridBtn, spaceTypeEl, spaceNameEl, newSpaceBtn, fitViewBtn, sizeXEl, sizeYEl, sizeZEl, sizeLockEl, tStepEl, txMinus, txPlus, tyMinus, tyPlus, tzMinus, tzPlus } = dom;
 
   if (minInput) minInput.addEventListener('change', () => { try { const v = Math.max(1, Number(minInput.value)||6); localStorage.setItem('dw:ops:minTunnelWidth', String(v)); } catch {} });
 
@@ -20,20 +20,26 @@ export function initEditUiHandlers(ctx) {
   if (gridXYCb) gridXYCb.checked = readBool('dw:ui:gridXY', true);
   if (gridYZCb) gridYZCb.checked = readBool('dw:ui:gridYZ', true);
   if (axisArrowsCb) axisArrowsCb.checked = readBool('dw:ui:axisArrows', true);
+  if (targetDotCb) targetDotCb.checked = readBool('dw:ui:targetDot', true);
   function applyTogglesFromUI() {
     if (showNamesCb) writeBool('dw:ui:showNames', !!showNamesCb.checked);
     if (gridGroundCb) writeBool('dw:ui:gridGround', !!gridGroundCb.checked);
     if (gridXYCb) writeBool('dw:ui:gridXY', !!gridXYCb.checked);
     if (gridYZCb) writeBool('dw:ui:gridYZ', !!gridYZCb.checked);
     if (axisArrowsCb) writeBool('dw:ui:axisArrows', !!axisArrowsCb.checked);
+    if (targetDotCb) {
+      writeBool('dw:ui:targetDot', !!targetDotCb.checked);
+      try { helpers.setTargetDotVisible?.(!!targetDotCb.checked); } catch {}
+    }
     try { applyViewToggles?.(); } catch {}
-    try { Log?.log('UI', 'View toggles', { names: !!showNamesCb?.checked, ground: !!gridGroundCb?.checked, xy: !!gridXYCb?.checked, yz: !!gridYZCb?.checked, arrows: !!axisArrowsCb?.checked }); } catch {}
+    try { Log?.log('UI', 'View toggles', { names: !!showNamesCb?.checked, ground: !!gridGroundCb?.checked, xy: !!gridXYCb?.checked, yz: !!gridYZCb?.checked, arrows: !!axisArrowsCb?.checked, targetDot: !!targetDotCb?.checked }); } catch {}
   }
   showNamesCb?.addEventListener('change', applyTogglesFromUI);
   gridGroundCb?.addEventListener('change', applyTogglesFromUI);
   gridXYCb?.addEventListener('change', applyTogglesFromUI);
   gridYZCb?.addEventListener('change', applyTogglesFromUI);
   axisArrowsCb?.addEventListener('change', applyTogglesFromUI);
+  targetDotCb?.addEventListener('change', applyTogglesFromUI);
   applyTogglesFromUI();
   resizeGridBtn?.addEventListener('click', () => { try { updateGridExtent?.(); } catch {} Log?.log('UI','Resize Grid',{}); });
 

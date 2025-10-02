@@ -44,6 +44,7 @@ export function buildEditTab({ state, Log } = {}) {
       gridXYCb: document.getElementById('gridXY'),
       gridYZCb: document.getElementById('gridYZ'),
       axisArrowsCb: document.getElementById('axisArrows'),
+      targetDotCb: document.getElementById('viewTargetDot'),
       resizeGridBtn: document.getElementById('resizeGrid'),
       // Size + type + name
       spaceTypeEl: document.getElementById('spaceType'),

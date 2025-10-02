@@ -36,21 +36,52 @@ export function initUIHandlers({ scene, engine, camApi, camera, state, helpers, 
     try { Log.log('TRACE', 'selection:init:ok', {}); } catch {}
   } catch (e) { try { Log.log('ERROR', 'selection:init:fail', { error: String(e && e.message ? e.message : e), stack: e && e.stack ? String(e.stack) : undefined }); } catch {} }
 
+  function clearAllSelection() {
+    let clearedSpaces = false;
+    let clearedPP = false;
+    try {
+      if (state.selection?.size) { state.selection.clear(); clearedSpaces = true; }
+    } catch {}
+    try {
+      if (state?._connect?.sel instanceof Set && state._connect.sel.size) {
+        state._connect.sel.clear();
+        clearedPP = true;
+      }
+    } catch {}
+    if (clearedPP) {
+      try { sceneApi.disposeConnectGizmo?.(); } catch {}
+      try { window.dispatchEvent(new CustomEvent('dw:connect:update')); } catch {}
+    }
+    if (clearedSpaces || clearedPP) {
+      try { rebuildHalos?.(); } catch {}
+      try { sceneApi.ensureRotWidget?.(); sceneApi.ensureMoveWidget?.(); } catch {}
+      try { window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: [] } })); } catch {}
+      try { Log.log('UI', 'Clear selection (Esc)', { spaces: clearedSpaces, pp: clearedPP, mode: state.mode }); } catch {}
+    }
+  }
+
   window.addEventListener('keydown', (e) => {
     try {
       if (e.key === 'Escape') {
         if (state._scry?.scryMode) { e.preventDefault(); e.stopPropagation(); sceneApi.exitScryMode?.(); return; }
         if (state.mode === 'cavern') { e.preventDefault(); e.stopPropagation(); sceneApi.exitCavernMode?.(); return; }
+        if (state.mode === 'war') {
+          const t = e.target; const tag = (t && t.tagName) ? String(t.tagName).toLowerCase() : '';
+          const isEditable = (tag === 'input') || (tag === 'textarea') || (t && t.isContentEditable) || (tag === 'select');
+          if (!isEditable) {
+            e.preventDefault();
+            e.stopPropagation();
+            clearAllSelection();
+            return;
+          }
+        }
         if (state.mode === 'edit') {
           const t = e.target; const tag = (t && t.tagName) ? String(t.tagName).toLowerCase() : '';
           const isEditable = (tag === 'input') || (tag === 'textarea') || (t && t.isContentEditable) || (tag === 'select');
           if (!isEditable) {
-            e.preventDefault(); e.stopPropagation();
-            try { state.selection.clear(); } catch {}
-            try { rebuildHalos?.(); } catch {}
-            try { sceneApi.ensureRotWidget?.(); sceneApi.ensureMoveWidget?.(); } catch {}
-            try { window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: [] } })); } catch {}
-            Log.log('UI', 'Clear selection (Esc)', {});
+            e.preventDefault();
+            e.stopPropagation();
+            clearAllSelection();
             return;
           }
         }
@@ -103,7 +134,9 @@ export function initUIHandlers({ scene, engine, camApi, camera, state, helpers, 
           pickPointOnPlane: sceneApi.pickPointOnPlane, moveSelection, setMode, setRunning,
           ensureRotWidget: sceneApi.ensureRotWidget, ensureMoveWidget: sceneApi.ensureMoveWidget,
           disposeRotWidget: sceneApi.disposeRotWidget, disposeMoveWidget: sceneApi.disposeMoveWidget,
-          applyViewToggles, updateGridExtent, camApi
+          applyViewToggles, updateGridExtent, camApi,
+          setTargetDotVisible: sceneApi.setTargetDotVisible,
+          isTargetDotVisible: sceneApi.isTargetDotVisible
         }
       });
     } catch (e) { logErr('EH:tabs:init', e); }

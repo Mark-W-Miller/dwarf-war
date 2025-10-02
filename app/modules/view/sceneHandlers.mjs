@@ -36,6 +36,7 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
   let _cavernApi = null;
   let _selectionGizmo = null;
   let _translationHandler = null;
+  let _rotationHandler = null;
 
   const getSelectionCenter = () => { try { return computeSelectionCenter(state); } catch { return null; } };
   const getVoxelPickWorldCenter = () => { try { return computeVoxelPickWorldCenter(state); } catch { return null; } };
@@ -47,7 +48,9 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
 
   // Attach debug router logs before view handlers so logs still appear
   try { initRouter({ scene, engine, camera, state, Log }); } catch (e) { logErr('EH:router:init', e); }
-  try { initViewManipulations({ scene, engine, camera, state, helpers: { getSelectionCenter, getVoxelPickWorldCenter } }); } catch (e) { logErr('EH:view:init', e); }
+  let _viewApi = null;
+  try { _viewApi = initViewManipulations({ scene, engine, camera, state, helpers: { getSelectionCenter, getVoxelPickWorldCenter } }) || null; }
+  catch (e) { logErr('EH:view:init', e); }
 
   const _gizmo = disabledGizmoApi;
 
@@ -59,7 +62,8 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
         log: (evt, data) => {
           try { Log.log('GIZMO_2', evt, data); } catch {}
         },
-        translationHandler: _translationHandler
+        translationHandler: _translationHandler,
+        rotationHandler: _rotationHandler
       });
       _selectionGizmo.setActive(false);
       state._selectionGizmo = _selectionGizmo;
@@ -85,7 +89,7 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
   } catch (e) { logErr('EH:voxel:init', e); }
 
   function gatherSelectionTargets() {
-    const accumulator = { min: { x: Infinity, y: Infinity, z: Infinity }, max: { x: -Infinity, y: -Infinity, z: -Infinity }, count: 0 };
+    const accumulator = { min: { x: Infinity, y: Infinity, z: Infinity }, max: { x: -Infinity, y: -Infinity, z: -Infinity }, count: 0, hasVox: false };
 
     const expandBounds = (minVec, maxVec) => {
       if (!minVec || !maxVec) return;
@@ -120,6 +124,8 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
         const bb = mesh.getBoundingInfo()?.boundingBox;
         if (!bb) continue;
         expandBounds(bb.minimumWorld, bb.maximumWorld);
+        const space = (state?.barrow?.spaces || []).find((s) => s && s.id === id);
+        if (space && space.vox && space.vox.size) accumulator.hasVox = true;
       }
     } catch {}
 
@@ -165,7 +171,8 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
 
     return {
       min: { x: minX, y: minY, z: minZ },
-      max: { x: maxX, y: maxY, z: maxZ }
+      max: { x: maxX, y: maxY, z: maxZ },
+      hasVox: accumulator.hasVox
     };
   }
 
@@ -198,6 +205,75 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
     return context;
   }
 
+  function buildRotationContext({ axis = 'y', center = new BABYLON.Vector3(0, 0, 0), axisDir = null } = {}) {
+    const selection = Array.from(state?.selection || []);
+    if (!selection.length) return null;
+    const spacesById = new Map((state?.barrow?.spaces || []).map((s) => [s.id, s]));
+    const builtSpaces = Array.isArray(state?.built?.spaces) ? state.built.spaces : [];
+    const axisVec = axisDir?.clone?.() || (() => {
+      switch (axis) {
+        case 'x': return new BABYLON.Vector3(1, 0, 0);
+        case 'z': return new BABYLON.Vector3(0, 0, 1);
+        default: return new BABYLON.Vector3(0, 1, 0);
+      }
+    })();
+    try { axisVec.normalize(); }
+    catch {}
+    const pivot = center?.clone?.() || new BABYLON.Vector3(0, 0, 0);
+    const items = [];
+    for (const id of selection) {
+      const space = spacesById.get(id);
+      if (!space) continue;
+      if (space.vox && space.vox.size) continue;
+      const entry = builtSpaces.find((x) => x && x.id === id);
+      const mesh = entry?.mesh || null;
+      if (!mesh) continue;
+      try { mesh.computeWorldMatrix(true); mesh.refreshBoundingInfo(); } catch {}
+      let meshPos = null;
+      try { meshPos = mesh.getAbsolutePosition ? mesh.getAbsolutePosition() : mesh.position; }
+      catch { meshPos = mesh.position || null; }
+      if (!meshPos) {
+        meshPos = new BABYLON.Vector3(space.origin?.x || 0, space.origin?.y || 0, space.origin?.z || 0);
+      }
+      const meshPosVec = meshPos.clone ? meshPos.clone() : new BABYLON.Vector3(meshPos.x, meshPos.y, meshPos.z);
+      const offset = meshPosVec.subtract(pivot);
+      const meshStartQuat = (() => {
+        try {
+          if (mesh.rotationQuaternion) return mesh.rotationQuaternion.clone();
+          if (mesh.rotation) return BABYLON.Quaternion.FromEulerAngles(mesh.rotation.x || 0, mesh.rotation.y || 0, mesh.rotation.z || 0);
+        } catch {}
+        return BABYLON.Quaternion.Identity();
+      })();
+      const spaceRot = (() => {
+        try {
+          if (space.rotation && typeof space.rotation === 'object') {
+            const rx = Number(space.rotation.x || 0) || 0;
+            const ry = Number(space.rotation.y || space.rotY || 0) || 0;
+            const rz = Number(space.rotation.z || 0) || 0;
+            return BABYLON.Quaternion.FromEulerAngles(rx, ry, rz);
+          }
+        } catch {}
+        const ry = Number(space.rotY || 0) || 0;
+        return BABYLON.Quaternion.FromEulerAngles(0, ry, 0);
+      })();
+      const originVec = new BABYLON.Vector3(space.origin?.x || 0, space.origin?.y || 0, space.origin?.z || 0);
+      items.push({
+        id,
+        space,
+        mesh,
+        startOffset: offset,
+        meshStartPos: meshPosVec,
+        meshStartQuat,
+        spaceStartQuat: spaceRot,
+        spaceStartOrigin: originVec,
+        latestPos: meshPosVec.clone(),
+        latestQuat: meshStartQuat.clone()
+      });
+    }
+    if (!items.length) return null;
+    return { axis, axisDir: axisVec, center: pivot, items, totalAngle: 0 };
+  }
+
   _translationHandler = {
     begin() {
       return buildTranslationContext();
@@ -226,17 +302,128 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
     }
   };
 
+  _rotationHandler = {
+    begin(opts = {}) {
+      return buildRotationContext(opts);
+    },
+    apply(context, totalAngle, deltaAngle, opts = {}) {
+      if (!context || !context.items?.length) return;
+      if (!isFinite(totalAngle) || !isFinite(deltaAngle)) return;
+      context.totalAngle = totalAngle;
+      const axisDir = opts?.axisDir?.clone?.() || context.axisDir.clone();
+      try { axisDir.normalize(); } catch {}
+      context.axisDir = axisDir;
+      if (opts?.axis) context.axis = opts.axis;
+      const quat = BABYLON.Quaternion.RotationAxis(axisDir, totalAngle);
+      const rotMatrix = BABYLON.Matrix.Identity();
+      quat.toRotationMatrix(rotMatrix);
+      const pivot = context.center.clone();
+      for (const item of context.items) {
+        if (!item) continue;
+        const rotatedOffset = BABYLON.Vector3.TransformCoordinates(item.startOffset, rotMatrix);
+        const newPos = pivot.clone();
+        newPos.addInPlace(rotatedOffset);
+        const newQuat = quat.multiply(item.spaceStartQuat);
+        item.latestPos = newPos;
+        item.latestQuat = newQuat;
+        const mesh = item.mesh;
+        if (mesh && !mesh.isDisposed?.()) {
+          try {
+            if (typeof mesh.setAbsolutePosition === 'function') mesh.setAbsolutePosition(newPos.clone());
+            else mesh.position.copyFrom(newPos);
+          } catch {}
+          mesh.rotationQuaternion = mesh.rotationQuaternion || new BABYLON.Quaternion();
+          try { mesh.rotationQuaternion.copyFrom(newQuat); } catch {}
+          try { mesh.rotation.set(0, 0, 0); } catch {}
+          try { mesh.computeWorldMatrix(true); mesh.refreshBoundingInfo(); } catch {}
+        }
+      }
+    },
+    cancel(context) {
+      if (!context || !context.items?.length) return;
+      for (const item of context.items) {
+        if (!item) continue;
+        const mesh = item.mesh;
+        if (mesh && !mesh.isDisposed?.()) {
+          try {
+            if (typeof mesh.setAbsolutePosition === 'function') mesh.setAbsolutePosition(item.meshStartPos.clone());
+            else mesh.position.copyFrom(item.meshStartPos);
+          } catch {}
+          mesh.rotationQuaternion = mesh.rotationQuaternion || new BABYLON.Quaternion();
+          try { mesh.rotationQuaternion.copyFrom(item.meshStartQuat); } catch {}
+          try { mesh.rotation.set(0, 0, 0); } catch {}
+          try { mesh.computeWorldMatrix(true); mesh.refreshBoundingInfo(); } catch {}
+        }
+      }
+    },
+    commit(context, totalAngle, opts = {}) {
+      if (!context || !context.items?.length) return;
+      if (!isFinite(totalAngle)) return;
+      const axisDir = opts?.axisDir?.clone?.() || context.axisDir.clone();
+      try { axisDir.normalize(); } catch {}
+      if (opts?.axis) context.axis = opts.axis;
+      const quat = BABYLON.Quaternion.RotationAxis(axisDir, totalAngle);
+      const rotMatrix = BABYLON.Matrix.Identity();
+      quat.toRotationMatrix(rotMatrix);
+      const pivot = context.center.clone();
+      let changed = false;
+      for (const item of context.items) {
+        if (!item?.space) continue;
+        const rotatedOffset = BABYLON.Vector3.TransformCoordinates(item.startOffset, rotMatrix);
+        const newPos = pivot.clone();
+        newPos.addInPlace(rotatedOffset);
+        const newQuat = quat.multiply(item.spaceStartQuat);
+        const euler = newQuat.toEulerAngles();
+        if (!item.space.rotation || typeof item.space.rotation !== 'object') {
+          item.space.rotation = { x: 0, y: 0, z: 0 };
+        }
+        item.space.rotation.x = euler.x;
+        item.space.rotation.y = euler.y;
+        item.space.rotation.z = euler.z;
+        item.space.rotY = euler.y;
+        item.space.origin = { x: newPos.x, y: newPos.y, z: newPos.z };
+        changed = true;
+      }
+      if (!changed) return;
+      try { saveBarrow(state.barrow); snapshot(state.barrow); } catch (e) { logErr('EH:gizmo2:rotate:save', e); }
+      try { renderDbView(state.barrow); } catch (e) { logErr('EH:gizmo2:rotate:db', e); }
+      try { rebuildScene?.(); } catch (e) { logErr('EH:gizmo2:rotate:rebuild', e); }
+      try { scheduleGridUpdate?.(); } catch (e) { logErr('EH:gizmo2:rotate:grid', e); }
+      try {
+        window.dispatchEvent(new CustomEvent('dw:transform', { detail: { kind: 'rotate', axis: context.axis, angle: totalAngle, selection: Array.from(state.selection || []) } }));
+      } catch {}
+      setTimeout(() => updateSelectionGizmo(), 0);
+    }
+  };
+
   initSelectionGizmo();
   updateSelectionGizmo();
 
   function updateSelectionGizmo() {
     if (!_selectionGizmo) return;
     const bounds = gatherSelectionTargets();
+    const setRotationEnabled = (on) => {
+      try { _selectionGizmo.setGroupEnabled('rotate:x', on); } catch {}
+      try { _selectionGizmo.setGroupEnabled('rotate:y', on); } catch {}
+      try { _selectionGizmo.setGroupEnabled('rotate:z', on); } catch {}
+    };
     if (!bounds) {
+      setRotationEnabled(false);
       try { Log.log('GIZMO_2', 'selection:gizmo:update', { active: false, reason: 'no-bounds', selection: Array.from(state?.selection || []), connect: state?._connect?.sel ? Array.from(state._connect.sel) : [] }); } catch {}
       _selectionGizmo.setActive(false);
       return;
     }
+    const selectionSize = (() => {
+      if (state?.selection instanceof Set) return state.selection.size;
+      if (Array.isArray(state?.selection)) return state.selection.length;
+      return 0;
+    })();
+    const enableRotation = selectionSize > 0 && !bounds.hasVox;
+    setRotationEnabled(enableRotation);
+    try { _selectionGizmo.setGroupEnabled(`move:x`, !bounds.hasVox); } catch {}
+    try { _selectionGizmo.setGroupEnabled(`move:z`, !bounds.hasVox); } catch {}
+    try { _selectionGizmo.setGroupEnabled(`plane:ground`, !bounds.hasVox); } catch {}
+    try { _selectionGizmo.setGroupEnabled(`plane:ground`, true); } catch {}
     try {
       _selectionGizmo.setBounds(bounds);
       _selectionGizmo.setActive(true);
@@ -267,6 +454,8 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
     ensureConnectGizmoFromSel: _gizmo.ensureConnectGizmoFromSel,
     disposeConnectGizmo: _gizmo.disposeConnectGizmo,
     setGizmoHudVisible: _gizmo.setGizmoHudVisible,
+    setTargetDotVisible: _viewApi?.setTargetDotVisible,
+    isTargetDotVisible: _viewApi?.isTargetDotVisible,
     enterCavernModeForSpace: (id) => { try { _cavernApi?.enterCavernModeForSpace?.(id); } catch { } },
     exitCavernMode: () => { try { _cavernApi?.exitCavernMode?.(); } catch { } },
     exitScryMode,
