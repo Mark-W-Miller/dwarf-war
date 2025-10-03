@@ -2,7 +2,7 @@ import { Log, logErr } from '../util/log.mjs';
 import { initScryApi } from './handlers/scry.mjs';
 import { initViewManipulations } from './handlers/view.mjs';
 import { initRouter } from './router.mjs';
-import { getVoxelPickWorldCenter as computeVoxelPickWorldCenter } from './handlers/gizmo.mjs';
+import { getVoxelPickWorldCenter as computeVoxelPickWorldCenter, initConnectGizmo } from './handlers/gizmo.mjs';
 import { createGizmoBuilder } from './gizmoBuilder.mjs';
 import { initCavernApi } from './handlers/cavern.mjs';
 import { initVoxelHandlers } from './handlers/voxel.mjs';
@@ -15,23 +15,6 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
 
   let _gizmosSuppressed = false;
   const noop = () => {};
-  const noopPromise = async () => {};
-  const disabledGizmoApi = {
-    ensureRotWidget: noop,
-    ensureMoveWidget: noop,
-    disposeRotWidget: noop,
-    disposeMoveWidget: noop,
-    pickPointOnPlane: () => null,
-    disposeLiveIntersections: noop,
-    updateLiveIntersectionsFor: noop,
-    updateSelectionObbLive: noop,
-    updateContactShadowPlacement: noop,
-    ensureConnectGizmoFromSel: noop,
-    disposeConnectGizmo: noop,
-    setGizmoHudVisible: noop,
-    rotWidget: null,
-    moveWidget: null,
-  };
   let _scryApi = null;
   let _cavernApi = null;
   let _selectionGizmo = null;
@@ -40,6 +23,20 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
 
   const getSelectionCenter = () => { try { return computeSelectionCenter(state); } catch { return null; } };
   const getVoxelPickWorldCenter = () => { try { return computeVoxelPickWorldCenter(state); } catch { return null; } };
+
+  function pickPointOnPlane(normal, point) {
+    try {
+      const n = normal.clone(); n.normalize();
+      const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), camera);
+      const origin = ray.origin;
+      const dir = ray.direction;
+      const denom = BABYLON.Vector3.Dot(n, dir);
+      if (Math.abs(denom) < 1e-6) return null;
+      const t = BABYLON.Vector3.Dot(point.subtract(origin), n) / denom;
+      if (!isFinite(t) || t < 0) return null;
+      return origin.add(dir.scale(t));
+    } catch { return null; }
+  }
 
   try { _scryApi = initScryApi({ scene, engine, camera, state, Log }); } catch (e) { logErr('EH:scry:init', e); }
   state._scry = { ball: null, prev: null, exitObs: null, prevWallOpacity: null, prevRockOpacity: null };
@@ -51,8 +48,6 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
   let _viewApi = null;
   try { _viewApi = initViewManipulations({ scene, engine, camera, state, helpers: { getSelectionCenter, getVoxelPickWorldCenter } }) || null; }
   catch (e) { logErr('EH:view:init', e); }
-
-  const _gizmo = disabledGizmoApi;
 
   function initSelectionGizmo() {
     try {
@@ -76,7 +71,7 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
   try {
     _cavernApi = initCavernApi({
       scene, engine, camera, state,
-      helpers: { rebuildScene, rebuildHalos, setMode, setGizmoHudVisible: _gizmo.setGizmoHudVisible, disposeMoveWidget: _gizmo.disposeMoveWidget, disposeRotWidget: _gizmo.disposeRotWidget },
+      helpers: { rebuildScene, rebuildHalos, setMode, setGizmoHudVisible: noop, disposeMoveWidget: disposeSelectionWidgets, disposeRotWidget: disposeSelectionWidgets },
       scryApi: _scryApi,
       Log,
     });
@@ -85,7 +80,16 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
   let _vox = null;
   try {
     _vox = initVoxelHandlers({ scene, engine, camera, state });
-    _vox.initVoxelHover({ isGizmoBusy: () => { try { return !!(_gizmo?.rotWidget?.dragging || _gizmo?.moveWidget?.dragging); } catch { return false; } } });
+    _vox.initVoxelHover({
+      isGizmoBusy: () => {
+        try {
+          const info = _selectionGizmo?.getDragState?.();
+          return !!(info && info.active);
+        } catch {
+          return false;
+        }
+      }
+    });
   } catch (e) { logErr('EH:voxel:init', e); }
 
   function gatherSelectionTargets() {
@@ -396,17 +400,91 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
     }
   };
 
+  const connectGizmo = initConnectGizmo({
+    scene,
+    engine,
+    camera,
+    state,
+    renderDbView,
+    saveBarrow,
+    snapshot,
+    scheduleGridUpdate,
+    rebuildScene
+  });
+
   initSelectionGizmo();
   updateSelectionGizmo();
 
+  const moveWidgetProxy = {
+    get dragging() {
+      const info = _selectionGizmo?.getDragState?.();
+      if (!info || !info.active) return false;
+      return info.kind === 'axis' || info.kind === 'plane';
+    },
+    get preDrag() { return false; }
+  };
+
+  const rotWidgetProxy = {
+    get dragging() {
+      const info = _selectionGizmo?.getDragState?.();
+      if (!info || !info.active) return false;
+      return info.kind === 'rotation';
+    },
+    get preDrag() { return false; }
+  };
+
+  function suppressSelectionGizmo(on) {
+    _gizmosSuppressed = !!on;
+    if (_gizmosSuppressed) {
+      try { _selectionGizmo?.setActive(false); } catch {}
+    } else {
+      updateSelectionGizmo();
+    }
+  }
+
+  function ensureSelectionWidgets() {
+    if (_gizmosSuppressed) return;
+    updateSelectionGizmo();
+  }
+
+  function disposeSelectionWidgets() {
+    try { _selectionGizmo?.setActive(false); } catch {}
+  }
+
+  try {
+    window.addEventListener('dw:gizmos:disable', () => suppressSelectionGizmo(true));
+    window.addEventListener('dw:gizmos:enable', () => suppressSelectionGizmo(false));
+  } catch {}
+
   function updateSelectionGizmo() {
     if (!_selectionGizmo) return;
-    const bounds = gatherSelectionTargets();
     const setRotationEnabled = (on) => {
       try { _selectionGizmo.setGroupEnabled('rotate:x', on); } catch {}
       try { _selectionGizmo.setGroupEnabled('rotate:y', on); } catch {}
       try { _selectionGizmo.setGroupEnabled('rotate:z', on); } catch {}
     };
+    const connectSelSize = (() => {
+      try {
+        const sel = state?._connect?.sel;
+        if (sel instanceof Set) return sel.size;
+        if (Array.isArray(sel)) return sel.length;
+      } catch {}
+      return 0;
+    })();
+    if (connectSelSize > 0) {
+      try { connectGizmo?.ensureConnectGizmoFromSel?.(); } catch {}
+      setRotationEnabled(false);
+      try {
+        _selectionGizmo.setGroupEnabled('move:x', false);
+        _selectionGizmo.setGroupEnabled('move:z', false);
+        _selectionGizmo.setGroupEnabled('plane:ground', false);
+      } catch {}
+      try { _selectionGizmo.setActive(false); } catch {}
+      try { Log.log('GIZMO_2', 'selection:gizmo:suppressedForConnect', { connectSelSize }); } catch {}
+      return;
+    }
+    try { connectGizmo?.ensureConnectGizmoFromSel?.(); } catch {}
+    const bounds = gatherSelectionTargets();
     if (!bounds) {
       setRotationEnabled(false);
       try { Log.log('GIZMO_2', 'selection:gizmo:update', { active: false, reason: 'no-bounds', selection: Array.from(state?.selection || []), connect: state?._connect?.sel ? Array.from(state._connect.sel) : [] }); } catch {}
@@ -440,20 +518,20 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
   const api = {
     // exposure for UI module
     isGizmosSuppressed: () => _gizmosSuppressed,
-    getRotWidget: () => _gizmo.rotWidget,
-    getMoveWidget: () => _gizmo.moveWidget,
-    ensureRotWidget: _gizmo.ensureRotWidget,
-    ensureMoveWidget: _gizmo.ensureMoveWidget,
-    disposeRotWidget: _gizmo.disposeRotWidget,
-    disposeMoveWidget: _gizmo.disposeMoveWidget,
-    pickPointOnPlane: _gizmo.pickPointOnPlane,
-    disposeLiveIntersections: _gizmo.disposeLiveIntersections,
-    updateLiveIntersectionsFor: _gizmo.updateLiveIntersectionsFor,
-    updateSelectionObbLive: _gizmo.updateSelectionObbLive,
-    updateContactShadowPlacement: _gizmo.updateContactShadowPlacement,
-    ensureConnectGizmoFromSel: _gizmo.ensureConnectGizmoFromSel,
-    disposeConnectGizmo: _gizmo.disposeConnectGizmo,
-    setGizmoHudVisible: _gizmo.setGizmoHudVisible,
+    getRotWidget: () => rotWidgetProxy,
+    getMoveWidget: () => moveWidgetProxy,
+    ensureRotWidget: ensureSelectionWidgets,
+    ensureMoveWidget: ensureSelectionWidgets,
+    disposeRotWidget: disposeSelectionWidgets,
+    disposeMoveWidget: disposeSelectionWidgets,
+    pickPointOnPlane: (normal, point) => pickPointOnPlane(normal || new BABYLON.Vector3(0, 1, 0), point || new BABYLON.Vector3(0, 0, 0)),
+    disposeLiveIntersections: noop,
+    updateLiveIntersectionsFor: noop,
+    updateSelectionObbLive: noop,
+    updateContactShadowPlacement: noop,
+    ensureConnectGizmoFromSel: () => { try { connectGizmo?.ensureConnectGizmoFromSel?.(); } catch {} },
+    disposeConnectGizmo: () => { try { connectGizmo?.disposeConnectGizmo?.(); } catch {} },
+    setGizmoHudVisible: noop,
     setTargetDotVisible: _viewApi?.setTargetDotVisible,
     isTargetDotVisible: _viewApi?.isTargetDotVisible,
     enterCavernModeForSpace: (id) => { try { _cavernApi?.enterCavernModeForSpace?.(id); } catch { } },

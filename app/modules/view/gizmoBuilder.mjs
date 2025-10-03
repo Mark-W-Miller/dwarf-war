@@ -983,6 +983,13 @@ function applyTranslationDelta(totalDelta) {
     isActive,
     setGroupEnabled: (group, on) => setGroupEnabledInternal(group, on),
     isGroupEnabled: (group) => isGroupEnabled(group),
+    isDragging: () => !!dragState.active,
+    getDragState: () => ({
+      active: !!dragState.active,
+      kind: dragState.kind || null,
+      axis: dragState.axis || null,
+      pointerId: dragState.pointerId
+    }),
     dispose
   };
 }
