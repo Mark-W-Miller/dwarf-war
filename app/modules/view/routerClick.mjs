@@ -87,6 +87,11 @@ export function routerHandlePrimaryClick(e, routerState) {
     if (!metaOrCtrl) {
       return false;
     }
+    if (state?._connect?.sel instanceof Set && state._connect.sel.size) {
+      try { state._connect.sel.clear(); } catch {}
+      try { sceneApi?.disposeConnectGizmo?.(); } catch {}
+      try { dispatchWindowEvent('dw:connect:update'); } catch {}
+    }
     const pickedName = String(sp.pickedMesh.name || '');
     const id = pickedName.slice('space:'.length).split(':')[0];
     if (!(state.selection instanceof Set)) state.selection = new Set(Array.isArray(state.selection) ? state.selection : []);
