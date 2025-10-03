@@ -1,6 +1,10 @@
 // Router click/drag handling: camera gestures + routing helpers
 import { log } from '../util/log.mjs';
 import { decompressVox, VoxelType } from '../voxels/voxelize.mjs';
+
+function isSolidVoxel(value) {
+  return value === VoxelType.Rock || value === VoxelType.Wall;
+}
 import { modsOf as modsOfEvent } from '../util/log.mjs';
 import { pickPPNode, pickConnectGizmo, pickRotGizmo, pickMoveGizmo, pickSpace } from './routerHover.mjs';
 
@@ -398,7 +402,15 @@ export function routerBeginVoxelStroke(e, routerState, route) {
   const { state } = routerState;
   const space = (state?.barrow?.spaces || []).find(s => s && String(s.id) === String(spaceId)) || null;
   if (!space || !space.vox || !space.vox.size) return false;
-  const stroke = { active: true, spaceId: space.id, add: !!(e && e.shiftKey), button: 0, justStarted: true, allowEmptyAfterSolid: false };
+  const stroke = {
+    active: true,
+    spaceId: space.id,
+    add: !!(e && e.shiftKey),
+    button: 0,
+    justStarted: true,
+    allowEmptyAfterSolid: false,
+    anchor: null
+  };
   routerState._brush = stroke;
   const hit = voxelHitAtPointerForSpaceClick(routerState, space);
   if (!hit) {
@@ -406,7 +418,8 @@ export function routerBeginVoxelStroke(e, routerState, route) {
     routerState._brush = null;
     return true;
   }
-  stroke.allowEmptyAfterSolid = !!(hit.v && hit.v !== 0 && !hit.emptyBeforeSolid);
+  stroke.anchor = { ix: hit.ix, iy: hit.iy, iz: hit.iz };
+  stroke.allowEmptyAfterSolid = isSolidVoxel(hit.v);
   ensureVoxSelForClick(routerState, space.id, hit.ix, hit.iy, hit.iz, stroke.add, hit.v);
   return true;
 }
@@ -423,10 +436,43 @@ export function routerHandleBrushMove(routerState) {
     log('VOXEL_SELECT', 'brush-miss', { spaceId: space.id, add: !!_brush.add, pointer: { x: scene.pointerX, y: scene.pointerY } });
     return;
   }
-  if (!allowEmpty && hit.v && hit.v !== 0 && !hit.emptyBeforeSolid) {
+  let anchor = _brush.anchor;
+  if (!anchor && routerState._lastNonSolidHit && routerState._lastNonSolidHit.spaceId === space.id) {
+    anchor = { ...routerState._lastNonSolidHit.voxel };
+    _brush.anchor = anchor;
+    log('VOXEL_SELECT', 'brush:anchor:fromEmpty', { space: space.id, anchor });
+  }
+
+  if (anchor) {
+    const maxDelta = Math.max(
+      Math.abs(hit.ix - anchor.ix),
+      Math.abs(hit.iy - anchor.iy),
+      Math.abs(hit.iz - anchor.iz)
+    );
+    const limit = allowEmpty ? 3 : 4;
+    if (maxDelta > limit) {
+      log('VOXEL_SELECT', 'brush:skip:nonAdjacent', {
+        id: space.id,
+        anchor,
+        hit: { ix: hit.ix, iy: hit.iy, iz: hit.iz, v: hit.v },
+        limit,
+        pointer: { x: scene.pointerX, y: scene.pointerY }
+      });
+      return;
+    }
+  }
+
+  if (!allowEmpty && isSolidVoxel(hit.v)) {
     _brush.allowEmptyAfterSolid = true;
   }
   ensureVoxSelForClick(routerState, space.id, hit.ix, hit.iy, hit.iz, !!_brush.add, hit.v);
+  if (!isSolidVoxel(hit.v)) {
+    routerState._lastNonSolidHit = {
+      spaceId: space.id,
+      voxel: { ix: hit.ix, iy: hit.iy, iz: hit.iz }
+    };
+  }
+  _brush.anchor = { ix: hit.ix, iy: hit.iy, iz: hit.iz };
 }
 
 function dispatchWindowEvent(name, detail) {
