@@ -1,6 +1,6 @@
 // Router hover handling: gizmos, PP nodes, spaces, voxels
 import { log } from '../util/log.mjs';
-import { decompressVox } from '../voxels/voxelize.mjs';
+import { decompressVox, VoxelType } from '../voxels/voxelize.mjs';
 
 // ————— Local logging gate —————
 function routerLogsEnabled() {
@@ -449,6 +449,9 @@ function renderVoxelHover(routerState, state, space, voxelInfo, voxelValue) {
   routerState._voxHoverLastHit = { id: space.id, i: ix, j: iy, k: iz };
 }
 
+// Cast a ray through the space's voxel grid and highlight the first solid voxel hit.
+// Empty voxels are always skipped (even when the pointer starts inside air),
+// mirroring the click behaviour that only tunnels through empties until a solid.
 function voxelHoverForSpace(routerState, space) {
   const { scene, camera, state } = routerState;
   const pointerX = scene.pointerX;
@@ -480,12 +483,38 @@ function voxelHoverForSpace(routerState, space) {
   const minX = boundsMin.x, minY = boundsMin.y, minZ = boundsMin.z;
   let guard = 0;
   const guardMax = (nx + ny + nz) * 3 + 10;
+  let firstSampleLogged = false;
 
   while (t <= tLimit + EPS && ix >= 0 && iy >= 0 && iz >= 0 && ix < nx && iy < ny && iz < nz && guard++ < guardMax) {
     if (iy < yCut) {
       const flatIndex = ix + nx * (iy + ny * iz);
-      const voxelValue = data[flatIndex] ?? 0;
-      if (voxelValue !== 0) {
+      const rawValue = Number(data[flatIndex] ?? 0);
+      const voxelValue = Number.isFinite(rawValue) ? rawValue : 0;
+
+      if (!firstSampleLogged && routerLogsEnabled()) {
+        log('HOVER_VOXEL', 'firstSample', {
+          id: space.id,
+          i: ix,
+          j: iy,
+          k: iz,
+          v: voxelValue,
+          pointer: { x: pointerX, y: pointerY }
+        });
+        firstSampleLogged = true;
+      }
+
+      const isSolid = voxelValue === VoxelType.Rock || voxelValue === VoxelType.Wall;
+      if (isSolid) {
+        if (routerLogsEnabled()) {
+          log('HOVER_VOXEL', 'hitSolid', {
+            id: space.id,
+            i: ix,
+            j: iy,
+            k: iz,
+            v: voxelValue,
+            pointer: { x: pointerX, y: pointerY }
+          });
+        }
         renderVoxelHover(routerState, state, space, {
           ix, iy, iz,
           res,

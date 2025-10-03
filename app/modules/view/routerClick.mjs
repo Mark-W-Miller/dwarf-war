@@ -1,6 +1,6 @@
 // Router click/drag handling: camera gestures + routing helpers
 import { log } from '../util/log.mjs';
-import { decompressVox } from '../voxels/voxelize.mjs';
+import { decompressVox, VoxelType } from '../voxels/voxelize.mjs';
 import { modsOf as modsOfEvent } from '../util/log.mjs';
 import { pickPPNode, pickConnectGizmo, pickRotGizmo, pickMoveGizmo, pickSpace } from './routerHover.mjs';
 
@@ -297,14 +297,17 @@ function voxelHitAtPointerForSpaceClick(routerState, space, options = {}) {
   while (t <= tmax + EPS && ix >= 0 && iy >= 0 && iz >= 0 && ix < nx && iy < ny && iz < nz && guard++ < guardMax) {
     if (iy < yCut) {
       const flat = ix + nx * (iy + ny * iz);
-      const v = data[flat] ?? 0;
-      if (v !== 0) {
+      const raw = Number(data[flat] ?? VoxelType.Uninstantiated);
+      const v = Number.isFinite(raw) ? raw : VoxelType.Uninstantiated;
+      const isSolid = v === VoxelType.Rock || v === VoxelType.Wall;
+      const isEmpty = v === VoxelType.Empty;
+      if (isSolid) {
         if (!preferEmpty) {
           return { ix, iy, iz, v, emptyBeforeSolid };
         }
         if (!firstSolid) firstSolid = { ix, iy, iz, v, emptyBeforeSolid };
         seenSolid = true;
-      } else if (preferEmpty && seenSolid) {
+      } else if (preferEmpty && seenSolid && isEmpty) {
         return { ix, iy, iz, v, emptyBeforeSolid };
       } else if (!seenSolid) {
         emptyBeforeSolid = true;
