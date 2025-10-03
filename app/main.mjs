@@ -13,6 +13,7 @@ import { initSceneHandlers } from './modules/view/sceneHandlers.mjs';
 import { initUIHandlers } from './modules/view/uiHandlers.mjs';
 import { createRebuildHalos } from './modules/view/handlers/halos.mjs';
 import { initVoxelDebug } from './modules/view/handlers/voxelDebug.mjs';
+import { rebuildConnectMeshes, ensureConnectState } from './modules/view/connectMeshes.mjs';
 
 // Babylon setup
 const canvas = document.getElementById('renderCanvas');
@@ -189,25 +190,8 @@ updateHud();
 try {
   const p = (state?.barrow?.connect && Array.isArray(state.barrow.connect.path)) ? state.barrow.connect.path : null;
   if (p && p.length >= 2) {
-    try {
-      state._connect = state._connect || {};
-      for (const it of state._connect.props || []) { try { it.mesh?.dispose?.(); } catch {} }
-      for (const it of state._connect.nodes || []) { try { it.mesh?.dispose?.(); } catch {} }
-      state._connect.props = []; state._connect.nodes = []; state._connect.segs = []; state._connect.path = null;
-    } catch {}
-    const pts = p.map(q => new BABYLON.Vector3(q.x||0, q.y||0, q.z||0));
-    const line = BABYLON.MeshBuilder.CreateLines('connect:proposal', { points: pts, updatable: true }, scene);
-    line.color = new BABYLON.Color3(0.55, 0.9, 1.0); line.isPickable = false; line.renderingGroupId = 3;
-    state._connect.props = [{ name: 'connect:proposal', mesh: line, path: p }];
-    state._connect.nodes = [];
-    for (let i = 1; i < pts.length - 1; i++) {
-      const sNode = BABYLON.MeshBuilder.CreateSphere(`connect:node:${i}`, { diameter: 1.2 }, scene);
-      sNode.position.copyFrom(pts[i]); sNode.isPickable = true; sNode.renderingGroupId = 3;
-      const mat = new BABYLON.StandardMaterial(`connect:node:${i}:mat`, scene);
-      mat.emissiveColor = new BABYLON.Color3(0.6,0.9,1.0); mat.diffuseColor = new BABYLON.Color3(0.15,0.25,0.35); mat.specularColor = new BABYLON.Color3(0,0,0); mat.disableDepthWrite = true; mat.backFaceCulling = false; mat.zOffset = 8;
-      sNode.material = mat; state._connect.nodes.push({ i, mesh: sNode });
-    }
-    state._connect.path = p.map(q => ({ x:q.x||0, y:q.y||0, z:q.z||0 }));
+    ensureConnectState(state);
+    rebuildConnectMeshes({ scene, state, path: p });
     try { window.dispatchEvent(new CustomEvent('dw:connect:update')); } catch {}
   }
 } catch {}

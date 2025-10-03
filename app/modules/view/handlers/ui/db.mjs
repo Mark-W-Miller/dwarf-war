@@ -5,6 +5,7 @@ import { buildSceneFromBarrow, disposeBuilt } from '../../../barrow/builder.mjs'
 import { makeDefaultBarrow, mergeInstructions, layoutBarrow } from '../../../barrow/schema.mjs';
 import { renderDbView } from '../../dbTab.mjs';
 import { Log } from '../../../util/log.mjs';
+import { rebuildConnectMeshes, disposeConnectMeshes, ensureConnectState, syncConnectPathToDb } from '../../connectMeshes.mjs';
 
 export function initDbUiHandlers(ctx) {
   const { scene, engine, camApi, camera, state, helpers, gizmo } = ctx;
@@ -274,28 +275,10 @@ export function initDbUiHandlers(ctx) {
       try {
         const p = (data && data.connect && Array.isArray(data.connect.path)) ? data.connect.path : ((data && data.meta && data.meta.connect && Array.isArray(data.meta.connect.path)) ? data.meta.connect.path : null);
         if (p && p.length >= 2) {
-          // Clear previous proposal
-          try {
-            state._connect = state._connect || {};
-            for (const it of state._connect.props || []) { try { it.mesh?.dispose?.(); } catch {} }
-            for (const it of state._connect.nodes || []) { try { it.mesh?.dispose?.(); } catch {} }
-            state._connect.props = []; state._connect.nodes = []; state._connect.segs = []; state._connect.path = null;
-          } catch {}
-          // Create new proposal meshes
-          const pts = p.map(q => new BABYLON.Vector3(q.x||0, q.y||0, q.z||0));
-          const line = BABYLON.MeshBuilder.CreateLines('connect:proposal', { points: pts, updatable: true }, scene);
-          line.color = new BABYLON.Color3(0.55, 0.9, 1.0); line.isPickable = false; line.renderingGroupId = 3;
-          state._connect.props = [{ name: 'connect:proposal', mesh: line, path: p }];
-          state._connect.nodes = [];
-          for (let i = 1; i < pts.length - 1; i++) {
-            const sNode = BABYLON.MeshBuilder.CreateSphere(`connect:node:${i}`, { diameter: 1.2 }, scene);
-            sNode.position.copyFrom(pts[i]); sNode.isPickable = true; sNode.renderingGroupId = 3;
-            const mat = new BABYLON.StandardMaterial(`connect:node:${i}:mat`, scene);
-            mat.emissiveColor = new BABYLON.Color3(0.6,0.9,1.0); mat.diffuseColor = new BABYLON.Color3(0.15,0.25,0.35); mat.specularColor = new BABYLON.Color3(0,0,0); mat.disableDepthWrite = true; mat.backFaceCulling = false; mat.zOffset = 8;
-            sNode.material = mat; state._connect.nodes.push({ i, mesh: sNode });
-          }
-          state._connect.path = p.map(q => ({ x:q.x||0, y:q.y||0, z:q.z||0 }));
-          try { state.barrow.connect = { path: state._connect.path.map(q => ({ x:q.x, y:q.y, z:q.z })) }; saveBarrow(state.barrow); } catch {}
+          ensureConnectState(state);
+          rebuildConnectMeshes({ scene, state, path: p });
+          syncConnectPathToDb(state);
+          try { saveBarrow(state.barrow); } catch {}
           try { if (gizmo?.ensureConnectGizmoFromSel) gizmo.ensureConnectGizmoFromSel(); } catch {}
         }
       } catch {}
@@ -341,26 +324,10 @@ export function initDbUiHandlers(ctx) {
       try {
         const p = (data && data.connect && Array.isArray(data.connect.path)) ? data.connect.path : ((data && data.meta && data.meta.connect && Array.isArray(data.meta.connect.path)) ? data.meta.connect.path : null);
         if (p && p.length >= 2) {
-          try {
-            state._connect = state._connect || {};
-            for (const it of state._connect.props || []) { try { it.mesh?.dispose?.(); } catch {} }
-            for (const it of state._connect.nodes || []) { try { it.mesh?.dispose?.(); } catch {} }
-            state._connect.props = []; state._connect.nodes = []; state._connect.segs = []; state._connect.path = null;
-          } catch {}
-          const pts = p.map(q => new BABYLON.Vector3(q.x||0, q.y||0, q.z||0));
-          const line = BABYLON.MeshBuilder.CreateLines('connect:proposal', { points: pts, updatable: true }, scene);
-          line.color = new BABYLON.Color3(0.55, 0.9, 1.0); line.isPickable = false; line.renderingGroupId = 3;
-          state._connect.props = [{ name: 'connect:proposal', mesh: line, path: p }];
-          state._connect.nodes = [];
-          for (let i = 1; i < pts.length - 1; i++) {
-            const sNode = BABYLON.MeshBuilder.CreateSphere(`connect:node:${i}`, { diameter: 1.2 }, scene);
-            sNode.position.copyFrom(pts[i]); sNode.isPickable = true; sNode.renderingGroupId = 3;
-            const mat = new BABYLON.StandardMaterial(`connect:node:${i}:mat`, scene);
-            mat.emissiveColor = new BABYLON.Color3(0.6,0.9,1.0); mat.diffuseColor = new BABYLON.Color3(0.15,0.25,0.35); mat.specularColor = new BABYLON.Color3(0,0,0); mat.disableDepthWrite = true; mat.backFaceCulling = false; mat.zOffset = 8;
-            sNode.material = mat; state._connect.nodes.push({ i, mesh: sNode });
-          }
-          state._connect.path = p.map(q => ({ x:q.x||0, y:q.y||0, z:q.z||0 }));
-          try { state.barrow.connect = { path: state._connect.path.map(q => ({ x:q.x, y:q.y, z:q.z })) }; saveBarrow(state.barrow); } catch {}
+          ensureConnectState(state);
+          rebuildConnectMeshes({ scene, state, path: p });
+          syncConnectPathToDb(state);
+          try { saveBarrow(state.barrow); } catch {}
           try { if (gizmo?.ensureConnectGizmoFromSel) gizmo.ensureConnectGizmoFromSel(); } catch {}
         }
       } catch {}

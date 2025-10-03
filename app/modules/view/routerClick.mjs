@@ -6,7 +6,8 @@ function isSolidVoxel(value) {
   return value === VoxelType.Rock || value === VoxelType.Wall;
 }
 import { modsOf as modsOfEvent } from '../util/log.mjs';
-import { pickPPNode, pickConnectGizmo, pickRotGizmo, pickMoveGizmo, pickSpace } from './routerHover.mjs';
+import { pickPPNode, pickPPSegment, pickConnectGizmo, pickRotGizmo, pickMoveGizmo, pickSpace, refreshPPNodeSelection } from './routerHover.mjs';
+import { ensureConnectState, rebuildConnectMeshes, syncConnectPathToDb } from './connectMeshes.mjs';
 
 // ————— Primary click actions (selection) —————
 export function routerHandlePrimaryClick(e, routerState) {
@@ -18,6 +19,12 @@ export function routerHandlePrimaryClick(e, routerState) {
 
   const mods = { meta: !!e.metaKey, ctrl: !!e.ctrlKey, shift: !!e.shiftKey, alt: !!e.altKey };
   const metaOrCtrl = mods.meta || mods.ctrl;
+  if (metaOrCtrl) {
+    const seg = pickPPSegment({ scene, x, y });
+    if (seg && seg.pickedMesh && insertPPNodeOnSegment({ routerState, segHit: seg, mods })) {
+      return true;
+    }
+  }
   const forceSpaceSelection = metaOrCtrl;
   const ignorePriorityTargets = metaOrCtrl;
 
@@ -48,6 +55,7 @@ export function routerHandlePrimaryClick(e, routerState) {
       } else {
         state._connect.sel.clear(); state._connect.sel.add(name);
       }
+      refreshPPNodeSelection(routerState);
       dispatchWindowEvent('dw:connect:update');
       log('SELECT', 'pp:select', { name, shift: mods.shift });
       return true;
@@ -171,6 +179,7 @@ export function routerIsOverPPOrGizmo(e, routerState) {
   const x = scene.pointerX, y = scene.pointerY;
   return !!(
     pickPPNode({ scene, x, y }) ||
+    pickPPSegment({ scene, x, y }) ||
     pickConnectGizmo({ scene, x, y }) ||
     pickRotGizmo({ scene, x, y }) ||
     pickMoveGizmo({ scene, x, y })
@@ -477,4 +486,69 @@ export function routerHandleBrushMove(routerState) {
 
 function dispatchWindowEvent(name, detail) {
   window.dispatchEvent(new CustomEvent(name, { detail }));
+}
+
+function insertPPNodeOnSegment({ routerState, segHit, mods }) {
+  try {
+    const { scene, state } = routerState || {};
+    if (!scene || !state || !segHit) return false;
+    const connect = ensureConnectState(state);
+    const path = Array.isArray(connect?.path) ? connect.path : null;
+    if (!path || path.length < 2) return false;
+
+    const meshName = String(segHit?.pickedMesh?.name || '');
+    if (!meshName.startsWith('connect:seg:')) return false;
+    const segIndex = Number(meshName.split(':').pop());
+    if (!Number.isFinite(segIndex) || segIndex < 0 || segIndex >= path.length - 1) return false;
+
+    const picked = segHit.pickedPoint || null;
+    const fallback = (() => {
+      try {
+        const a = path[segIndex];
+        const b = path[segIndex + 1];
+        if (!a || !b) return null;
+        return {
+          x: (Number(a.x) + Number(b.x)) / 2,
+          y: (Number(a.y) + Number(b.y)) / 2,
+          z: (Number(a.z) + Number(b.z)) / 2
+        };
+      } catch {
+        return null;
+      }
+    })();
+    const target = picked ? { x: picked.x, y: picked.y, z: picked.z } : fallback;
+    if (!target) return false;
+
+    const newPath = [
+      ...path.slice(0, segIndex + 1),
+      { x: Number(target.x) || 0, y: Number(target.y) || 0, z: Number(target.z) || 0 },
+      ...path.slice(segIndex + 1)
+    ];
+
+    rebuildConnectMeshes({ scene, state, path: newPath });
+    const updated = ensureConnectState(state);
+    const newNodeName = `connect:node:${segIndex + 1}`;
+    const newSel = new Set([newNodeName]);
+    updated.sel = newSel;
+    state._connect.sel = newSel;
+    refreshPPNodeSelection(routerState);
+    syncConnectPathToDb(state);
+
+    const sceneApi = routerState.sceneApi || state?._sceneApi || null;
+    try { sceneApi?.ensureConnectGizmoFromSel?.(); } catch {}
+    try { sceneApi?.updateContactShadowPlacement?.(); } catch {}
+
+    dispatchWindowEvent('dw:connect:update');
+    log('SELECT', 'pp:insertNode', {
+      segment: segIndex,
+      node: newNodeName,
+      meta: !!mods?.meta,
+      ctrl: !!mods?.ctrl
+    });
+    try { scene.render(); } catch {}
+    return true;
+  } catch (err) {
+    log('ERROR', 'pp:insertNode:fail', { error: String(err) });
+    return false;
+  }
 }

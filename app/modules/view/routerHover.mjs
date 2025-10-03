@@ -15,6 +15,12 @@ export function pickPPNode({ scene, x, y }) {
   );
   return r?.hit && r.pickedMesh ? r : null;
 }
+export function pickPPSegment({ scene, x, y }) {
+  const r = scene.pick(x, y,
+    (m) => m && m.name && String(m.name).startsWith('connect:seg:')
+  );
+  return r?.hit && r.pickedMesh ? r : null;
+}
 export function pickConnectGizmo({ scene, x, y }) {
   const r = scene.pick(x, y,
     (m) => m && m.name && String(m.name).startsWith('connectGizmo:')
@@ -118,6 +124,24 @@ function clearPPHover(routerState) {
   setPPNodeColorForSelection(routerState, prev.mat);
   routerState.ppHover = { mat: null, name: null };
   log('HOVER_DETAIL', 'pp:clear', { had: true, name, selected });
+}
+
+export function refreshPPNodeSelection(routerState) {
+  const nodes = Array.isArray(routerState?.state?._connect?.nodes) ? routerState.state._connect.nodes : [];
+  const hoveredMat = routerState?.ppHover?.mat || null;
+  for (const entry of nodes) {
+    const mesh = entry?.mesh || null;
+    const mat = mesh?.material || null;
+    if (!mat) continue;
+    if (hoveredMat && hoveredMat === mat) continue;
+    setPPNodeColorForSelection(routerState, mat);
+  }
+  if (hoveredMat) {
+    try {
+      const orange = new BABYLON.Color3(0.95, 0.55, 0.12);
+      hoveredMat.emissiveColor = orange;
+    } catch {}
+  }
 }
 
 // ————— Hover helpers (spaces) —————

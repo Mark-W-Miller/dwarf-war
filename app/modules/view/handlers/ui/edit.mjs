@@ -1,5 +1,6 @@
 // Edit tab UI handlers (voxel ops, connect paths, tunnels)
 import { VoxelType } from '../../../voxels/voxelize.mjs';
+import { rebuildConnectMeshes, disposeConnectMeshes, ensureConnectState, syncConnectPathToDb } from '../../connectMeshes.mjs';
 
 export function initEditUiHandlers(ctx) {
   const { scene, engine, camera, state, Log, helpers = {}, dom = {} } = ctx;
@@ -306,16 +307,17 @@ export function initEditUiHandlers(ctx) {
   // Proposal state
   function clearProposals() {
     state._connect = state._connect || {};
-    try { Log?.log('PATH', 'proposal:clear', { props: (state._connect.props||[]).length, nodes: (state._connect.nodes||[]).length, segs: (state._connect.segs||[]).length }); } catch {}
-    for (const p of state._connect.props || []) { try { p.mesh?.dispose?.(); } catch {} }
-    for (const n of state._connect.nodes || []) { try { n.mesh?.dispose?.(); } catch {} }
-    for (const s of state._connect.segs || []) { try { s.mesh?.dispose?.(); } catch {} }
+    const propsCount = (state._connect.props || []).length;
+    const nodeCount = (state._connect.nodes || []).length;
+    const segCount = (state._connect.segs || []).length;
+    try { Log?.log('PATH', 'proposal:clear', { props: propsCount, nodes: nodeCount, segs: segCount }); } catch {}
+    disposeConnectMeshes(state);
     if (state._connect.gizmo && state._connect.gizmo.root) { try { state._connect.gizmo.root.dispose(); } catch {} }
     if (state._connect.gizmo && state._connect.gizmo.parts) { for (const m of state._connect.gizmo.parts) { try { m.dispose(); } catch {} } }
     if (state._connect.debug && state._connect.debug.marker) { try { state._connect.debug.marker.dispose(); } catch {} }
     state._connect.props = []; state._connect.nodes = []; state._connect.segs = []; state._connect.path = null;
     // Remove from DB as well
-    try { if (state.barrow && state.barrow.connect) { state.barrow.connect = null; } } catch {}
+    syncConnectPathToDb(state);
     try { saveBarrow(state.barrow); snapshot(state.barrow); } catch {}
     try { window.dispatchEvent(new CustomEvent('dw:connect:update')); } catch {}
     if (state._connect.pickObs) { try { scene.onPrePointerObservable.remove(state._connect.pickObs); } catch {}; state._connect.pickObs = null; }
@@ -326,53 +328,37 @@ export function initEditUiHandlers(ctx) {
 
   function createProposalMeshesFromPath(path) {
     try {
-      state._connect = state._connect || { props: [], nodes: [], segs: [] };
-      const pts = path.map(p => new BABYLON.Vector3(p.x, p.y, p.z));
-      const line = BABYLON.MeshBuilder.CreateLines('connect:proposal', { points: pts, updatable: true }, scene);
-      line.color = new BABYLON.Color3(0.55, 0.9, 1.0);
-      line.isPickable = false; line.renderingGroupId = 3;
-      state._connect.props.push({ name: 'connect:proposal', mesh: line, path });
-      for (let i=1;i<pts.length-1;i++) {
-        const s = BABYLON.MeshBuilder.CreateSphere(`connect:node:${i}`, { diameter: 1.2 }, scene);
-        s.position.copyFrom(pts[i]); s.isPickable = true; s.renderingGroupId = 3;
-        const mat = new BABYLON.StandardMaterial(`connect:node:${i}:mat`, scene);
-        mat.emissiveColor = new BABYLON.Color3(0.6,0.9,1.0);
-        mat.diffuseColor = new BABYLON.Color3(0.15,0.25,0.35);
-        mat.specularColor = new BABYLON.Color3(0,0,0);
-        mat.disableDepthWrite = true; mat.backFaceCulling = false; mat.zOffset = 8;
-        s.material = mat; state._connect.nodes.push({ i, mesh: s });
-      }
+      ensureConnectState(state);
+      rebuildConnectMeshes({ scene, state, path });
       if (btnFinalize) btnFinalize.style.display = 'inline-block';
-      Log?.log('PATH', 'proposal:create', { points: path.length, segs: state._connect.segs.length, nodes: state._connect.nodes.length });
-      // Persist to DB
-      try { state.barrow.connect = { path: path.map(p => ({ x: p.x, y: p.y, z: p.z })) }; saveBarrow(state.barrow); } catch {}
+      const conn = state._connect || {};
+      try {
+        Log?.log('PATH', 'proposal:create', {
+          points: Array.isArray(conn.path) ? conn.path.length : 0,
+          segs: Array.isArray(conn.segs) ? conn.segs.length : 0,
+          nodes: Array.isArray(conn.nodes) ? conn.nodes.length : 0
+        });
+      } catch {}
+      syncConnectPathToDb(state);
+      try { saveBarrow(state.barrow); } catch {}
       try { window.dispatchEvent(new CustomEvent('dw:connect:update')); } catch {}
     } catch {}
   }
 
   function updateProposalMeshes() {
     try {
-      const path = state._connect.path || [];
-      const pts = path.map(p => new BABYLON.Vector3(p.x, p.y, p.z));
-      for (const p of state._connect.props || []) { try { p.mesh?.dispose?.(); } catch {} }
-      state._connect.props = [];
-      const line = BABYLON.MeshBuilder.CreateLines('connect:proposal', { points: pts, updatable: false }, scene);
-      line.color = new BABYLON.Color3(0.55, 0.9, 1.0); line.isPickable = false; line.renderingGroupId = 3; state._connect.props.push({ name:'connect:proposal', mesh: line, path });
-      for (const n of state._connect.nodes || []) { try { n.mesh?.dispose?.(); } catch {} }
-      state._connect.nodes = [];
-      for (let i=1;i<pts.length-1;i++) {
-        const s = BABYLON.MeshBuilder.CreateSphere(`connect:node:${i}`, { diameter: 1.2 }, scene);
-        s.position.copyFrom(pts[i]); s.isPickable = true; s.renderingGroupId = 3;
-        const mat = new BABYLON.StandardMaterial(`connect:node:${i}:mat`, scene);
-        mat.emissiveColor = new BABYLON.Color3(0.6,0.9,1.0);
-        mat.diffuseColor = new BABYLON.Color3(0.15,0.25,0.35);
-        mat.specularColor = new BABYLON.Color3(0,0,0);
-        mat.disableDepthWrite = true; mat.backFaceCulling = false; mat.zOffset = 8;
-        s.material = mat; state._connect.nodes.push({ i, mesh: s });
-      }
-      Log?.log('PATH', 'proposal:update', { points: path.length, segs: state._connect.segs.length, nodes: state._connect.nodes.length });
-      // Persist to DB
-      try { state.barrow.connect = { path: path.map(p => ({ x: p.x, y: p.y, z: p.z })) }; saveBarrow(state.barrow); } catch {}
+      ensureConnectState(state);
+      rebuildConnectMeshes({ scene, state, path: state._connect.path || [] });
+      const conn = state._connect || {};
+      try {
+        Log?.log('PATH', 'proposal:update', {
+          points: Array.isArray(conn.path) ? conn.path.length : 0,
+          segs: Array.isArray(conn.segs) ? conn.segs.length : 0,
+          nodes: Array.isArray(conn.nodes) ? conn.nodes.length : 0
+        });
+      } catch {}
+      syncConnectPathToDb(state);
+      try { saveBarrow(state.barrow); } catch {}
       try { window.dispatchEvent(new CustomEvent('dw:connect:update')); } catch {}
     } catch {}
   }
@@ -449,12 +435,8 @@ export function initEditUiHandlers(ctx) {
       const radius = Math.max(1.0, (cs*baseRes)/2);
       const upY = Math.max(pA.y, pB.y);
       const path = pathAvoidingObstacles(pA, pB, obstacles, radius, upY) || [pA,pB];
-      state._connect = state._connect || { props: [], nodes: [], segs: [], path: null };
-      state._connect.path = path.map(p => ({ x: p.x, y: p.y, z: p.z }));
-      createProposalMeshesFromPath(state._connect.path);
-      // Save to DB and notify
-      try { state.barrow.connect = { path: state._connect.path.map(p => ({ x:p.x, y:p.y, z:p.z })) }; saveBarrow(state.barrow); } catch {}
-      try { window.dispatchEvent(new CustomEvent('dw:connect:update')); } catch {}
+      const newPath = path.map(p => ({ x: p.x, y: p.y, z: p.z }));
+      createProposalMeshesFromPath(newPath);
       ensureConnectGizmo();
     } catch {}
   });

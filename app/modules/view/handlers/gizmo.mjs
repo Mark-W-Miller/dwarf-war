@@ -1,5 +1,6 @@
 // Gizmo input handling (priority/capture to prevent camera rotation) extracted from eventHandler.mjs
 import { Log, pickLog, mLog } from '../../util/log.mjs';
+import { updateConnectMeshesGeometry } from '../connectMeshes.mjs';
 
 // Compute world position for the current voxel pick or last voxel selection.
 export function getVoxelPickWorldCenter(state) {
@@ -343,7 +344,15 @@ export function initTransformGizmos({ scene, engine, camera, state, renderDbView
   // ——————————— Widget pointer actions (moved from eventHandler) ———————————
   let _lastDbRefresh = 0;
   let _lastGizmoClick = 0;
+  let _lastMoveTransform = 0;
   const dragThreshold = 6; // pixels
+  function emitTransformEvent(detail, { force = false } = {}) {
+    if (typeof window === 'undefined') return;
+    const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    if (!force && (now - _lastMoveTransform) < 60) return;
+    _lastMoveTransform = now;
+    try { window.dispatchEvent(new CustomEvent('dw:transform', { detail })); } catch {}
+  }
   function getSelectedSpaceAndMesh() {
     const sel = Array.from(state.selection || []);
     if (sel.length !== 1) return { space: null, mesh: null, id: null };
@@ -907,7 +916,6 @@ export function initTransformGizmos({ scene, engine, camera, state, renderDbView
             const sel = (state._connect.sel instanceof Set) ? state._connect.sel : null;
             if (!sel || !sel.size) return;
             const path = Array.isArray(state._connect.path) ? state._connect.path : [];
-            const selectedIndices = new Set();
             for (const name of sel) {
               const parts = String(name).split(':');
               const i = Number(parts[2] || NaN);
@@ -915,21 +923,8 @@ export function initTransformGizmos({ scene, engine, camera, state, renderDbView
               path[i].x += dx;
               path[i].y += dy;
               path[i].z += dz;
-              selectedIndices.add(i);
             }
-            // Update node meshes
-            const nodes = Array.isArray(state._connect.nodes) ? state._connect.nodes : [];
-            for (const n of nodes) {
-              try {
-                const i = Number(n?.i);
-                const m = n?.mesh;
-                if (!Number.isFinite(i) || !selectedIndices.has(i) || !m || !path[i]) continue;
-                m.position.set(path[i].x, path[i].y, path[i].z);
-              } catch {}
-            }
-            // Update line instance
-            let line = null; try { const prop = (state._connect.props||[]).find(p2 => p2 && p2.name === 'connect:proposal'); line = prop?.mesh || null; } catch {}
-            if (line) { try { const pts = path.map(p3 => new BABYLON.Vector3(p3.x, p3.y, p3.z)); BABYLON.MeshBuilder.CreateLines('connect:proposal', { points: pts, updatable: true, instance: line }, scene); } catch {} }
+            updateConnectMeshesGeometry({ scene, state });
             // Update gizmo position
             try { ensureConnectGizmoFromSel(); } catch {}
             try { scene.render(); } catch {}
@@ -1092,6 +1087,7 @@ export function initTransformGizmos({ scene, engine, camera, state, renderDbView
           const isGroup = selNow.length > 1;
           const isPlane = (moveWidget.mode === 'plane');
           const axis = (moveWidget.axis === 'x') ? new BABYLON.Vector3(1,0,0) : (moveWidget.axis === 'y') ? new BABYLON.Vector3(0,1,0) : new BABYLON.Vector3(0,0,1);
+          let currentCenterForEvent = null;
           if (isGroup) {
             const n = moveWidget.planeNormal || new BABYLON.Vector3(0,1,0);
             const basePt = isPlane ? new BABYLON.Vector3(0, (moveWidget.dragPlaneY != null ? moveWidget.dragPlaneY : (moveWidget.planeY || 0)), 0) : (moveWidget.startCenter || new BABYLON.Vector3(0,0,0));
@@ -1111,7 +1107,9 @@ export function initTransformGizmos({ scene, engine, camera, state, renderDbView
             try { moveWidget.root.position.copyFrom(targetCenter); } catch {}
             try { updateMoveDiscPlacement(); } catch {}
             try { helpers.updateContactShadowPlacement?.(); } catch {}
-            moveWidget.groupCenter = targetCenter; try { if (rotWidget.group && rotWidget.groupNode) rotWidget.groupNode.position.copyFrom(targetCenter); } catch {}
+            moveWidget.groupCenter = targetCenter;
+            currentCenterForEvent = { x: targetCenter.x, y: targetCenter.y, z: targetCenter.z };
+            try { if (rotWidget.group && rotWidget.groupNode) rotWidget.groupNode.position.copyFrom(targetCenter); } catch {}
             try { const byId = new Map((state.barrow.spaces||[]).map(s => [s.id, s])); for (const id2 of moveWidget.groupIDs || []) { const m2 = (state?.built?.spaces || []).find(x => x.id === id2)?.mesh; if (!m2) continue; const sp = byId.get(id2); if (!sp) continue; sp.origin = { x: m2.position.x, y: m2.position.y, z: m2.position.z }; } const now = performance.now(); if (now - _lastDbRefresh > 60) { _lastDbRefresh = now; Log.log('GIZMO', isPlane ? 'Group Plane Move update' : 'Group Move update', { ids: moveWidget.groupIDs, mode: moveWidget.mode, axis: moveWidget.axis }); try { renderDbView?.(state.barrow); } catch {}; try { helpers.updateSelectionObbLive?.(); } catch {} } } catch {}
           } else {
             const n = moveWidget.planeNormal || new BABYLON.Vector3(0,1,0);
@@ -1123,11 +1121,22 @@ export function initTransformGizmos({ scene, engine, camera, state, renderDbView
             try { const now = performance.now(); moveWidget._lastLog = moveWidget._lastLog || 0; if (now - moveWidget._lastLog > 100) { moveWidget._lastLog = now; mLog('drag:update', { isPlane, basePt: { x: basePt.x, y: basePt.y, z: basePt.z }, target: { x: target.x, y: target.y, z: target.z }, dragPlaneY: moveWidget.dragPlaneY }); } } catch {}
             mesh.position.copyFrom(target); try { mesh.computeWorldMatrix(true); mesh.refreshBoundingInfo(); } catch {}
             try { if (moveWidget.root) moveWidget.root.position.copyFrom(target); } catch {}
+            currentCenterForEvent = { x: target.x, y: target.y, z: target.z };
             try { updateMoveDiscPlacement(); } catch {}
             try { helpers.updateContactShadowPlacement?.(); } catch {}
             try { updateRotWidgetFromMesh(mesh); } catch {}
             try { if (space) { space.origin = space.origin || { x: 0, y: 0, z: 0 }; space.origin.x = mesh.position.x; space.origin.y = mesh.position.y; space.origin.z = mesh.position.z; const now = performance.now(); if (now - _lastDbRefresh > 60) { _lastDbRefresh = now; Log.log('GIZMO', isPlane ? 'Plane Move update' : 'Move update', { id: moveWidget.spaceId, mode: moveWidget.mode, axis: moveWidget.axis, origin: space.origin }); try { renderDbView?.(state.barrow); } catch {} } try { helpers.updateLiveIntersectionsFor?.(id); } catch {} } } catch {}
             try { helpers.updateSelectionObbLive?.(); } catch {}
+          }
+          const startCenter = moveWidget.startCenter;
+          if (startCenter && currentCenterForEvent) {
+            const dx = currentCenterForEvent.x - startCenter.x;
+            const dy = currentCenterForEvent.y - startCenter.y;
+            const dz = currentCenterForEvent.z - startCenter.z;
+            if ([dx, dy, dz].every(Number.isFinite)) {
+              const selectionDetail = selNow.length ? selNow.slice() : (Array.isArray(moveWidget.groupIDs) && moveWidget.groupIDs.length ? moveWidget.groupIDs.slice() : (moveWidget.spaceId != null ? [moveWidget.spaceId] : []));
+              emitTransformEvent({ kind: 'move', phase: 'drag', mode: moveWidget.mode, axis: moveWidget.axis, selection: selectionDetail, dx, dy, dz });
+            }
           }
         }
       }
@@ -1182,6 +1191,46 @@ export function initTransformGizmos({ scene, engine, camera, state, renderDbView
             try { rebuildScene?.(); ensureRotWidget(); ensureMoveWidget(); } catch {}
           }
         } catch {}
+        try {
+          const startCenter = moveWidget.startCenter;
+          if (startCenter) {
+            const selectionIds = Array.from(state.selection || []);
+            const selectionDetail = selectionIds.length ? selectionIds.slice() : (Array.isArray(moveWidget.groupIDs) && moveWidget.groupIDs.length ? moveWidget.groupIDs.slice() : (moveWidget.spaceId != null ? [moveWidget.spaceId] : []));
+            let finalCenter = null;
+            if (selectionDetail.length === 1) {
+              const id = selectionDetail[0];
+              const spaceEntry = (state?.barrow?.spaces || []).find(x => x && x.id === id);
+              const origin = spaceEntry?.origin;
+              if (origin && [origin.x, origin.y, origin.z].every(Number.isFinite)) {
+                finalCenter = { x: origin.x, y: origin.y, z: origin.z };
+              } else {
+                const meshEntry = (state?.built?.spaces || []).find(x => x.id === id)?.mesh;
+                if (meshEntry) finalCenter = { x: meshEntry.position.x, y: meshEntry.position.y, z: meshEntry.position.z };
+              }
+            } else if (selectionDetail.length > 1) {
+              const byId = new Map((state?.barrow?.spaces || []).map(s => [s.id, s]));
+              let sx = 0, sy = 0, sz = 0, count = 0;
+              for (const id of selectionDetail) {
+                const origin = byId.get(id)?.origin;
+                if (origin && [origin.x, origin.y, origin.z].every(Number.isFinite)) {
+                  sx += origin.x; sy += origin.y; sz += origin.z;
+                  count += 1;
+                }
+              }
+              if (count) finalCenter = { x: sx / count, y: sy / count, z: sz / count };
+            }
+            if (finalCenter) {
+              const dx = finalCenter.x - startCenter.x;
+              const dy = finalCenter.y - startCenter.y;
+              const dz = finalCenter.z - startCenter.z;
+              if ([dx, dy, dz].every(Number.isFinite)) {
+                emitTransformEvent({ kind: 'move', phase: 'end', mode: moveWidget.mode, axis: moveWidget.axis, selection: selectionDetail, dx, dy, dz }, { force: true });
+              }
+            }
+          }
+        } catch {}
+        moveWidget.startCenter = null;
+        moveWidget.startById = null;
         try { setRingsDim(); } catch {}
       }
     } catch {}
