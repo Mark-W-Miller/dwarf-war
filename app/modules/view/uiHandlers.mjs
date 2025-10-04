@@ -12,130 +12,125 @@ export function initUIHandlers({ scene, engine, camApi, camera, state, helpers, 
 
   const panel = document.getElementById('rightPanel');
   const collapsePanelBtn = document.getElementById('collapsePanel');
-  try { initPanelUI({ panel, collapsePanelBtn, engine, Log }); } catch {}
+  initPanelUI({ panel, collapsePanelBtn, engine, Log });
 
-  try { initSelectionUI({ state, scene, engine, camera, rebuildHalos, ensureRotWidget: sceneApi.ensureRotWidget, ensureMoveWidget: sceneApi.ensureMoveWidget }); } catch {}
-  try {
-    try { Log.log('TRACE', 'selection:init:call', {}); } catch {}
-    initPointerSelection({
-      scene, engine, camera, state, camApi,
-      rebuildHalos,
-      ensureRotWidget: sceneApi.ensureRotWidget,
-      ensureMoveWidget: sceneApi.ensureMoveWidget,
-      disposeLiveIntersections: sceneApi.disposeLiveIntersections,
-      voxelHitAtPointerForSpace: sceneApi.voxelHitAtPointerForSpace,
-      pickPointOnPlane: sceneApi.pickPointOnPlane,
-      isGizmosSuppressed: () => sceneApi.isGizmosSuppressed?.() || false,
-      getRotWidget: () => sceneApi.getRotWidget?.() || null,
-      getMoveWidget: () => sceneApi.getMoveWidget?.() || null,
-      enterCavernModeForSpace: sceneApi.enterCavernModeForSpace,
-      ensureConnectGizmoFromSel: sceneApi.ensureConnectGizmoFromSel,
-      disposeConnectGizmo: sceneApi.disposeConnectGizmo,
-      Log, dPick, sLog, inputLog, modsOf, comboName,
-    });
-    try { Log.log('TRACE', 'selection:init:ok', {}); } catch {}
-  } catch (e) { try { Log.log('ERROR', 'selection:init:fail', { error: String(e && e.message ? e.message : e), stack: e && e.stack ? String(e.stack) : undefined }); } catch {} }
+  initSelectionUI({ state, scene, engine, camera, rebuildHalos, ensureRotWidget: sceneApi.ensureRotWidget, ensureMoveWidget: sceneApi.ensureMoveWidget });
+    Log.log('TRACE', 'selection:init:call', {});
+  initPointerSelection({
+    scene, engine, camera, state, camApi,
+    rebuildHalos,
+    ensureRotWidget: sceneApi.ensureRotWidget,
+    ensureMoveWidget: sceneApi.ensureMoveWidget,
+    disposeLiveIntersections: sceneApi.disposeLiveIntersections,
+    voxelHitAtPointerForSpace: sceneApi.voxelHitAtPointerForSpace,
+    pickPointOnPlane: sceneApi.pickPointOnPlane,
+    isGizmosSuppressed: () => sceneApi.isGizmosSuppressed?.() || false,
+    getRotWidget: () => sceneApi.getRotWidget?.() || null,
+    getMoveWidget: () => sceneApi.getMoveWidget?.() || null,
+    enterCavernModeForSpace: sceneApi.enterCavernModeForSpace,
+    ensureConnectGizmoFromSel: sceneApi.ensureConnectGizmoFromSel,
+    disposeConnectGizmo: sceneApi.disposeConnectGizmo,
+    Log, dPick, sLog, inputLog, modsOf, comboName,
+ });
+  Log.log('TRACE', 'selection:init:ok', {});
 
   function clearAllSelection() {
     const hadSpaces = !!(state.selection && state.selection.size);
-    try { state.selection?.clear?.(); } catch {}
-    try { rebuildHalos?.(); } catch {}
-    try { sceneApi.ensureRotWidget?.(); sceneApi.ensureMoveWidget?.(); } catch {}
-    try { window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: [] } })); } catch {}
-    try { Log.log('UI', 'Clear space selection (Esc)', { spaces: hadSpaces, mode: state.mode }); } catch {}
+    state.selection?.clear?.();
+    rebuildHalos?.();
+    sceneApi.ensureRotWidget?.(); sceneApi.ensureMoveWidget?.();
+    window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: [] } }));
+    Log.log('UI', 'Clear space selection (Esc)', { spaces: hadSpaces, mode: state.mode });
   }
 
   window.addEventListener('keydown', (e) => {
-    try {
-      if (e.key === 'Escape') {
-        if (state._scry?.scryMode) { e.preventDefault(); e.stopPropagation(); sceneApi.exitScryMode?.(); return; }
-        if (state.mode === 'cavern') { e.preventDefault(); e.stopPropagation(); sceneApi.exitCavernMode?.(); return; }
-        if (state.mode === 'war') {
-          const t = e.target; const tag = (t && t.tagName) ? String(t.tagName).toLowerCase() : '';
-          const isEditable = (tag === 'input') || (tag === 'textarea') || (t && t.isContentEditable) || (tag === 'select');
-          if (!isEditable) {
-            e.preventDefault();
-            e.stopPropagation();
-            clearAllSelection();
-            return;
-          }
-        }
-        if (state.mode === 'edit') {
-          const t = e.target; const tag = (t && t.tagName) ? String(t.tagName).toLowerCase() : '';
-          const isEditable = (tag === 'input') || (tag === 'textarea') || (t && t.isContentEditable) || (tag === 'select');
-          if (!isEditable) {
-            e.preventDefault();
-            e.stopPropagation();
-            clearAllSelection();
-            return;
-          }
+    if (e.key === 'Escape') {
+      if (state._scry?.scryMode) { e.preventDefault(); e.stopPropagation(); sceneApi.exitScryMode?.(); return; }
+      if (state.mode === 'cavern') { e.preventDefault(); e.stopPropagation(); sceneApi.exitCavernMode?.(); return; }
+      if (state.mode === 'war') {
+        const t = e.target; const tag = (t && t.tagName) ? String(t.tagName).toLowerCase() : '';
+        const isEditable = (tag === 'input') || (tag === 'textarea') || (t && t.isContentEditable) || (tag === 'select');
+        if (!isEditable) {
+          e.preventDefault();
+          e.stopPropagation();
+          clearAllSelection();
+          return;
         }
       }
+      if (state.mode === 'edit') {
+        const t = e.target; const tag = (t && t.tagName) ? String(t.tagName).toLowerCase() : '';
+        const isEditable = (tag === 'input') || (tag === 'textarea') || (t && t.isContentEditable) || (tag === 'select');
+        if (!isEditable) {
+          e.preventDefault();
+          e.stopPropagation();
+          clearAllSelection();
+          return;
+        }
+      }
+    }
 
-      if (state.mode !== 'edit') return;
-      const k = e.key;
-      if (k !== 'Delete' && k !== 'Backspace') return;
-      const t = e.target; const tag = (t && t.tagName) ? String(t.tagName).toLowerCase() : '';
-      const isEditable = (tag === 'input') || (tag === 'textarea') || (t && t.isContentEditable) || (tag === 'select');
-      if (isEditable) return;
-      const rw = sceneApi.getRotWidget?.(); const mw = sceneApi.getMoveWidget?.();
-      if (rw?.dragging || mw?.dragging || rw?.preDrag || mw?.preDrag) return;
-      const ids = Array.from(state.selection || []);
-      if (!ids.length) return;
-      const byId = new Map((state.barrow.spaces||[]).map(s => [s.id, s]));
-      const toDelete = ids.filter(id => { const s = byId.get(id); return s && !s.vox; });
-      const skipped = ids.filter(id => { const s = byId.get(id); return s && !!s.vox; });
-      if (!toDelete.length) return;
-      e.preventDefault(); e.stopPropagation();
-      const before = state.barrow.spaces.length;
-      state.barrow.spaces = (state.barrow.spaces||[]).filter(s => !toDelete.includes(s.id));
-      state.selection.clear();
-      for (const id of skipped) state.selection.add(id);
-      try { helpers.saveBarrow ? helpers.saveBarrow(state.barrow) : null; helpers.snapshot ? helpers.snapshot(state.barrow) : null; } catch {}
-      try { sceneApi.disposeMoveWidget?.(); } catch {}
-      try { sceneApi.disposeRotWidget?.(); } catch {}
-      try { rebuildScene?.(); } catch {}
-      try { renderDbView(state.barrow); } catch {}
-      try { scheduleGridUpdate?.(); } catch {}
-      try { rebuildHalos?.(); } catch {}
-      try { sceneApi.ensureRotWidget?.(); sceneApi.ensureMoveWidget?.(); } catch {}
-      try { window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: Array.from(state.selection) } })); } catch {}
-      try { Log.log('UI', 'Delete spaces', { removed: toDelete, keptVoxelized: skipped, before, after: state.barrow.spaces.length }); } catch {}
-    } catch {}
-  });
+    if (state.mode !== 'edit') return;
+    const k = e.key;
+    if (k !== 'Delete' && k !== 'Backspace') return;
+    const t = e.target; const tag = (t && t.tagName) ? String(t.tagName).toLowerCase() : '';
+    const isEditable = (tag === 'input') || (tag === 'textarea') || (t && t.isContentEditable) || (tag === 'select');
+    if (isEditable) return;
+    const rw = sceneApi.getRotWidget?.(); const mw = sceneApi.getMoveWidget?.();
+    if (rw?.dragging || mw?.dragging || rw?.preDrag || mw?.preDrag) return;
+    const ids = Array.from(state.selection || []);
+    if (!ids.length) return;
+    const byId = new Map((state.barrow.spaces||[]).map(s => [s.id, s]));
+    const toDelete = ids.filter(id => { const s = byId.get(id); return s && !s.vox; });
+    const skipped = ids.filter(id => { const s = byId.get(id); return s && !!s.vox; });
+    if (!toDelete.length) return;
+    e.preventDefault(); e.stopPropagation();
+    const before = state.barrow.spaces.length;
+    state.barrow.spaces = (state.barrow.spaces||[]).filter(s => !toDelete.includes(s.id));
+    state.selection.clear();
+    for (const id of skipped) state.selection.add(id);
+    helpers.saveBarrow ? helpers.saveBarrow(state.barrow) : null; helpers.snapshot ? helpers.snapshot(state.barrow) : null;
+    sceneApi.disposeMoveWidget?.();
+    sceneApi.disposeRotWidget?.();
+    rebuildScene?.();
+    renderDbView(state.barrow);
+    scheduleGridUpdate?.();
+    rebuildHalos?.();
+    sceneApi.ensureRotWidget?.(); sceneApi.ensureMoveWidget?.();
+    window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: Array.from(state.selection) } }));
+    Log.log('UI', 'Delete spaces', { removed: toDelete, keptVoxelized: skipped, before, after: state.barrow.spaces.length });
+
+ });
 
   window.addEventListener('resize', () => engine.resize());
 
   (function setupTabs() {
-    try {
-      const created = buildTabPanel({ renderDbView, state, Log }) || {};
-      const editDom = created.editDom || null;
-      try { initTestTab({ pane: created.testPane, scene, camera, state }); } catch (e) { logErr('EH:testTab:init', e); }
-      initEditUiHandlers({
-        scene, engine, camera, state, Log,
-        dom: editDom,
-        helpers: {
-          saveBarrow: helpers.saveBarrow, snapshot: helpers.snapshot, rebuildScene, rebuildHalos, scheduleGridUpdate, renderDbView,
-          pickPointOnPlane: sceneApi.pickPointOnPlane, moveSelection, setMode, setRunning,
-          ensureRotWidget: sceneApi.ensureRotWidget, ensureMoveWidget: sceneApi.ensureMoveWidget,
-          disposeRotWidget: sceneApi.disposeRotWidget, disposeMoveWidget: sceneApi.disposeMoveWidget,
-          applyViewToggles, updateGridExtent, camApi,
-          setTargetDotVisible: sceneApi.setTargetDotVisible,
-          isTargetDotVisible: sceneApi.isTargetDotVisible
-        }
-      });
-    } catch (e) { logErr('EH:tabs:init', e); }
-  })();
+    const created = buildTabPanel({ renderDbView, state, Log }) || {};
+    const editDom = created.editDom || null;
+    initTestTab({ pane: created.testPane, scene, camera, state });
+    initEditUiHandlers({
+      scene, engine, camera, state, Log,
+      dom: editDom,
+      helpers: {
+        saveBarrow: helpers.saveBarrow, snapshot: helpers.snapshot, rebuildScene, rebuildHalos, scheduleGridUpdate, renderDbView,
+        pickPointOnPlane: sceneApi.pickPointOnPlane, moveSelection, setMode, setRunning,
+        ensureRotWidget: sceneApi.ensureRotWidget, ensureMoveWidget: sceneApi.ensureMoveWidget,
+        disposeRotWidget: sceneApi.disposeRotWidget, disposeMoveWidget: sceneApi.disposeMoveWidget,
+        applyViewToggles, updateGridExtent, camApi,
+        setTargetDotVisible: sceneApi.setTargetDotVisible,
+        isTargetDotVisible: sceneApi.isTargetDotVisible
+      }
+ });
+
+ })();
 
   window.addEventListener('dw:transform', () => {
-    try { sceneApi.ensureRotWidget?.(); sceneApi.ensureMoveWidget?.(); rebuildHalos?.(); } catch {}
-  });
+    sceneApi.ensureRotWidget?.(); sceneApi.ensureMoveWidget?.(); rebuildHalos?.();
+ });
 
-  try {
-    initDbUiHandlers({
-      scene, engine, camApi, camera, state,
-      helpers: { ...helpers, exitCavernMode: sceneApi.exitCavernMode, exitScryMode: sceneApi.exitScryMode },
-      gizmo: { ensureRotWidget: sceneApi.ensureRotWidget, ensureMoveWidget: sceneApi.ensureMoveWidget, disposeRotWidget: sceneApi.disposeRotWidget, disposeMoveWidget: sceneApi.disposeMoveWidget }
-    });
-  } catch (e) { logErr('EH:dbUi:init', e); }
+  initDbUiHandlers({
+    scene, engine, camApi, camera, state,
+    helpers: { ...helpers, exitCavernMode: sceneApi.exitCavernMode, exitScryMode: sceneApi.exitScryMode },
+    gizmo: { ensureRotWidget: sceneApi.ensureRotWidget, ensureMoveWidget: sceneApi.ensureMoveWidget, disposeRotWidget: sceneApi.disposeRotWidget, disposeMoveWidget: sceneApi.disposeMoveWidget }
+ });
+
 }

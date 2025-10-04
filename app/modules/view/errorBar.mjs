@@ -52,32 +52,29 @@ export function initErrorBar(Log) {
   }
 
   function showErrorMessage(cls, msg, data) {
-    try {
-      ensureErrorBar();
-      const line = document.createElement('div');
-      const at = new Date().toLocaleTimeString();
-      let detail = '';
-      try { if (data && (data.error || data.message)) detail = ` — ${String(data.error || data.message)}`; } catch {}
-      line.textContent = `[${at}] ${msg}${detail}`;
-      _errList.appendChild(line);
-      _errBar.style.display = 'block';
-      // Keep last 6 lines
-      try { while (_errList.childElementCount > 6) _errList.removeChild(_errList.firstChild); } catch {}
-      // Auto-hide after 10s if no new errors
-      if (_errTimer) { clearTimeout(_errTimer); _errTimer = null; }
-      _errTimer = setTimeout(() => { try { _errBar.style.display = 'none'; } catch {} }, 10000);
-    } catch {}
+    ensureErrorBar();
+    const line = document.createElement('div');
+    const at = new Date().toLocaleTimeString();
+    let detail = '';
+    if (data && (data.error || data.message)) detail = ` — ${String(data.error || data.message)}`;
+    line.textContent = `[${at}] ${msg}${detail}`;
+    _errList.appendChild(line);
+    _errBar.style.display = 'block';
+    // Keep last 6 lines
+    while (_errList.childElementCount > 6) _errList.removeChild(_errList.firstChild);
+    // Auto-hide after 10s if no new errors
+    if (_errTimer) { clearTimeout(_errTimer); _errTimer = null; }
+    _errTimer = setTimeout(() => { _errBar.style.display = 'none'; }, 10000);
+
   }
 
-  try {
-    Log.on(({ entries }) => {
-      const last = entries && entries.length ? entries[entries.length - 1] : null;
-      if (!last) return;
-      if (String(last.cls).toUpperCase() === 'ERROR') {
-        showErrorMessage(last.cls, last.msg, last.data);
-      }
-    });
-  } catch {}
+  Log.on(({ entries }) => {
+    const last = entries && entries.length ? entries[entries.length - 1] : null;
+    if (!last) return;
+    if (String(last.cls).toUpperCase() === 'ERROR') {
+      showErrorMessage(last.cls, last.msg, last.data);
+    }
+ });
 
   return { showErrorMessage };
 }

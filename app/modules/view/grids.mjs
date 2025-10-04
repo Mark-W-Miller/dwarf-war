@@ -13,15 +13,13 @@ export function initGrids(scene) {
 
   // Transparent shadow-catcher slightly above ground to show shadows without obscuring grid
   let shadowCatcher = null;
-  try {
-    shadowCatcher = BABYLON.MeshBuilder.CreateGround('shadowCatcher', { width: 800, height: 800 }, scene);
-    shadowCatcher.position.y = 0.001; shadowCatcher.isPickable = false; shadowCatcher.receiveShadows = true;
-    const sh = new BABYLON.ShadowOnlyMaterial('shadowOnly', scene);
-    sh.alpha = 0.9; // stronger shadows for clarity
-    shadowCatcher.material = sh;
-    // Render just above the grid to avoid z-fighting
-    try { shadowCatcher.renderingGroupId = 1; ground.renderingGroupId = 0; } catch {}
-  } catch {}
+  shadowCatcher = BABYLON.MeshBuilder.CreateGround('shadowCatcher', { width: 800, height: 800 }, scene);
+  shadowCatcher.position.y = 0.001; shadowCatcher.isPickable = false; shadowCatcher.receiveShadows = true;
+  const sh = new BABYLON.ShadowOnlyMaterial('shadowOnly', scene);
+  sh.alpha = 0.9; // stronger shadows for clarity
+  shadowCatcher.material = sh;
+  // Render just above the grid to avoid z-fighting
+  shadowCatcher.renderingGroupId = 1; ground.renderingGroupId = 0;
 
   // XY at Z=0
   const vGrid = BABYLON.MeshBuilder.CreatePlane('gridYX', { width: 800, height: 800 }, scene);
@@ -71,7 +69,7 @@ export function initGrids(scene) {
       // Material
       const mat = new BABYLON.StandardMaterial(name+':mat', scene);
       mat.diffuseColor = color.scale(0.2); mat.emissiveColor = color; mat.specularColor = new BABYLON.Color3(0,0,0);
-      try { mat.metadata = { baseColor: color.clone() }; } catch {}
+      mat.metadata = { baseColor: color.clone() };
       shaft.material = mat; tip.material = mat;
       shaft.isPickable = false; tip.isPickable = false;
 
@@ -109,15 +107,15 @@ export function initGrids(scene) {
     const axZ = makeArrow('axisZ', new BABYLON.Vector3(0,0,1), new BABYLON.Color3(0.0, 0.0, 1.0));
 
     function set(Lx, Ly, Lz) {
-      try { axX.setLength(Math.max(1, Lx)); } catch {}
-      try { axY.setLength(Math.max(1, Ly)); } catch {}
-      try { axZ.setLength(Math.max(1, Lz)); } catch {}
+      axX.setLength(Math.max(1, Lx));
+      axY.setLength(Math.max(1, Ly));
+      axZ.setLength(Math.max(1, Lz));
     }
 
     function setRadiusScale(k) { radiusScale = Math.max(0.05, k || 1); }
 
     return { group, x: axX, y: axY, z: axZ, set, setRadiusScale };
-  })();
+ })();
 
   function updateUnitGrids(voxelSize = 1) {
     grid.gridRatio = voxelSize;
@@ -144,11 +142,11 @@ export function initGrids(scene) {
       ground.scaling.x = s; ground.scaling.z = s; vGrid.scaling.x = s; vGrid.scaling.y = s; wGrid.scaling.x = s; wGrid.scaling.y = s;
       // Default arrows to half of minSize minus margin
       const half = minSize / 2; const margin = 10;
-      try { arrows.set(half - margin, half - margin, half - margin); } catch {}
-      try { shadowCatcher?.setEnabled(false); } catch {}
+      arrows.set(half - margin, half - margin, half - margin);
+      shadowCatcher?.setEnabled(false);
       return;
     }
-    try { shadowCatcher?.setEnabled(true); } catch {}
+    shadowCatcher?.setEnabled(true);
     const pad = 100;
     const maxAbsX = Math.max(Math.abs(minX), Math.abs(maxX));
     const maxAbsY = Math.max(Math.abs(minY), Math.abs(maxY));
@@ -157,7 +155,7 @@ export function initGrids(scene) {
     const sizeXY = Math.max(1000, 2 * Math.max(maxAbsX, maxAbsY) + pad);
     const sizeYZ = Math.max(1000, 2 * Math.max(maxAbsY, maxAbsZ) + pad);
     ground.scaling.x = sizeXZ / 800; ground.scaling.z = sizeXZ / 800;
-    try { if (shadowCatcher) { shadowCatcher.scaling.x = ground.scaling.x; shadowCatcher.scaling.z = ground.scaling.z; } } catch {}
+    if (shadowCatcher) { shadowCatcher.scaling.x = ground.scaling.x; shadowCatcher.scaling.z = ground.scaling.z; }
     vGrid.scaling.x = sizeXY / 800; vGrid.scaling.y = sizeXY / 800;
     wGrid.scaling.x = sizeYZ / 800; wGrid.scaling.y = sizeYZ / 800;
 
@@ -167,32 +165,30 @@ export function initGrids(scene) {
     const halfYFromYZ = sizeYZ / 2;
     const halfY = Math.max(halfYFromXY, halfYFromYZ);
     const margin = Math.max(10, sizeXZ * 0.02);
-    try { arrows.set(Math.max(1, halfXZ - margin), Math.max(1, halfY - margin), Math.max(1, halfXZ - margin)); } catch {}
+    arrows.set(Math.max(1, halfXZ - margin), Math.max(1, halfY - margin), Math.max(1, halfXZ - margin));
   }
 
   // Visual strength controls for grid and arrows
   function applyVisualStrengths(gridStrength = 80, arrowStrength = 40) {
     const gs = Math.max(0, Math.min(100, Number(gridStrength) || 0)) / 100; // 0..1
     const as = Math.max(0, Math.min(100, Number(arrowStrength) || 0)) / 100; // 0..1
-    try {
-      const k = 0.25 + 0.85 * gs; // line brightness multiplier
-      grid.lineColor = new BABYLON.Color3(baseLineXZ.r * k, baseLineXZ.g * k, baseLineXZ.b * k);
-      grid.opacity = 0.4 + 0.6 * gs; // ground more opaque
-      gridVMat.lineColor = new BABYLON.Color3(baseLineXY.r * k, baseLineXY.g * k, baseLineXY.b * k);
-      gridVMat.opacity = 0.15 + 0.85 * gs;
-      gridWMat.lineColor = new BABYLON.Color3(baseLineYZ.r * k, baseLineYZ.g * k, baseLineYZ.b * k);
-      gridWMat.opacity = 0.15 + 0.85 * gs;
-    } catch {}
-    try {
-      // Adjust arrow emissive/diffuse based on base color
-      const setMat = (m) => {
-        const base = m?.metadata?.baseColor || m?.emissiveColor || new BABYLON.Color3(1,1,1);
-        m.emissiveColor = base.scale(Math.max(0, as));
-        m.diffuseColor = base.scale(0.05 + 0.25 * as);
-      };
-      [arrows.x.shaft, arrows.x.tip, arrows.y.shaft, arrows.y.tip, arrows.z.shaft, arrows.z.tip]
-        .forEach(mesh => { try { setMat(mesh.material); } catch {} });
-    } catch {}
+    const k = 0.25 + 0.85 * gs; // line brightness multiplier
+    grid.lineColor = new BABYLON.Color3(baseLineXZ.r * k, baseLineXZ.g * k, baseLineXZ.b * k);
+    grid.opacity = 0.4 + 0.6 * gs; // ground more opaque
+    gridVMat.lineColor = new BABYLON.Color3(baseLineXY.r * k, baseLineXY.g * k, baseLineXY.b * k);
+    gridVMat.opacity = 0.15 + 0.85 * gs;
+    gridWMat.lineColor = new BABYLON.Color3(baseLineYZ.r * k, baseLineYZ.g * k, baseLineYZ.b * k);
+    gridWMat.opacity = 0.15 + 0.85 * gs;
+
+        // Adjust arrow emissive/diffuse based on base color
+    const setMat = (m) => {
+      const base = m?.metadata?.baseColor || m?.emissiveColor || new BABYLON.Color3(1,1,1);
+      m.emissiveColor = base.scale(Math.max(0, as));
+      m.diffuseColor = base.scale(0.05 + 0.25 * as);
+ };
+    [arrows.x.shaft, arrows.x.tip, arrows.y.shaft, arrows.y.tip, arrows.z.shaft, arrows.z.tip]
+      .forEach(mesh => { setMat(mesh.material); });
+
   }
 
   let gridTimer = null;

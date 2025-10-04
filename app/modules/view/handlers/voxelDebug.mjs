@@ -1,11 +1,11 @@
 import { Log } from '../../util/log.mjs';
 
 export function initVoxelDebug({ scene, state }) {
-  try { state._scanDebug = state._scanDebug || { redBase: null, greenBase: null, orangeBase: null, blueBase: null, redArr: [], greenArr: [], orangeArr: [], blueArr: [], count: 0, jitter: 0 }; } catch {}
-  try { state._obbDebug = state._obbDebug || { mesh: null }; } catch {}
+  state._scanDebug = state._scanDebug || { redBase: null, greenBase: null, orangeBase: null, blueBase: null, redArr: [], greenArr: [], orangeArr: [], blueArr: [], count: 0, jitter: 0 };
+  state._obbDebug = state._obbDebug || { mesh: null };
 
   function startVoxelScanDebug(res = 1) {
-    try { endVoxelScanDebug(); } catch {}
+    endVoxelScanDebug();
     const dia = Math.max(0.0625, (res * 0.7) / 4);
     state._scanDebug.jitter = Math.max(0, res * 0.12);
     function mkBase(name, diffuse, emissive) {
@@ -21,7 +21,7 @@ export function initVoxelDebug({ scene, state }) {
     state._scanDebug.redBase = red; state._scanDebug.greenBase = green; state._scanDebug.orangeBase = orange; state._scanDebug.blueBase = blue;
     state._scanDebug.redArr = []; state._scanDebug.greenArr = []; state._scanDebug.orangeArr = []; state._scanDebug.blueArr = [];
     state._scanDebug.count = 0;
-    try { Log.log('VOXEL', 'scan:start', { res, dia }); } catch {}
+    Log.log('VOXEL', 'scan:start', { res, dia });
   }
 
   function _pushDot(arr, wx, wy, wz) {
@@ -41,53 +41,50 @@ export function initVoxelDebug({ scene, state }) {
   function addVoxelScanPointUninst(wx, wy, wz) { _pushDot(state._scanDebug.redArr, wx, wy, wz); state._scanDebug.count++; if (state._scanDebug.count % 256 === 0) flushVoxelScanPoints(); }
 
   function flushVoxelScanPoints() {
-    try { const b = state._scanDebug.redBase; if (b && state._scanDebug.redArr.length) b.thinInstanceSetBuffer('matrix', new Float32Array(state._scanDebug.redArr), 16, true); } catch {}
-    try { const b2 = state._scanDebug.greenBase; if (b2 && state._scanDebug.greenArr.length) b2.thinInstanceSetBuffer('matrix', new Float32Array(state._scanDebug.greenArr), 16, true); } catch {}
-    try { const b3 = state._scanDebug.orangeBase; if (b3 && state._scanDebug.orangeArr.length) b3.thinInstanceSetBuffer('matrix', new Float32Array(state._scanDebug.orangeArr), 16, true); } catch {}
-    try { const b4 = state._scanDebug.blueBase; if (b4 && state._scanDebug.blueArr.length) b4.thinInstanceSetBuffer('matrix', new Float32Array(state._scanDebug.blueArr), 16, true); } catch {}
+    const b = state._scanDebug.redBase; if (b && state._scanDebug.redArr.length) b.thinInstanceSetBuffer('matrix', new Float32Array(state._scanDebug.redArr), 16, true);
+    const b2 = state._scanDebug.greenBase; if (b2 && state._scanDebug.greenArr.length) b2.thinInstanceSetBuffer('matrix', new Float32Array(state._scanDebug.greenArr), 16, true);
+    const b3 = state._scanDebug.orangeBase; if (b3 && state._scanDebug.orangeArr.length) b3.thinInstanceSetBuffer('matrix', new Float32Array(state._scanDebug.orangeArr), 16, true);
+    const b4 = state._scanDebug.blueBase; if (b4 && state._scanDebug.blueArr.length) b4.thinInstanceSetBuffer('matrix', new Float32Array(state._scanDebug.blueArr), 16, true);
   }
 
   function endVoxelScanDebug() {
-    try { state._scanDebug.redBase?.dispose?.(); } catch {}
-    try { state._scanDebug.greenBase?.dispose?.(); } catch {}
-    try { state._scanDebug.orangeBase?.dispose?.(); } catch {}
-    try { state._scanDebug.blueBase?.dispose?.(); } catch {}
+    state._scanDebug.redBase?.dispose?.();
+    state._scanDebug.greenBase?.dispose?.();
+    state._scanDebug.orangeBase?.dispose?.();
+    state._scanDebug.blueBase?.dispose?.();
     state._scanDebug.redBase = null; state._scanDebug.greenBase = null; state._scanDebug.orangeBase = null; state._scanDebug.blueBase = null;
     state._scanDebug.redArr = []; state._scanDebug.greenArr = []; state._scanDebug.orangeArr = []; state._scanDebug.blueArr = [];
     state._scanDebug.count = 0;
-    try { Log.log('VOXEL', 'scan:end', {}); } catch {}
+    Log.log('VOXEL', 'scan:end', {});
   }
 
   function clearObbDebug() {
-    try { state._obbDebug.mesh?.dispose?.(); } catch {}
+    state._obbDebug.mesh?.dispose?.();
     state._obbDebug.mesh = null;
   }
   function showObbDebug(corners) {
-    try {
-      clearObbDebug();
-      if (!Array.isArray(corners) || corners.length !== 8) return;
-      const V = (p) => new BABYLON.Vector3(p.x||0, p.y||0, p.z||0);
-      const cs = corners.map(V);
-      const edges = [
-        [cs[0], cs[1]], [cs[1], cs[5]], [cs[5], cs[4]], [cs[4], cs[0]],
-        [cs[2], cs[3]], [cs[3], cs[7]], [cs[7], cs[6]], [cs[6], cs[2]],
-        [cs[0], cs[2]], [cs[1], cs[3]], [cs[4], cs[6]], [cs[5], cs[7]]
-      ];
-      const lines = BABYLON.MeshBuilder.CreateLineSystem('dbg:obb', { lines: edges }, scene);
-      lines.color = new BABYLON.Color3(0.1, 0.9, 0.9);
-      lines.isPickable = false; lines.renderingGroupId = 3;
-      state._obbDebug.mesh = lines;
-    } catch {}
+    clearObbDebug();
+    if (!Array.isArray(corners) || corners.length !== 8) return;
+    const V = (p) => new BABYLON.Vector3(p.x||0, p.y||0, p.z||0);
+    const cs = corners.map(V);
+    const edges = [
+      [cs[0], cs[1]], [cs[1], cs[5]], [cs[5], cs[4]], [cs[4], cs[0]],
+      [cs[2], cs[3]], [cs[3], cs[7]], [cs[7], cs[6]], [cs[6], cs[2]],
+      [cs[0], cs[2]], [cs[1], cs[3]], [cs[4], cs[6]], [cs[5], cs[7]]
+    ];
+    const lines = BABYLON.MeshBuilder.CreateLineSystem('dbg:obb', { lines: edges }, scene);
+    lines.color = new BABYLON.Color3(0.1, 0.9, 0.9);
+    lines.isPickable = false; lines.renderingGroupId = 3;
+    state._obbDebug.mesh = lines;
+
   }
 
-  try {
-    window.addEventListener('dw:debug:clearAll', () => {
-      try { endVoxelScanDebug(); } catch {}
-      try { clearObbDebug(); } catch {}
-      try { state.debugAabb?.dispose?.(); state.debugAabb = null; } catch {}
-      try { Log.log('VOXEL', 'debug:cleared', {}); } catch {}
-    });
-  } catch {}
+  window.addEventListener('dw:debug:clearAll', () => {
+    endVoxelScanDebug();
+    clearObbDebug();
+    state.debugAabb?.dispose?.(); state.debugAabb = null;
+    Log.log('VOXEL', 'debug:cleared', {});
+ });
 
   return { startVoxelScanDebug, addVoxelScanPointInside, addVoxelScanPointOutside, addVoxelScanPointWall, addVoxelScanPointRock, addVoxelScanPointUninst, flushVoxelScanPoints, endVoxelScanDebug, showObbDebug, clearObbDebug };
 }

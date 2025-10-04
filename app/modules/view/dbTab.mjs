@@ -12,7 +12,7 @@ export function renderDbView(barrow) {
     }
     for (const c of children) el.appendChild(c);
     return el;
-  };
+ };
   const kv = (label, value, opts={}) => {
     const row = make('div', { class: 'kv' });
     const b = make('b'); b.textContent = label + ':'; row.appendChild(b); row.appendChild(document.createTextNode(' '));
@@ -20,22 +20,21 @@ export function renderDbView(barrow) {
     if (opts.path) { span.dataset.path = opts.path; span.dataset.type = opts.type || 'text'; span.dataset.editable = '1'; span.title = 'Double-click to edit'; }
     row.appendChild(span);
     return row;
-  };
+ };
 
   // Preserve open/closed state of details before rebuild
   const openSet = new Set();
-  try {
-    root.querySelectorAll('details').forEach((d) => {
-      if (!d.open) return;
-      const sid = d.dataset.spaceId;
-      const sec = d.dataset.section;
-      if (sid && !sec) openSet.add(`space:${sid}`);
-      if (sid && sec) openSet.add(`sec:${sid}:${sec}`);
-    });
-  } catch {}
+  root.querySelectorAll('details').forEach((d) => {
+    if (!d.open) return;
+    const sid = d.dataset.spaceId;
+    const sec = d.dataset.section;
+    if (sid && !sec) openSet.add(`space:${sid}`);
+    if (sid && sec) openSet.add(`sec:${sid}:${sec}`);
+ });
+
   // Preserve top-level Spaces section open state
   let spacesWasOpen = true;
-  try { const prev = root.querySelector('#dbSpaces'); if (prev) spacesWasOpen = !!prev.open; } catch {}
+  const prev = root.querySelector('#dbSpaces'); if (prev) spacesWasOpen = !!prev.open;
 
   // Build DOM
   root.textContent = '';
@@ -70,20 +69,19 @@ export function renderDbView(barrow) {
     const opt = document.createElement('option'); opt.value = t.path; opt.textContent = t.name; testSelect.appendChild(opt);
   }
   // Restore last selected test DB
-  try {
-    const key = 'dw:ui:lastTestDbPath';
-    const last = localStorage.getItem(key);
-    if (last && Array.from(testSelect.options).some(o => o.value === last)) {
-      testSelect.value = last;
-    }
-  } catch {}
+  const key = 'dw:ui:lastTestDbPath';
+  const last = localStorage.getItem(key);
+  if (last && Array.from(testSelect.options).some(o => o.value === last)) {
+    testSelect.value = last;
+  }
+
   const testBtn = make('button', { class: 'btn', id: 'dbLoadTest', text: 'Load' });
   testWrap.appendChild(testLabel); testWrap.appendChild(testSelect); testWrap.appendChild(testBtn);
   controls.appendChild(testWrap);
   dSpaces.appendChild(controls);
   if (!Array.isArray(barrow.spaces) || barrow.spaces.length === 0) {
     dSpaces.appendChild(make('div', { class: 'kv', text: '(none)' }));
-  } else {
+ } else {
     barrow.spaces.forEach((s, idx) => {
       // Ensure rotation object exists for editing
       if (!s.rotation || typeof s.rotation !== 'object') s.rotation = { x: 0, y: (typeof s.rotY === 'number' ? s.rotY : 0), z: 0 };
@@ -127,24 +125,22 @@ export function renderDbView(barrow) {
       const row = make('div', { class: 'row' });
       d.appendChild(row);
       dSpaces.appendChild(d);
-    });
+ });
   }
   root.appendChild(dSpaces);
 
   // Restore open/closed top-level Spaces state
-  try { dSpaces.open = !!spacesWasOpen; } catch {}
+  dSpaces.open = !!spacesWasOpen;
 
   // Restore open/closed states for each space and its subsections
-  try {
-    root.querySelectorAll('details[data-space-id]').forEach((d) => {
-      const sid = d.dataset.spaceId;
-      if (openSet.has(`space:${sid}`)) d.open = true;
-      d.querySelectorAll('details[data-section]').forEach((sec) => {
-        const key = `sec:${sid}:${sec.dataset.section}`;
-        if (openSet.has(key)) sec.open = true;
-      });
-    });
-  } catch {}
+  root.querySelectorAll('details[data-space-id]').forEach((d) => {
+    const sid = d.dataset.spaceId;
+    if (openSet.has(`space:${sid}`)) d.open = true;
+    d.querySelectorAll('details[data-section]').forEach((sec) => {
+      const key = `sec:${sid}:${sec.dataset.section}`;
+      if (openSet.has(key)) sec.open = true;
+ });
+ });
 
   // Inline editing — double-click to edit a value
   const startEdit = (span) => {
@@ -171,14 +167,14 @@ export function renderDbView(barrow) {
       if (type === 'number' && !isFinite(value)) return; // ignore invalid numbers
       setByPath(barrow, path, value);
       // Notify app to persist + rebuild
-      try { window.dispatchEvent(new CustomEvent('dw:dbEdit', { detail: { barrow, path, value, prev: prevText } })); } catch {}
-    };
+      window.dispatchEvent(new CustomEvent('dw:dbEdit', { detail: { barrow, path, value, prev: prevText } }));
+ };
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') finish(true);
       else if (e.key === 'Escape') finish(false);
-    });
+ });
     input.addEventListener('blur', () => finish(true));
-  };
+ };
 
   function setByPath(obj, path, value) {
     const parts = path.split('.');
@@ -187,7 +183,7 @@ export function renderDbView(barrow) {
       const key = parts[i];
       if (/^\d+$/.test(key)) {
         cur = cur[Number(key)];
-      } else {
+ } else {
         if (cur[key] == null) cur[key] = {};
         cur = cur[key];
       }
@@ -201,7 +197,7 @@ export function renderDbView(barrow) {
     const span = e.target.closest('span[data-editable="1"]');
     if (!span) return;
     startEdit(span);
-  });
+ });
 
   // Toggle twist-open details (native <details> behavior).
   // Selection: clicking the name link selects (and does not toggle). Clicking summary toggles twist only.
@@ -215,7 +211,7 @@ export function renderDbView(barrow) {
       const id = nameLink.dataset.spaceId;
       if (id) {
         const shiftKey = !!(e.shiftKey);
-        try { window.dispatchEvent(new CustomEvent('dw:dbRowClick', { detail: { type: 'space', id, shiftKey } })); } catch {}
+        window.dispatchEvent(new CustomEvent('dw:dbRowClick', { detail: { type: 'space', id, shiftKey } }));
       }
       return;
     }
@@ -227,31 +223,28 @@ export function renderDbView(barrow) {
       const details = sum.closest('details[data-space-id]');
       const id = details && details.dataset ? details.dataset.spaceId : null;
       if (id) {
-        try { window.dispatchEvent(new CustomEvent('dw:dbRowClick', { detail: { type: 'space', id, shiftKey: true } })); } catch {}
+        window.dispatchEvent(new CustomEvent('dw:dbRowClick', { detail: { type: 'space', id, shiftKey: true } }));
       }
       return;
     }
     // Ignore other clicks inside details for selection to avoid accidental toggles
     // Let the browser handle <summary> toggling naturally
-  });
+ });
 
   // Close All button behavior: collapse all details under Spaces (including per-space and subsections)
   closeAllBtn.addEventListener('click', (e) => {
-    try {
-      // Close per-space details and subsections
-      root.querySelectorAll('#dbSpaces details').forEach((det) => { det.open = false; });
-    } catch {}
-  });
+    // Close per-space details and subsections
+    root.querySelectorAll('#dbSpaces details').forEach((det) => { det.open = false; });
+
+ });
 
   // Load a bundled test database by path
-  try {
-    testBtn.addEventListener('click', () => {
-      const path = testSelect.value || '';
-      if (!path) return;
-      try { localStorage.setItem('dw:ui:lastTestDbPath', path); } catch {}
-      try { window.dispatchEvent(new CustomEvent('dw:dbLoadTest', { detail: { path } })); } catch {}
-    });
-  } catch {}
+  testBtn.addEventListener('click', () => {
+    const path = testSelect.value || '';
+    if (!path) return;
+    localStorage.setItem('dw:ui:lastTestDbPath', path);
+    window.dispatchEvent(new CustomEvent('dw:dbLoadTest', { detail: { path } }));
+ });
 
   // Delete Selected button
   const selectNonVoxBtn = make('button', { class: 'btn', id: 'dbSelectNonVox', text: 'Select Non-Voxel' });
@@ -261,36 +254,34 @@ export function renderDbView(barrow) {
   controls.appendChild(delBtn);
   controls.appendChild(undoBtn);
   selectNonVoxBtn.addEventListener('click', () => {
-    try {
-      const ids = (barrow.spaces || [])
-        .filter((s) => s && s.id && !(s.vox && s.vox.size))
-        .map((s) => String(s.id))
-        .filter((id, idx, arr) => id && arr.indexOf(id) === idx);
-      if (!ids.length) return;
-      window.dispatchEvent(new CustomEvent('dw:dbSelectNonVox', { detail: { ids } }));
-    } catch {}
-  });
+    const ids = (barrow.spaces || [])
+      .filter((s) => s && s.id && !(s.vox && s.vox.size))
+      .map((s) => String(s.id))
+      .filter((id, idx, arr) => id && arr.indexOf(id) === idx);
+    if (!ids.length) return;
+    window.dispatchEvent(new CustomEvent('dw:dbSelectNonVox', { detail: { ids } }));
+
+ });
 
   let lastSelection = [];
-  try { window.addEventListener('dw:selectionChange', (e) => { lastSelection = (e && e.detail && Array.isArray(e.detail.selection)) ? e.detail.selection : []; }); } catch {}
+  window.addEventListener('dw:selectionChange', (e) => { lastSelection = (e && e.detail && Array.isArray(e.detail.selection)) ? e.detail.selection : []; });
   delBtn.addEventListener('click', () => {
-    try {
-      const ids = Array.isArray(lastSelection) ? lastSelection : [];
-      if (!ids.length) return;
-      const list = ids.join(', ');
-      const ok = window.confirm(`Delete selected spaces?\n\n${list}`);
-      if (ok) {
-        try { window.dispatchEvent(new CustomEvent('dw:dbDeleteSelected', { detail: { ids } })); } catch {}
-      }
-    } catch {}
-  });
+    const ids = Array.isArray(lastSelection) ? lastSelection : [];
+    if (!ids.length) return;
+    const list = ids.join(', ');
+    const ok = window.confirm(`Delete selected spaces?\n\n${list}`);
+    if (ok) {
+      window.dispatchEvent(new CustomEvent('dw:dbDeleteSelected', { detail: { ids } }));
+    }
+
+ });
 
   undoBtn.addEventListener('click', () => {
-    try { window.dispatchEvent(new CustomEvent('dw:dbUndo', { detail: {} })); } catch {}
-  });
+    window.dispatchEvent(new CustomEvent('dw:dbUndo', { detail: {} }));
+ });
 
   // Also support toggling via the native 'toggle' event for <details>
   root.addEventListener('toggle', (e) => {
     // No-op, but ensures event bubbles and can be listened to elsewhere if needed
-  });
+ });
 }

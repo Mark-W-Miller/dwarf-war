@@ -22,33 +22,29 @@ export function initLogTab(panelContent) {
   const actionsBox = document.createElement('div'); actionsBox.style.display = 'flex'; actionsBox.style.gap = '8px';
   const copyBtn = document.createElement('button'); copyBtn.className = 'btn'; copyBtn.textContent = 'Copy Log';
   const clearBtn = document.createElement('button'); clearBtn.className = 'btn warn'; clearBtn.textContent = 'Clear Log';
-  clearBtn.addEventListener('click', () => { try { Log.clear(); } catch {} });
+  clearBtn.addEventListener('click', () => { Log.clear(); });
   copyBtn.addEventListener('click', async () => {
-    try {
-      // Rebuild the same filtered text as renderEntries
-      const list = Log.getEntries();
-      const classes = Array.from(Log.getClasses());
-      const selected = new Set(); // infer selected from current checkboxes
-      try {
-        const cbs = filtersBox.querySelectorAll('input[type="checkbox"]');
-        cbs.forEach(cb => { if (cb.checked) selected.add(cb.nextSibling && cb.nextSibling.textContent ? cb.nextSibling.textContent : null); });
-      } catch {}
-      const filtered = list.filter(e => selected.size === 0 || selected.has(e.cls));
-      const lines = filtered.map(e => {
-        const t = new Date(e.time).toLocaleTimeString();
-        const d = e.data != null ? ` ${JSON.stringify(e.data, (k,v) => (typeof v === 'number' ? parseFloat(Number(v).toPrecision(2)) : v))}` : '';
-        return `[${t}] [${e.cls}] ${e.msg}${d}`;
-      }).join('\n');
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        await navigator.clipboard.writeText(lines);
-      } else {
-        const ta = document.createElement('textarea'); ta.style.position = 'fixed'; ta.style.opacity = '0'; ta.value = lines; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
-      }
-      copyBtn.textContent = 'Copied!'; setTimeout(() => { copyBtn.textContent = 'Copy Log'; }, 1200);
-    } catch (err) {
-      copyBtn.textContent = 'Copy failed'; setTimeout(() => { copyBtn.textContent = 'Copy Log'; }, 1500);
+    // Rebuild the same filtered text as renderEntries
+    const list = Log.getEntries();
+    const classes = Array.from(Log.getClasses());
+    const selected = new Set(); // infer selected from current checkboxes
+    const cbs = filtersBox.querySelectorAll('input[type="checkbox"]');
+    cbs.forEach(cb => { if (cb.checked) selected.add(cb.nextSibling && cb.nextSibling.textContent ? cb.nextSibling.textContent : null); });
+
+    const filtered = list.filter(e => selected.size === 0 || selected.has(e.cls));
+    const lines = filtered.map(e => {
+      const t = new Date(e.time).toLocaleTimeString();
+      const d = e.data != null ? ` ${JSON.stringify(e.data, (k,v) => (typeof v === 'number' ? parseFloat(Number(v).toPrecision(2)) : v))}` : '';
+      return `[${t}] [${e.cls}] ${e.msg}${d}`;
+ }).join('\n');
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(lines);
+ } else {
+      const ta = document.createElement('textarea'); ta.style.position = 'fixed'; ta.style.opacity = '0'; ta.value = lines; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
     }
-  });
+    copyBtn.textContent = 'Copied!'; setTimeout(() => { copyBtn.textContent = 'Copy Log'; }, 1200);
+
+ });
   actionsBox.appendChild(copyBtn);
   actionsBox.appendChild(clearBtn);
   filterRow.appendChild(actionsBox);
@@ -57,24 +53,23 @@ export function initLogTab(panelContent) {
   logPane.appendChild(entries); panelContent.appendChild(logPane);
 
   // Central tab system handles activation; we only log and render when active
-  tabBtn.addEventListener('click', () => { try { Log.log('UI', 'Activate tab', { tab: 'Log' }); } catch {} });
+  tabBtn.addEventListener('click', () => { Log.log('UI', 'Activate tab', { tab: 'Log' }); });
 
   const SELECTED_KEY = 'dw:log:selected';
   const selected = new Set();
   // Load persisted selection
-  try {
-    const raw = localStorage.getItem(SELECTED_KEY);
-    if (raw) {
-      const arr = JSON.parse(raw);
-      if (Array.isArray(arr)) arr.forEach(c => selected.add(String(c)));
-    }
-  } catch {}
+  const raw = localStorage.getItem(SELECTED_KEY);
+  if (raw) {
+    const arr = JSON.parse(raw);
+    if (Array.isArray(arr)) arr.forEach(c => selected.add(String(c)));
+  }
+
   function renderFilters() {
     const classes = Array.from(Log.getClasses()).sort();
     // If no persisted selection yet, default-select all current classes and persist once
     if (selected.size === 0 && classes.length > 0) {
       classes.forEach(c => selected.add(c));
-      try { localStorage.setItem(SELECTED_KEY, JSON.stringify(Array.from(selected))); } catch {}
+      localStorage.setItem(SELECTED_KEY, JSON.stringify(Array.from(selected)));
     }
     filtersBox.innerHTML = '';
     classes.forEach(c => {
@@ -82,12 +77,12 @@ export function initLogTab(panelContent) {
       const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = selected.has(c);
       cb.addEventListener('change', () => {
         if (cb.checked) selected.add(c); else selected.delete(c);
-        try { localStorage.setItem(SELECTED_KEY, JSON.stringify(Array.from(selected))); } catch {}
+        localStorage.setItem(SELECTED_KEY, JSON.stringify(Array.from(selected)));
         renderEntries();
-      });
+ });
       label.appendChild(cb); label.appendChild(document.createTextNode(c));
       filtersBox.appendChild(label);
-    });
+ });
   }
   function renderEntries() {
     const list = Log.getEntries();
@@ -96,7 +91,7 @@ export function initLogTab(panelContent) {
       const t = new Date(e.time).toLocaleTimeString();
       const d = e.data != null ? ` ${JSON.stringify(e.data, (k,v) => (typeof v === 'number' ? parseFloat(Number(v).toPrecision(2)) : v))}` : '';
       return `[${t}] [${e.cls}] ${e.msg}${d}`;
-    });
+ });
     entries.textContent = lines.join('\n'); entries.scrollTop = entries.scrollHeight;
   }
   Log.on(() => { renderFilters(); renderEntries(); });

@@ -21,16 +21,16 @@ export function initSettingsTab(camApi, ui = {}) {
   slider.value = String(stored); valueSpan.textContent = String(stored);
   slider.addEventListener('input', () => {
     valueSpan.textContent = slider.value; localStorage.setItem(KEY, slider.value); camApi.applyZoomBase();
-    try { Log.log('UI', 'Change setting', { key: 'zoomBase', value: Number(slider.value) }); } catch {}
-  });
+    Log.log('UI', 'Change setting', { key: 'zoomBase', value: Number(slider.value) });
+ });
 
   const PKEY = 'dw:ui:panBase';
   const pstored = Number(localStorage.getItem(PKEY) || '200') || 200;
   slider2.value = String(pstored); valueSpan2.textContent = String(pstored);
   slider2.addEventListener('input', () => {
     valueSpan2.textContent = slider2.value; localStorage.setItem(PKEY, slider2.value); camApi.applyPanBase();
-    try { Log.log('UI', 'Change setting', { key: 'panBase', value: Number(slider2.value) }); } catch {}
-  });
+    Log.log('UI', 'Change setting', { key: 'panBase', value: Number(slider2.value) });
+ });
 
   // Dolly speed slider (wheel-at-max forward speed multiplier)
   const rowDS = document.createElement('div'); rowDS.className = 'row';
@@ -44,9 +44,9 @@ export function initSettingsTab(camApi, ui = {}) {
   sliderDS.value = String(dStored); valueDS.textContent = String(dStored) + '%';
   sliderDS.addEventListener('input', () => {
     valueDS.textContent = sliderDS.value + '%';
-    try { localStorage.setItem(DOLLY_KEY, sliderDS.value); } catch {}
-    try { Log.log('UI', 'Change setting', { key: 'dollySpeed', valuePct: Number(sliderDS.value) }); } catch {}
-  });
+    localStorage.setItem(DOLLY_KEY, sliderDS.value);
+    Log.log('UI', 'Change setting', { key: 'dollySpeed', valuePct: Number(sliderDS.value) });
+ });
 
   // Scryball speed slider (arrow-key drive speed multiplier in Cavern/SBM)
   const rowSB = document.createElement('div'); rowSB.className = 'row';
@@ -60,9 +60,9 @@ export function initSettingsTab(camApi, ui = {}) {
   sliderSB.value = String(sStored); valueSB.textContent = String(sStored) + '%';
   sliderSB.addEventListener('input', () => {
     valueSB.textContent = sliderSB.value + '%';
-    try { localStorage.setItem(SCRY_KEY, sliderSB.value); } catch {}
-    try { Log.log('UI', 'Change setting', { key: 'scrySpeed', valuePct: Number(sliderSB.value) }); } catch {}
-  });
+    localStorage.setItem(SCRY_KEY, sliderSB.value);
+    Log.log('UI', 'Change setting', { key: 'scrySpeed', valuePct: Number(sliderSB.value) });
+ });
 
   // Label text size slider
   const row3 = document.createElement('div'); row3.className = 'row';
@@ -75,9 +75,9 @@ export function initSettingsTab(camApi, ui = {}) {
   slider3.value = String(lstored); valueSpan3.textContent = String(lstored);
   slider3.addEventListener('input', () => {
     valueSpan3.textContent = slider3.value; localStorage.setItem(LKEY, slider3.value);
-    try { ui.applyLabelSize?.(); } catch {}
-    try { Log.log('UI', 'Change setting', { key: 'labelSize', value: Number(slider3.value) }); } catch {}
-  });
+    ui.applyLabelSize?.();
+    Log.log('UI', 'Change setting', { key: 'labelSize', value: Number(slider3.value) });
+ });
 
   // Wall Opacity
   const row10 = document.createElement('div'); row10.className = 'row';
@@ -90,10 +90,10 @@ export function initSettingsTab(camApi, ui = {}) {
   slider10.value = String(wStored); valueSpan10.textContent = String(wStored + '%');
   slider10.addEventListener('input', () => {
     valueSpan10.textContent = slider10.value + '%';
-    try { localStorage.setItem(WKEY, slider10.value); } catch {}
-    try { ui.applyVoxelOpacity?.(); } catch {}
-    try { Log.log('UI', 'Change setting', { key: 'wallOpacity', valuePct: Number(slider10.value) }); } catch {}
-  });
+    localStorage.setItem(WKEY, slider10.value);
+    ui.applyVoxelOpacity?.();
+    Log.log('UI', 'Change setting', { key: 'wallOpacity', valuePct: Number(slider10.value) });
+ });
 
   // Voxel Rock Opacity
   const row11 = document.createElement('div'); row11.className = 'row';
@@ -106,10 +106,10 @@ export function initSettingsTab(camApi, ui = {}) {
   slider11.value = String(rcStored); valueSpan11.textContent = String(rcStored + '%');
   slider11.addEventListener('input', () => {
     valueSpan11.textContent = slider11.value + '%';
-    try { localStorage.setItem(RCKEY, slider11.value); } catch {}
-    try { ui.applyVoxelOpacity?.(); } catch {}
-    try { Log.log('UI', 'Change setting', { key: 'rockOpacity', valuePct: Number(slider11.value) }); } catch {}
-  });
+    localStorage.setItem(RCKEY, slider11.value);
+    ui.applyVoxelOpacity?.();
+    Log.log('UI', 'Change setting', { key: 'rockOpacity', valuePct: Number(slider11.value) });
+ });
 
   // Exact Intersection (CSG) toggle — performance note
   const row6 = document.createElement('div'); row6.className = 'row'; row6.style.alignItems = 'flex-start';
@@ -120,13 +120,13 @@ export function initSettingsTab(camApi, ui = {}) {
   const hint6 = document.createElement('div'); hint6.className = 'hint'; hint6.textContent = 'Computes true mesh intersections on rebuild. More accurate, potentially slower on large scenes.';
   row6.appendChild(hint6); pane.appendChild(row6);
   const CKEY = 'dw:ui:exactCSG';
-  try { cb6.checked = (localStorage.getItem(CKEY) === '1'); } catch { cb6.checked = false; }
+  cb6.checked = (localStorage.getItem(CKEY) === '1');
   cb6.addEventListener('change', () => {
-    try { localStorage.setItem(CKEY, cb6.checked ? '1' : '0'); } catch {}
+    localStorage.setItem(CKEY, cb6.checked ? '1' : '0');
     // Rebuild to apply intersection mode
-    try { ui.rebuildScene?.(); } catch {}
-    try { Log.log('UI', 'Change setting', { key: 'exactCSG', value: !!cb6.checked }); } catch {}
-  });
+    ui.rebuildScene?.();
+    Log.log('UI', 'Change setting', { key: 'exactCSG', value: !!cb6.checked });
+ });
 
   // Pick Debug Logs toggle
   const row8 = document.createElement('div'); row8.className = 'row';
@@ -135,11 +135,11 @@ export function initSettingsTab(camApi, ui = {}) {
   const text8 = document.createElement('span'); text8.textContent = 'Pick Debug Logs';
   label8.appendChild(cb8); label8.appendChild(text8); row8.appendChild(label8); pane.appendChild(row8);
   const DKEY = 'dw:debug:picking';
-  try { cb8.checked = (localStorage.getItem(DKEY) === '1'); } catch { cb8.checked = false; }
+  cb8.checked = (localStorage.getItem(DKEY) === '1');
   cb8.addEventListener('change', () => {
-    try { localStorage.setItem(DKEY, cb8.checked ? '1' : '0'); } catch {}
-    try { Log.log('UI', 'Change setting', { key: 'pickDebug', value: !!cb8.checked }); } catch {}
-  });
+    localStorage.setItem(DKEY, cb8.checked ? '1' : '0');
+    Log.log('UI', 'Change setting', { key: 'pickDebug', value: !!cb8.checked });
+ });
 
   // Send Errors to Local Server toggle
   const rowSE = document.createElement('div'); rowSE.className = 'row';
@@ -148,11 +148,11 @@ export function initSettingsTab(camApi, ui = {}) {
   const textSE = document.createElement('span'); textSE.textContent = 'Send Errors to Local Server';
   labelSE.appendChild(cbSE); labelSE.appendChild(textSE); rowSE.appendChild(labelSE); pane.appendChild(rowSE);
   const SEND_KEY = 'dw:dev:sendErrors';
-  try { cbSE.checked = (localStorage.getItem(SEND_KEY) === '1'); } catch { cbSE.checked = false; }
+  cbSE.checked = (localStorage.getItem(SEND_KEY) === '1');
   cbSE.addEventListener('change', () => {
-    try { localStorage.setItem(SEND_KEY, cbSE.checked ? '1' : '0'); } catch {}
-    try { Log.log('UI', 'Change setting', { key: 'sendErrors', value: !!cbSE.checked }); } catch {}
-  });
+    localStorage.setItem(SEND_KEY, cbSE.checked ? '1' : '0');
+    Log.log('UI', 'Change setting', { key: 'sendErrors', value: !!cbSE.checked });
+ });
 
   // Forward App Logs to Local Server toggle
   const rowSL = document.createElement('div'); rowSL.className = 'row';
@@ -161,9 +161,9 @@ export function initSettingsTab(camApi, ui = {}) {
   const textSL = document.createElement('span'); textSL.textContent = 'Send App Logs to Local Server';
   labelSL.appendChild(cbSL); labelSL.appendChild(textSL); rowSL.appendChild(labelSL);
   const SENDL_KEY = 'dw:dev:sendLogs';
-  try { cbSL.checked = (localStorage.getItem(SENDL_KEY) === '1'); } catch { cbSL.checked = false; }
+  cbSL.checked = (localStorage.getItem(SENDL_KEY) === '1');
   cbSL.addEventListener('change', () => {
-    try { localStorage.setItem(SENDL_KEY, cbSL.checked ? '1' : '0'); } catch {}
-    try { Log.log('UI', 'Change setting', { key: 'sendLogs', value: !!cbSL.checked }); } catch {}
-  });
+    localStorage.setItem(SENDL_KEY, cbSL.checked ? '1' : '0');
+    Log.log('UI', 'Change setting', { key: 'sendLogs', value: !!cbSL.checked });
+ });
 }

@@ -39,20 +39,20 @@ export function routerHandlePrimaryClick(e, routerState) {
       if (!(state.selection instanceof Set)) state.selection = new Set(Array.isArray(state.selection) ? state.selection : []);
       const clearedSpaceSel = state.selection.size > 0;
       state.selection.clear();
-      try { sceneApi?.disposeMoveWidget?.(); } catch {}
-      try { sceneApi?.disposeRotWidget?.(); } catch {}
+      sceneApi?.disposeMoveWidget?.();
+      sceneApi?.disposeRotWidget?.();
       state.voxSel = [];
       state.lastVoxPick = null;
       routerState._brush = null;
       if (clearedSpaceSel) {
         dispatchWindowEvent('dw:selectionChange', { selection: [] });
       }
-      try { sceneApi?.disposeConnectGizmo?.(); } catch {}
-      try { sceneApi?.updateContactShadowPlacement?.(); } catch {}
+      sceneApi?.disposeConnectGizmo?.();
+      sceneApi?.updateContactShadowPlacement?.();
       dispatchWindowEvent('dw:transform', { kind: 'voxsel:clear' });
       if (mods.shift) {
         if (state._connect.sel.has(name)) state._connect.sel.delete(name); else state._connect.sel.add(name);
-      } else {
+ } else {
         state._connect.sel.clear(); state._connect.sel.add(name);
       }
       refreshPPNodeSelection(routerState);
@@ -97,9 +97,9 @@ export function routerHandlePrimaryClick(e, routerState) {
       return false;
     }
     if (state?._connect?.sel instanceof Set && state._connect.sel.size) {
-      try { state._connect.sel.clear(); } catch {}
-      try { sceneApi?.disposeConnectGizmo?.(); } catch {}
-      try { dispatchWindowEvent('dw:connect:update'); } catch {}
+      state._connect.sel.clear();
+      sceneApi?.disposeConnectGizmo?.();
+      dispatchWindowEvent('dw:connect:update');
     }
     const pickedName = String(sp.pickedMesh.name || '');
     const id = pickedName.slice('space:'.length).split(':')[0];
@@ -108,15 +108,15 @@ export function routerHandlePrimaryClick(e, routerState) {
     if (mods.shift) {
       if (state.selection.has(id)) {
         state.selection.delete(id);
-      } else {
+ } else {
         state.selection.add(id);
       }
-    } else {
+ } else {
       state.selection.clear();
-      try { sceneApi?.disposeMoveWidget?.(); } catch {}
-      try { sceneApi?.disposeRotWidget?.(); } catch {}
-      try { sceneApi?.disposeConnectGizmo?.(); } catch {}
-      try { sceneApi?.updateContactShadowPlacement?.(); } catch {}
+      sceneApi?.disposeMoveWidget?.();
+      sceneApi?.disposeRotWidget?.();
+      sceneApi?.disposeConnectGizmo?.();
+      sceneApi?.updateContactShadowPlacement?.();
       state.selection.add(id);
     }
     routerState._brush = null;
@@ -169,8 +169,7 @@ export function classifyPointerDown({ scene, state, e }) {
 
 const TARGET_PREF_KEY = 'dw:ui:targetDot';
 export function ensureTargetDot({ scene, camera }) {
-  try { if (localStorage.getItem(TARGET_PREF_KEY) === '0') return; }
-  catch {}
+  if (localStorage.getItem(TARGET_PREF_KEY) === '0') return;
   let dot = scene.getMeshByName('cam:targetDot');
   if (!dot) {
     const s = BABYLON.MeshBuilder.CreateSphere('cam:targetDot', { diameter: 0.24, segments: 16 }, scene);
@@ -182,15 +181,14 @@ export function ensureTargetDot({ scene, camera }) {
     dot = s;
   }
   scene.onBeforeRenderObservable.add(() => {
-    try {
-      const d = scene.getMeshByName('cam:targetDot');
-      if (!d) return;
-      d.position.copyFrom(camera.target);
-      const radius = (typeof camera.radius === 'number' && isFinite(camera.radius)) ? camera.radius : BABYLON.Vector3.Distance(camera.position, camera.target);
-      const scale = Math.max(0.08, (radius || 1) * 0.012);
-      d.scaling.set(scale, scale, scale);
-    } catch {}
-  });
+    const d = scene.getMeshByName('cam:targetDot');
+    if (!d) return;
+    d.position.copyFrom(camera.target);
+    const radius = (typeof camera.radius === 'number' && isFinite(camera.radius)) ? camera.radius : BABYLON.Vector3.Distance(camera.position, camera.target);
+    const scale = Math.max(0.08, (radius || 1) * 0.012);
+    d.scaling.set(scale, scale, scale);
+
+ });
 }
 
 export function routerIsOverPPOrGizmo(e, routerState) {
@@ -247,7 +245,7 @@ export function routerHandleCameraMove(routerState) {
   if (gesture.decision === 'rotate') {
     camera.inertialPanningX = 0;
     camera.inertialPanningY = 0;
-  } else if (gesture.decision === 'pan') {
+ } else if (gesture.decision === 'pan') {
     const lastX = (gesture.lastX ?? scene.pointerX);
     const lastY = (gesture.lastY ?? scene.pointerY);
     const dx = scene.pointerX - lastX;
@@ -319,7 +317,7 @@ function voxelHitAtPointerForSpaceClick(routerState, space, options = {}) {
   const tDeltaX = (stepX !== 0) ? Math.abs(res / rdL.x) : Infinity;
   const tDeltaY = (stepY !== 0) ? Math.abs(res / rdL.y) : Infinity;
   const tDeltaZ = (stepZ !== 0) ? Math.abs(res / rdL.z) : Infinity;
-  let hideTop = 0; try { hideTop = Math.max(0, Math.min(ny, Math.floor(Number(space.voxExposeTop || 0) || 0))); } catch {}
+  let hideTop = 0;  hideTop = Math.max(0, Math.min(ny, Math.floor(Number(space.voxExposeTop || 0) || 0)));
   const yCut = ny - hideTop;
   const data = Array.isArray(vox.data) ? vox.data : [];
   let guard = 0, guardMax = (nx + ny + nz) * 3 + 10;
@@ -339,9 +337,9 @@ function voxelHitAtPointerForSpaceClick(routerState, space, options = {}) {
         }
         if (!firstSolid) firstSolid = { ix, iy, iz, v, emptyBeforeSolid };
         seenSolid = true;
-      } else if (preferEmpty && seenSolid && isEmpty) {
+ } else if (preferEmpty && seenSolid && isEmpty) {
         return { ix, iy, iz, v, emptyBeforeSolid };
-      } else if (!seenSolid) {
+ } else if (!seenSolid) {
         emptyBeforeSolid = true;
       }
     }
@@ -370,7 +368,7 @@ function ensureVoxSelForClick(routerState, spaceId, ix, iy, iz, addMode, voxelVa
     justStarted: stroke ? stroke.justStarted === true : null,
     existingCount: Array.isArray(state.voxSel) ? state.voxSel.length : 0,
     selectionCount: state.selection instanceof Set ? state.selection.size : Array.isArray(state.selection) ? state.selection.length : 0
-  });
+ });
   // Clear picks for this space unless in add (brush-extend) mode or continuing an active stroke
   if (shouldClearThisCall) state.voxSel = state.voxSel.filter(p => p && p.id !== spaceId);
   // Avoid duplicates
@@ -381,13 +379,13 @@ function ensureVoxSelForClick(routerState, spaceId, ix, iy, iz, addMode, voxelVa
       id: spaceId,
       size: state.voxSel.length,
       newest: { id: spaceId, x: ix, y: iy, z: iz, v: voxelValue }
-    });
-  } else {
+ });
+ } else {
     log('VOXEL_SELECT', 'duplicate', {
       id: spaceId,
       coords: { x: ix, y: iy, z: iz },
       size: state.voxSel.length
-    });
+ });
   }
 
   const prevSelArr = state.selection instanceof Set
@@ -399,7 +397,7 @@ function ensureVoxSelForClick(routerState, spaceId, ix, iy, iz, addMode, voxelVa
     state.selection.clear();
     log('VOXEL_SELECT', 'selection:cleared', { prev: prevSelArr });
     cleared = true;
-  } else if (prevSelArr.length) {
+ } else if (prevSelArr.length) {
     cleared = true;
   }
   if (cleared && prevSelArr.length) {
@@ -438,7 +436,7 @@ export function routerBeginVoxelStroke(e, routerState, route) {
     justStarted: true,
     allowEmptyAfterSolid: false,
     anchor: null
-  };
+ };
   routerState._brush = stroke;
   const hit = voxelHitAtPointerForSpaceClick(routerState, space);
   if (!hit) {
@@ -485,7 +483,7 @@ export function routerHandleBrushMove(routerState) {
         hit: { ix: hit.ix, iy: hit.iy, iz: hit.iz, v: hit.v },
         limit,
         pointer: { x: scene.pointerX, y: scene.pointerY }
-      });
+ });
       return;
     }
   }
@@ -498,7 +496,7 @@ export function routerHandleBrushMove(routerState) {
     routerState._lastNonSolidHit = {
       spaceId: space.id,
       voxel: { ix: hit.ix, iy: hit.iy, iz: hit.iz }
-    };
+ };
   }
   _brush.anchor = { ix: hit.ix, iy: hit.iy, iz: hit.iz };
 }
@@ -508,66 +506,59 @@ function dispatchWindowEvent(name, detail) {
 }
 
 function insertPPNodeOnSegment({ routerState, segHit, mods }) {
-  try {
-    const { scene, state } = routerState || {};
-    if (!scene || !state || !segHit) return false;
-    const connect = ensureConnectState(state);
-    const path = Array.isArray(connect?.path) ? connect.path : null;
-    if (!path || path.length < 2) return false;
+  const { scene, state } = routerState || {};
+  if (!scene || !state || !segHit) return false;
+  const connect = ensureConnectState(state);
+  const path = Array.isArray(connect?.path) ? connect.path : null;
+  if (!path || path.length < 2) return false;
 
-    const meshName = String(segHit?.pickedMesh?.name || '');
-    if (!meshName.startsWith('connect:seg:')) return false;
-    const segIndex = Number(meshName.split(':').pop());
-    if (!Number.isFinite(segIndex) || segIndex < 0 || segIndex >= path.length - 1) return false;
+  const meshName = String(segHit?.pickedMesh?.name || '');
+  if (!meshName.startsWith('connect:seg:')) return false;
+  const segIndex = Number(meshName.split(':').pop());
+  if (!Number.isFinite(segIndex) || segIndex < 0 || segIndex >= path.length - 1) return false;
 
-    const picked = segHit.pickedPoint || null;
-    const fallback = (() => {
-      try {
-        const a = path[segIndex];
-        const b = path[segIndex + 1];
-        if (!a || !b) return null;
-        return {
-          x: (Number(a.x) + Number(b.x)) / 2,
-          y: (Number(a.y) + Number(b.y)) / 2,
-          z: (Number(a.z) + Number(b.z)) / 2
-        };
-      } catch {
-        return null;
-      }
-    })();
-    const target = picked ? { x: picked.x, y: picked.y, z: picked.z } : fallback;
-    if (!target) return false;
+  const picked = segHit.pickedPoint || null;
+  const fallback = (() => {
+    const a = path[segIndex];
+    const b = path[segIndex + 1];
+    if (!a || !b) return null;
+    return {
+      x: (Number(a.x) + Number(b.x)) / 2,
+      y: (Number(a.y) + Number(b.y)) / 2,
+      z: (Number(a.z) + Number(b.z)) / 2
+ };
 
-    const newPath = [
-      ...path.slice(0, segIndex + 1),
-      { x: Number(target.x) || 0, y: Number(target.y) || 0, z: Number(target.z) || 0 },
-      ...path.slice(segIndex + 1)
-    ];
+ })();
+  const target = picked ? { x: picked.x, y: picked.y, z: picked.z } : fallback;
+  if (!target) return false;
 
-    rebuildConnectMeshes({ scene, state, path: newPath });
-    const updated = ensureConnectState(state);
-    const newNodeName = `connect:node:${segIndex + 1}`;
-    const newSel = new Set([newNodeName]);
-    updated.sel = newSel;
-    state._connect.sel = newSel;
-    refreshPPNodeSelection(routerState);
-    syncConnectPathToDb(state);
+  const newPath = [
+    ...path.slice(0, segIndex + 1),
+    { x: Number(target.x) || 0, y: Number(target.y) || 0, z: Number(target.z) || 0 },
+    ...path.slice(segIndex + 1)
+  ];
 
-    const sceneApi = routerState.sceneApi || state?._sceneApi || null;
-    try { sceneApi?.ensureConnectGizmoFromSel?.(); } catch {}
-    try { sceneApi?.updateContactShadowPlacement?.(); } catch {}
+  rebuildConnectMeshes({ scene, state, path: newPath });
+  const updated = ensureConnectState(state);
+  const newNodeName = `connect:node:${segIndex + 1}`;
+  const newSel = new Set([newNodeName]);
+  updated.sel = newSel;
+  state._connect.sel = newSel;
+  refreshPPNodeSelection(routerState);
+  syncConnectPathToDb(state);
 
-    dispatchWindowEvent('dw:connect:update');
-    log('SELECT', 'pp:insertNode', {
-      segment: segIndex,
-      node: newNodeName,
-      meta: !!mods?.meta,
-      ctrl: !!mods?.ctrl
-    });
-    try { scene.render(); } catch {}
-    return true;
-  } catch (err) {
-    log('ERROR', 'pp:insertNode:fail', { error: String(err) });
-    return false;
-  }
+  const sceneApi = routerState.sceneApi || state?._sceneApi || null;
+  sceneApi?.ensureConnectGizmoFromSel?.();
+  sceneApi?.updateContactShadowPlacement?.();
+
+  dispatchWindowEvent('dw:connect:update');
+  log('SELECT', 'pp:insertNode', {
+    segment: segIndex,
+    node: newNodeName,
+    meta: !!mods?.meta,
+    ctrl: !!mods?.ctrl
+ });
+  scene.render();
+  return true;
+
 }

@@ -12,10 +12,9 @@ function ensurePoint(p) {
 }
 
 function segmentRadius(state) {
-  try {
-    const base = Number(state?.barrow?.meta?.voxelSize) || 0;
-    if (base > 0) return Math.max(0.32, base * 0.22);
-  } catch {}
+  const base = Number(state?.barrow?.meta?.voxelSize) || 0;
+  if (base > 0) return Math.max(0.32, base * 0.22);
+
   return 0.35;
 }
 
@@ -33,13 +32,13 @@ export function disposeConnectMeshes(state) {
   const connect = ensureConnectState(state);
   if (!connect) return;
   for (const entry of connect.props || []) {
-    try { entry?.mesh?.dispose?.(); } catch {}
+    entry?.mesh?.dispose?.();
   }
   for (const entry of connect.nodes || []) {
-    try { entry?.mesh?.dispose?.(); } catch {}
+    entry?.mesh?.dispose?.();
   }
   for (const entry of connect.segs || []) {
-    try { entry?.mesh?.dispose?.(); } catch {}
+    entry?.mesh?.dispose?.();
   }
   connect.props = [];
   connect.nodes = [];
@@ -94,7 +93,7 @@ export function rebuildConnectMeshes({ scene, state, path }) {
       radius,
       tessellation,
       updatable: true
-    }, scene);
+ }, scene);
     mesh.isPickable = true;
     mesh.renderingGroupId = 3;
     mesh.visibility = 0;
@@ -126,13 +125,12 @@ export function updateConnectMeshesGeometry({ scene, state }) {
 
   const lineEntry = (connect.props || []).find((p) => p && p.name === 'connect:proposal');
   if (lineEntry?.mesh) {
-    try {
-      BABYLON.MeshBuilder.CreateLines('connect:proposal', {
-        points: pts,
-        updatable: true,
-        instance: lineEntry.mesh
-      }, scene);
-    } catch {}
+    BABYLON.MeshBuilder.CreateLines('connect:proposal', {
+      points: pts,
+      updatable: true,
+      instance: lineEntry.mesh
+ }, scene);
+
   }
 
   if (!Array.isArray(connect.nodes) || connect.nodes.length !== pts.length) {
@@ -144,7 +142,7 @@ export function updateConnectMeshesGeometry({ scene, state }) {
     const idx = Number(node?.i);
     const mesh = node?.mesh;
     if (!Number.isFinite(idx) || !mesh || !pts[idx]) continue;
-    try { mesh.position.copyFrom(pts[idx]); } catch {}
+    mesh.position.copyFrom(pts[idx]);
   }
 
   if (!Array.isArray(connect.segs) || connect.segs.length !== pts.length - 1) {
@@ -160,28 +158,26 @@ export function updateConnectMeshesGeometry({ scene, state }) {
     const tessellation = Number(seg?.tessellation) || 12;
     seg.radius = radius;
     seg.tessellation = tessellation;
-    try {
-      BABYLON.MeshBuilder.CreateTube(mesh.name, {
-        path: [pts[idx], pts[idx + 1]],
-        radius,
-        tessellation,
-        updatable: true,
-        instance: mesh
-      }, scene);
-      mesh.visibility = 0;
-    } catch {}
+    BABYLON.MeshBuilder.CreateTube(mesh.name, {
+      path: [pts[idx], pts[idx + 1]],
+      radius,
+      tessellation,
+      updatable: true,
+      instance: mesh
+ }, scene);
+    mesh.visibility = 0;
+
   }
 }
 
 export function syncConnectPathToDb(state) {
-  try {
-    if (!state) return;
-    const path = Array.isArray(state?._connect?.path) ? state._connect.path : null;
-    if (!path || path.length < 2) {
-      if (state?.barrow) state.barrow.connect = null;
-      return;
-    }
-    state.barrow = state.barrow || {};
-    state.barrow.connect = { path: path.map(ensurePoint) };
-  } catch {}
+  if (!state) return;
+  const path = Array.isArray(state?._connect?.path) ? state._connect.path : null;
+  if (!path || path.length < 2) {
+    if (state?.barrow) state.barrow.connect = null;
+    return;
+  }
+  state.barrow = state.barrow || {};
+  state.barrow.connect = { path: path.map(ensurePoint) };
+
 }

@@ -17,17 +17,16 @@ export function initPropertiesTab(panelContent, api) {
     editPane.classList.remove('active'); dbPane.classList.remove('active'); settingsPane.classList.remove('active'); propsPane.classList.add('active');
     const allTabs = tabsBar.querySelectorAll('.tab');
     allTabs.forEach(b => b.classList.toggle('active', b.dataset.tab === 'tab-props'));
-    try { Log.log('UI', 'Activate tab', { tab: 'Properties' }); } catch {}
+    Log.log('UI', 'Activate tab', { tab: 'Properties' });
     render();
   }
   tabBtn.addEventListener('click', activateProps);
 
   function getSelectedSpaces() {
-    try {
-      const sel = Array.from(api.state.selection || []);
-      const byId = new Map((api.state.barrow.spaces||[]).map(s => [s.id, s]));
-      return sel.map(id => byId.get(id)).filter(Boolean);
-    } catch { return []; }
+    const sel = Array.from(api.state.selection || []);
+    const byId = new Map((api.state.barrow.spaces||[]).map(s => [s.id, s]));
+    return sel.map(id => byId.get(id)).filter(Boolean);
+
   }
 
   function render() {
@@ -48,7 +47,7 @@ export function initPropertiesTab(panelContent, api) {
       const b = document.createElement('b'); b.textContent = label + ':'; b.style.minWidth = '120px';
       const span = document.createElement('span'); span.textContent = value;
       row.appendChild(b); row.appendChild(span); propsPane.appendChild(row);
-    };
+ };
     makeRow('id', s.id);
     makeRow('type', s.type);
     makeRow('res', String(s.res ?? (api.state.barrow?.meta?.voxelSize || 1)));
@@ -62,11 +61,10 @@ export function initPropertiesTab(panelContent, api) {
       const vx = s.vox.size?.x||0, vy = s.vox.size?.y||0, vz = s.vox.size?.z||0;
       makeRow('dimensions', `${vx} × ${vy} × ${vz}`);
       makeRow('resolution', String(s.vox.res || s.res || api.state.barrow?.meta?.voxelSize || 1));
-      try {
-        const len = Array.isArray(s.vox.data) ? s.vox.data.length : (s.vox.data?.rle?.length || 0);
-        makeRow('data (len)', String(len));
-      } catch {}
-    } else {
+      const len = Array.isArray(s.vox.data) ? s.vox.data.length : (s.vox.data?.rle?.length || 0);
+      makeRow('data (len)', String(len));
+
+ } else {
       propsPane.appendChild(document.createTextNode('No voxel data for this space.'));
     }
   }

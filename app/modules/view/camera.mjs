@@ -14,11 +14,11 @@ export function initCamera(scene, canvas, Log) {
   // Default: middle-button pan so right-click rotates (reversible per-gesture in eventHandler)
   camera.panningMouseButton = 1;
   // Ensure RC rotates by default; disable Ctrl-for-pan surprises; restrict rotate button strictly to right-click
-  try { if (camera.inputs && camera.inputs.attached && camera.inputs.attached.pointers) {
+  if (camera.inputs && camera.inputs.attached && camera.inputs.attached.pointers) {
     const ptr = camera.inputs.attached.pointers;
     if (typeof ptr.useCtrlForPanning === 'boolean') ptr.useCtrlForPanning = false;
     if (Array.isArray(ptr.buttons)) ptr.buttons = [2]; // rotate only on right; left reserved for selection/gizmos
-  } } catch {}
+  }
   camera.panningSensibility = 40;
   camera.panningInertia = 0.2;
 
@@ -45,60 +45,56 @@ export function initCamera(scene, canvas, Log) {
     let _lastCamWheelLog = 0;
     let _dollyLatchUntil = 0; // time until which we keep dollying regardless of nearMin
     function onWheel(e){
-      try {
-        const minR = camera.lowerRadiusLimit || 0;
-        const tol = Math.max(0.12, minR * 0.15); // generous tolerance near min
-        const nearMin = (camera.radius - minR) <= tol;
-        const zoomIn = (e && typeof e.deltaY === 'number') ? (e.deltaY < 0) : false;
-        const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-        // Throttled raw wheel trace
-        try {
-          if (Log && now - _lastCamWheelLog > 180) {
-            _lastCamWheelLog = now;
-            Log.log('CAMERA', 'wheel:raw', { deltaY: e?.deltaY ?? null, radius: camera.radius, lower: minR, tol, nearMin, zoomIn });
-          }
-        } catch {}
-        const latchActive = now < _dollyLatchUntil;
-        if (zoomIn && (nearMin || latchActive)) {
-          // Cancel any residual zoom inertia so it doesn't "fight" the dolly
-          try { camera.inertialRadiusOffset = 0; } catch {}
-          // Hard clamp radius to min so we remain in dolly mode across events
-          try {
-            if (camera.radius > minR) {
-              camera.radius = minR;
-              if (Log) Log.log('CAMERA', 'wheel:clamp', { radius: camera.radius, lower: minR });
-            }
-          } catch {}
-          // Compute a forward dolly step proportional to wheel delta and a base tied to scene scale
-          let speed = 1.0;
-          try {
-            const raw = Number(localStorage.getItem('dw:ui:dollySpeed')||'100');
-            if (isFinite(raw) && raw > 0) speed = (raw > 5) ? (raw / 100) : raw; // accept percent or multiplier
-          } catch {}
-          const mag = Math.max(1, Math.abs(e.deltaY || 0));
-          const base = Math.max(0.5, Math.max(0.25, camera.radius * 0.18));
-          const stepRaw = (mag * 0.0025) * base * speed;
-          const step = Math.min(100, Math.max(0.15, stepRaw * 4)); // 4x faster (doubled again)
-          const dir = camera.getForwardRay()?.direction || new BABYLON.Vector3(0,0,1);
-          const t0 = camera.target.clone ? camera.target.clone() : new BABYLON.Vector3(camera.target.x, camera.target.y, camera.target.z);
-          const t1 = t0.add(dir.scale(step));
-          camera.target = t1;
-          // Latch dolly mode for a short duration to keep movement continuous across events
-          _dollyLatchUntil = now + 320; // ms
-          try { if (Log) Log.log('CAMERA', 'wheel:dolly', { step, speed, base, from: { x: t0.x, y: t0.y, z: t0.z }, to: { x: t1.x, y: t1.y, z: t1.z }, latch: true }); } catch {}
-          // Block default zoom handler so we only dolly
-          try { e.preventDefault(); e.stopImmediatePropagation?.(); e.stopPropagation(); } catch {}
-        } else {
-          if (!zoomIn) {
-            // Leaving dolly mode on zoom-out
-            _dollyLatchUntil = 0;
-          }
-          try { if (Log) Log.log('CAMERA', 'wheel:pass', { reason: (!zoomIn ? 'notZoomIn' : 'notNearMin'), radius: camera.radius, lower: minR }); } catch {}
+      const minR = camera.lowerRadiusLimit || 0;
+      const tol = Math.max(0.12, minR * 0.15); // generous tolerance near min
+      const nearMin = (camera.radius - minR) <= tol;
+      const zoomIn = (e && typeof e.deltaY === 'number') ? (e.deltaY < 0) : false;
+      const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+      // Throttled raw wheel trace
+      if (Log && now - _lastCamWheelLog > 180) {
+        _lastCamWheelLog = now;
+        Log.log('CAMERA', 'wheel:raw', { deltaY: e?.deltaY ?? null, radius: camera.radius, lower: minR, tol, nearMin, zoomIn });
+      }
+
+      const latchActive = now < _dollyLatchUntil;
+      if (zoomIn && (nearMin || latchActive)) {
+        // Cancel any residual zoom inertia so it doesn't "fight" the dolly
+        camera.inertialRadiusOffset = 0;
+        // Hard clamp radius to min so we remain in dolly mode across events
+        if (camera.radius > minR) {
+          camera.radius = minR;
+          if (Log) Log.log('CAMERA', 'wheel:clamp', { radius: camera.radius, lower: minR });
         }
-      } catch {}
+
+        // Compute a forward dolly step proportional to wheel delta and a base tied to scene scale
+        let speed = 1.0;
+        const raw = Number(localStorage.getItem('dw:ui:dollySpeed')||'100');
+        if (isFinite(raw) && raw > 0) speed = (raw > 5) ? (raw / 100) : raw; // accept percent or multiplier
+
+        const mag = Math.max(1, Math.abs(e.deltaY || 0));
+        const base = Math.max(0.5, Math.max(0.25, camera.radius * 0.18));
+        const stepRaw = (mag * 0.0025) * base * speed;
+        const step = Math.min(100, Math.max(0.15, stepRaw * 4)); // 4x faster (doubled again)
+        const dir = camera.getForwardRay()?.direction || new BABYLON.Vector3(0,0,1);
+        const t0 = camera.target.clone ? camera.target.clone() : new BABYLON.Vector3(camera.target.x, camera.target.y, camera.target.z);
+        const t1 = t0.add(dir.scale(step));
+        camera.target = t1;
+        // Latch dolly mode for a short duration to keep movement continuous across events
+        _dollyLatchUntil = now + 320; // ms
+        if (Log) Log.log('CAMERA', 'wheel:dolly', { step, speed, base, from: { x: t0.x, y: t0.y, z: t0.z }, to: { x: t1.x, y: t1.y, z: t1.z }, latch: true });
+        // Block default zoom handler so we only dolly
+        e.preventDefault(); e.stopImmediatePropagation?.(); e.stopPropagation();
+ } else {
+        if (!zoomIn) {
+          // Leaving dolly mode on zoom-out
+          _dollyLatchUntil = 0;
+        }
+        if (Log) Log.log('CAMERA', 'wheel:pass', { reason: (!zoomIn ? 'notZoomIn' : 'notNearMin'), radius: camera.radius, lower: minR });
+      }
+
     }
-    try { canvas.addEventListener('wheel', onWheel, { passive: false, capture: true }); } catch {}
-  })();
+    canvas.addEventListener('wheel', onWheel, { passive: false, capture: true });
+ })();
 
   function updatePanDynamics(){
     const panBase = getPanBase();
@@ -123,7 +119,7 @@ export function initCamera(scene, canvas, Log) {
       const desiredMaxZ = Math.max(1000, radius * 3);
       if (camera.maxZ < desiredMaxZ) camera.maxZ = desiredMaxZ;
       if (Log) Log.log('UI', 'Center on item', { name: mesh.name, center: { x: cx, y: cy, z: cz }, span: { x: spanX, y: spanY, z: spanZ }, radius });
-    } else {
+ } else {
       camera.target.copyFrom(mesh.position);
       if (Log) Log.log('UI', 'Center on item', { name: mesh.name, center: mesh.position });
     }
@@ -155,57 +151,56 @@ export function initCamera(scene, canvas, Log) {
 
   // Fit view prioritizing caverns' center of mass for target while sizing radius from spaces extents
   function fitViewSmart(barrow) {
-    try {
-      const spaces = Array.isArray(barrow?.spaces) ? barrow.spaces : [];
-      if (!spaces.length) {
-        camera.target.set(0, 0, 0);
-        const baseRadius = Math.max(24, camera.radius || 24);
-        camera.radius = baseRadius;
-        if (!isFinite(camera.upperRadiusLimit) || camera.upperRadiusLimit < baseRadius * 2) {
-          camera.upperRadiusLimit = baseRadius * 2;
-        }
-        if (!isFinite(camera.maxZ) || camera.maxZ < baseRadius * 3) {
-          camera.maxZ = baseRadius * 3;
-        }
-        return;
+    const spaces = Array.isArray(barrow?.spaces) ? barrow.spaces : [];
+    if (!spaces.length) {
+      camera.target.set(0, 0, 0);
+      const baseRadius = Math.max(24, camera.radius || 24);
+      camera.radius = baseRadius;
+      if (!isFinite(camera.upperRadiusLimit) || camera.upperRadiusLimit < baseRadius * 2) {
+        camera.upperRadiusLimit = baseRadius * 2;
       }
-      // Compute extents as before over spaces
-      let minX = Infinity, minY = Infinity, minZ = Infinity;
-      let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
-      const voxelSize = barrow?.meta?.voxelSize || 1;
-      for (const s of spaces) {
-        const res = s.res || voxelSize;
-        const w = (s.size?.x||0) * res, h = (s.size?.y||0) * res, d = (s.size?.z||0) * res;
-        const cx = s.origin?.x||0, cy = s.origin?.y||0, cz = s.origin?.z||0;
-        minX = Math.min(minX, cx - w/2); maxX = Math.max(maxX, cx + w/2);
-        minY = Math.min(minY, cy - h/2); maxY = Math.max(maxY, cy + h/2);
-        minZ = Math.min(minZ, cz - d/2); maxZ = Math.max(maxZ, cz + d/2);
+      if (!isFinite(camera.maxZ) || camera.maxZ < baseRadius * 3) {
+        camera.maxZ = baseRadius * 3;
       }
-      if (!isFinite(minX) || !isFinite(maxX)) { if (spaces.length) return fitViewAll(spaces, voxelSize); }
-      const span = Math.max(maxX - minX, maxY - minY, maxZ - minZ);
-      const resolvedSpan = isFinite(span) && span > 0 ? span : 10;
-      const radius = Math.max(10, resolvedSpan * 1.3 + 15);
-      // Center on caverns COM when available; fallback to spaces mid-point
-      let tx, ty, tz;
-      const cavs = Array.isArray(barrow?.caverns) ? barrow.caverns : [];
-      const haveCav = cavs.length > 0;
-      if (haveCav) {
-        let cx = 0, cy = 0, cz = 0, n = 0;
-        for (const c of cavs) {
-          const p = c?.pos; if (!p) continue; cx += (p.x||0); cy += (p.y||0); cz += (p.z||0); n++;
-        }
-        if (n > 0) { tx = cx / n; ty = cy / n; tz = cz / n; }
+      return;
+    }
+    // Compute extents as before over spaces
+    let minX = Infinity, minY = Infinity, minZ = Infinity;
+    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+    const voxelSize = barrow?.meta?.voxelSize || 1;
+    for (const s of spaces) {
+      const res = s.res || voxelSize;
+      const w = (s.size?.x||0) * res, h = (s.size?.y||0) * res, d = (s.size?.z||0) * res;
+      const cx = s.origin?.x||0, cy = s.origin?.y||0, cz = s.origin?.z||0;
+      minX = Math.min(minX, cx - w/2); maxX = Math.max(maxX, cx + w/2);
+      minY = Math.min(minY, cy - h/2); maxY = Math.max(maxY, cy + h/2);
+      minZ = Math.min(minZ, cz - d/2); maxZ = Math.max(maxZ, cz + d/2);
+    }
+    if (!isFinite(minX) || !isFinite(maxX)) { if (spaces.length) return fitViewAll(spaces, voxelSize); }
+    const span = Math.max(maxX - minX, maxY - minY, maxZ - minZ);
+    const resolvedSpan = isFinite(span) && span > 0 ? span : 10;
+    const radius = Math.max(10, resolvedSpan * 1.3 + 15);
+    // Center on caverns COM when available; fallback to spaces mid-point
+    let tx, ty, tz;
+    const cavs = Array.isArray(barrow?.caverns) ? barrow.caverns : [];
+    const haveCav = cavs.length > 0;
+    if (haveCav) {
+      let cx = 0, cy = 0, cz = 0, n = 0;
+      for (const c of cavs) {
+        const p = c?.pos; if (!p) continue; cx += (p.x||0); cy += (p.y||0); cz += (p.z||0); n++;
       }
-      if (!(isFinite(tx) && isFinite(ty) && isFinite(tz))) {
-        tx = (minX + maxX) / 2; ty = (minY + maxY) / 2; tz = (minZ + maxZ) / 2;
-      }
-      camera.target.set(tx, ty, tz);
-      camera.radius = radius;
-      if (camera.upperRadiusLimit < radius * 1.2) camera.upperRadiusLimit = radius * 1.2;
-      const desiredMaxZ = Math.max(1000, radius * 3);
-      if (camera.maxZ < desiredMaxZ) camera.maxZ = desiredMaxZ;
-      if (Log) Log.log('UI', 'Fit view (smart)', { target: { x: tx, y: ty, z: tz }, span: resolvedSpan, radius, used: haveCav ? 'cavernsCOM' : 'spacesMid' });
-    } catch (e) { try { if (Log) Log.log('ERROR', 'fitViewSmart', { error: String(e) }); } catch {} }
+      if (n > 0) { tx = cx / n; ty = cy / n; tz = cz / n; }
+    }
+    if (!(isFinite(tx) && isFinite(ty) && isFinite(tz))) {
+      tx = (minX + maxX) / 2; ty = (minY + maxY) / 2; tz = (minZ + maxZ) / 2;
+    }
+    camera.target.set(tx, ty, tz);
+    camera.radius = radius;
+    if (camera.upperRadiusLimit < radius * 1.2) camera.upperRadiusLimit = radius * 1.2;
+    const desiredMaxZ = Math.max(1000, radius * 3);
+    if (camera.maxZ < desiredMaxZ) camera.maxZ = desiredMaxZ;
+    if (Log) Log.log('UI', 'Fit view (smart)', { target: { x: tx, y: ty, z: tz }, span: resolvedSpan, radius, used: haveCav ? 'cavernsCOM' : 'spacesMid' });
+
   }
 
   return { camera, applyZoomBase, applyPanBase, getZoomBase, getPanBase, updatePanDynamics, centerOnMesh, fitViewAll, fitViewSmart };

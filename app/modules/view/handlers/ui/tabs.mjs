@@ -41,23 +41,22 @@ export function initTabsUI({ renderDbView, state, Log }) {
   const dbView = document.createElement('div');
   dbView.id = 'dbView'; dbView.className = 'db-view';
   dbPane.appendChild(dbView);
-  try { renderDbView(state.barrow); } catch {}
+  renderDbView(state.barrow);
 
   function activate(tabId) {
-    try {
-      const panes = panelContent.querySelectorAll('.tab-pane');
-      panes.forEach(p => p.classList.toggle('active', p.id === tabId));
-      const tabs = tabsBar.querySelectorAll('.tab');
-      tabs.forEach(b => b.classList.toggle('active', b.dataset.tab === tabId));
-      try { window.dispatchEvent(new CustomEvent('dw:tabChange', { detail: { id: tabId } })); } catch {}
-    } catch {}
+    const panes = panelContent.querySelectorAll('.tab-pane');
+    panes.forEach(p => p.classList.toggle('active', p.id === tabId));
+    const tabs = tabsBar.querySelectorAll('.tab');
+    tabs.forEach(b => b.classList.toggle('active', b.dataset.tab === tabId));
+    window.dispatchEvent(new CustomEvent('dw:tabChange', { detail: { id: tabId } }));
+
   }
   tabsBar.addEventListener('click', (e) => {
     const btn = e.target && e.target.closest ? e.target.closest('.tab') : null;
     if (!btn || !btn.dataset || !btn.dataset.tab) return;
     activate(btn.dataset.tab);
-  });
-  try { window.dispatchEvent(new CustomEvent('dw:tabsReady', { detail: {} })); } catch {}
+ });
+  window.dispatchEvent(new CustomEvent('dw:tabsReady', { detail: {} }));
 
   return { editPane, dbPane, testPane, settingsPane, tabsBar };
 }

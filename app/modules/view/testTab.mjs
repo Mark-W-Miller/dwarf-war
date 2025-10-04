@@ -14,9 +14,8 @@ export function initTestTab({ pane, scene, camera, state }) {
   if (!pane || !scene || !camera) return;
 
   const log = (evt, data) => {
-    try { Log.log('GIZMO_2', evt, data); }
-    catch { console.log('GIZMO_2', evt, data); }
-  };
+    Log.log('GIZMO_2', evt, data);
+ };
 
   pane.classList.add('test-tab');
 
@@ -58,7 +57,7 @@ export function initTestTab({ pane, scene, camera, state }) {
     'rotate:y': true,
     'rotate:z': true,
     'plane:ground': true
-  };
+ };
   const toggleInputs = new Map();
   const toggleDefs = [
     { group: 'move:x', label: 'Move X' },
@@ -86,7 +85,7 @@ export function initTestTab({ pane, scene, camera, state }) {
     checkbox.addEventListener('change', () => {
       toggleState[def.group] = !!checkbox.checked;
       if (builder) builder.setGroupEnabled(def.group, toggleState[def.group]);
-    });
+ });
   }
 
   let builder = null;
@@ -108,7 +107,7 @@ export function initTestTab({ pane, scene, camera, state }) {
     if (!builder) return;
     randomBounds();
     log('bounds:randomize', {});
-  });
+ });
 
   resetBtn.addEventListener('click', () => {
     if (!builder) return;
@@ -119,17 +118,17 @@ export function initTestTab({ pane, scene, camera, state }) {
       if (builder.root.rotation) builder.root.rotation.set(0, 0, 0);
     }
     log('bounds:reset', {});
-  });
+ });
 
   function disposeGizmo() {
     if (builder) {
       builder.dispose();
       builder = null;
     }
-    if (state) { try { state._testGizmo = null; } catch {} }
+    if (state) { state._testGizmo = null;  }
     if (testMesh) {
-      try { testMesh.parent = null; } catch {}
-      try { testMesh.setEnabled(false); } catch {}
+      testMesh.parent = null;
+      testMesh.setEnabled(false);
     }
     randomBtn.disabled = true;
     resetBtn.disabled = true;
@@ -172,7 +171,7 @@ export function initTestTab({ pane, scene, camera, state }) {
     }
     const mesh = ensureTestMesh();
     builder = createGizmoBuilder({ scene, camera, log });
-    if (state) { try { state._testGizmo = builder; } catch {} }
+    if (state) { state._testGizmo = builder;  }
     if (mesh) {
       mesh.parent = builder.root;
       mesh.position.set(0, 0, 0);
@@ -189,7 +188,7 @@ export function initTestTab({ pane, scene, camera, state }) {
 
   toggleBtn.addEventListener('click', () => {
     enableGizmo(!gizmoEnabled);
-  });
+ });
 
   function handleTabChange(e) {
     const active = e?.detail?.id === 'tab-test';
@@ -202,5 +201,5 @@ export function initTestTab({ pane, scene, camera, state }) {
   window.addEventListener('beforeunload', () => {
     window.removeEventListener('dw:tabChange', handleTabChange);
     disposeGizmo();
-  }, { once: true });
+ }, { once: true });
 }

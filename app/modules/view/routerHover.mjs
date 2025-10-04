@@ -48,14 +48,11 @@ export function pickMoveGizmo({ scene, x, y }) {
   return md?.hit && md.pickedMesh ? md : null;
 }
 export function pickScryBall({ scene, state, x, y }) {
-  try {
-    const ball = state?._scry?.ball;
-    if (!ball || ball.isDisposed?.()) return null;
-    const pick = scene.pick(x, y, (mesh) => mesh === ball);
-    return (pick?.hit && pick.pickedMesh === ball) ? pick : null;
-  } catch {
-    return null;
-  }
+  const ball = state?._scry?.ball;
+  if (!ball || ball.isDisposed?.()) return null;
+  const pick = scene.pick(x, y, (mesh) => mesh === ball);
+  return (pick?.hit && pick.pickedMesh === ball) ? pick : null;
+
 }
 export function pickSpace({ scene, state, x, y }) {
   // Primary: triangle-accurate pick against base space meshes only `space:<id>`
@@ -75,7 +72,7 @@ export function pickSpace({ scene, state, x, y }) {
     return r;
   }
   // Optional fallback (off by default)
-  const enableFallback = (() => { try { return localStorage.getItem('dw:dev:spaceRayFallback') === '1'; } catch { return false; } })();
+  const enableFallback = (() => { return localStorage.getItem('dw:dev:spaceRayFallback') === '1'; })();
   if (!enableFallback) return null;
   if (!state || !state.built || !Array.isArray(state.built.spaces)) return null;
   const ray = scene.createPickingRay(x, y, BABYLON.Matrix.Identity(), scene.activeCamera);
@@ -92,7 +89,7 @@ export function pickSpace({ scene, state, x, y }) {
     if (best) {
       const name = String(best.pickedMesh?.name || '');
       log('PICK', 'space:hit:fallback', { name, distance: best.distance ?? null, hits, x, y });
-    } else {
+ } else {
       log('PICK', 'space:miss:both', { x, y, spaces: (state?.built?.spaces||[]).length });
     }
   }
@@ -147,10 +144,9 @@ export function refreshPPNodeSelection(routerState) {
     setPPNodeColorForSelection(routerState, mat);
   }
   if (hoveredMat) {
-    try {
-      const orange = new BABYLON.Color3(0.95, 0.55, 0.12);
-      hoveredMat.emissiveColor = orange;
-    } catch {}
+    const orange = new BABYLON.Color3(0.95, 0.55, 0.12);
+    hoveredMat.emissiveColor = orange;
+
   }
 }
 
@@ -277,8 +273,7 @@ function resetDiscMat(mat) {
 // ————— Voxels —————
 function isVoxelHoverEnabled(space, x, y) {
   let pref = null;
-  try { pref = localStorage.getItem('dw:ui:hoverVoxel'); }
-  catch {}
+  pref = localStorage.getItem('dw:ui:hoverVoxel');
   const enabled = pref == null || pref === '' || pref === '1';
   if (!enabled && routerLogsEnabled()) {
     log('HOVER_VOXEL', 'off', { id: space?.id || null, x, y, pref });
@@ -382,7 +377,7 @@ function buildVoxelHoverContext({ scene, camera, state, space }) {
     ix: Math.min(nx - 1, Math.max(0, Math.floor((lx - minX) / res))),
     iy: Math.min(ny - 1, Math.max(0, Math.floor((ly - minY) / res))),
     iz: Math.min(nz - 1, Math.max(0, Math.floor((lz - minZ) / res)))
-  });
+ });
 
   const cell = toIndex(firstPoint.x, firstPoint.y, firstPoint.z);
   const stepX = directionLocal.x > 0 ? 1 : directionLocal.x < 0 ? -1 : 0;
@@ -398,8 +393,7 @@ function buildVoxelHoverContext({ scene, camera, state, space }) {
   const tDeltaZ = stepZ !== 0 ? Math.abs(res / directionLocal.z) : Infinity;
 
   let hideTop = 0;
-  try { hideTop = Math.max(0, Math.min(ny, Math.floor(Number(space.voxExposeTop || 0) || 0))); }
-  catch {}
+  hideTop = Math.max(0, Math.min(ny, Math.floor(Number(space.voxExposeTop || 0) || 0)));
   const yCut = ny - hideTop;
   const data = Array.isArray(vox.data) ? vox.data : [];
 
@@ -410,7 +404,7 @@ function buildVoxelHoverContext({ scene, camera, state, space }) {
       worldAligned,
       x: scene.pointerX,
       y: scene.pointerY
-    });
+ });
   }
 
   return {
@@ -423,7 +417,7 @@ function buildVoxelHoverContext({ scene, camera, state, space }) {
       aligned: worldAligned,
       quaternion: rotation,
       origin: { x: cx, y: cy, z: cz }
-    },
+ },
     ray: {
       cell,
       step: { x: stepX, y: stepY, z: stepZ },
@@ -432,9 +426,9 @@ function buildVoxelHoverContext({ scene, camera, state, space }) {
       t,
       limit: tmax,
       EPS
-    },
+ },
     pointer: { x: scene.pointerX, y: scene.pointerY }
-  };
+ };
 }
 
 function renderVoxelHover(routerState, state, space, voxelInfo, voxelValue) {
@@ -470,15 +464,13 @@ function renderVoxelHover(routerState, state, space, voxelInfo, voxelValue) {
       pointer: { x: routerState.scene.pointerX, y: routerState.scene.pointerY },
       world: { x: worldCenter.x, y: worldCenter.y, z: worldCenter.z },
       res
-    });
+ });
   }
 
-  try {
-    const isSelected = !!(state?.selection && state.selection.has(space.id));
-    if (!isSelected) {
-      ensureVoxelHoverBox(routerState, space, localCenter, world.quaternion, res);
-    }
-  } catch {}
+  const isSelected = !!(state?.selection && state.selection.has(space.id));
+  if (!isSelected) {
+    ensureVoxelHoverBox(routerState, space, localCenter, world.quaternion, res);
+  }
 
   routerState._voxHoverLastHit = { id: space.id, i: ix, j: iy, k: iz };
 }
@@ -504,7 +496,7 @@ function voxelHoverForSpace(routerState, space) {
   const {
     dims, res, boundsMin, data, yCut,
     world, ray
-  } = context;
+ } = context;
 
   let { ix, iy, iz } = ray.cell;
   let { t } = ray;
@@ -533,7 +525,7 @@ function voxelHoverForSpace(routerState, space) {
           k: iz,
           v: voxelValue,
           pointer: { x: pointerX, y: pointerY }
-        });
+ });
         firstSampleLogged = true;
       }
 
@@ -547,23 +539,23 @@ function voxelHoverForSpace(routerState, space) {
             k: iz,
             v: voxelValue,
             pointer: { x: pointerX, y: pointerY }
-          });
+ });
         }
         renderVoxelHover(routerState, state, space, {
           ix, iy, iz,
           res,
           minX, minY, minZ,
           world
-        }, voxelValue);
+ }, voxelValue);
         return true;
       }
     }
 
     if (tMaxX <= tMaxY && tMaxX <= tMaxZ) {
       ix += stepX; t = tMaxX + EPS; tMaxX += tDeltaX;
-    } else if (tMaxY <= tMaxX && tMaxY <= tMaxZ) {
+ } else if (tMaxY <= tMaxX && tMaxY <= tMaxZ) {
       iy += stepY; t = tMaxY + EPS; tMaxY += tDeltaY;
-    } else {
+ } else {
       iz += stepZ; t = tMaxZ + EPS; tMaxZ += tDeltaZ;
     }
   }
@@ -584,16 +576,16 @@ function ensureVoxelHoverBox(routerState, space, localCenter, q, res) {
   let hv = routerState._voxHoverBox || null;
   let sameParent = !!(hv && hv.parent === parent);
   if (!hv || hv.isDisposed?.() || !sameParent) {
-    try { if (hv) hv.dispose(); } catch {}
+    if (hv) hv.dispose();
     const box = BABYLON.MeshBuilder.CreateBox('hover:voxel', { size }, scene);
     const mat = new BABYLON.StandardMaterial('hover:voxel:mat', scene);
     mat.diffuseColor = new BABYLON.Color3(0.05, 0.2, 0.35);
     mat.emissiveColor = new BABYLON.Color3(0.35, 0.8, 1.0);
     mat.alpha = 0.30; mat.specularColor = new BABYLON.Color3(0,0,0);
-    try { mat.disableDepthWrite = true; } catch {}
+    mat.disableDepthWrite = true;
     box.material = mat; box.isPickable = false; box.renderingGroupId = 3;
-    try { box.parent = parent; } catch {}
-    try { box.rotationQuaternion = BABYLON.Quaternion.Identity(); } catch {}
+    box.parent = parent;
+    box.rotationQuaternion = BABYLON.Quaternion.Identity();
     routerState._voxHoverBox = box;
     hv = box;
   }
@@ -604,7 +596,7 @@ function ensureVoxelHoverBox(routerState, space, localCenter, q, res) {
 }
 
 function clearVoxelHover(routerState) {
-  try { if (routerState._voxHoverBox && !routerState._voxHoverBox.isDisposed?.()) routerState._voxHoverBox.dispose(); } catch {}
+  if (routerState._voxHoverBox && !routerState._voxHoverBox.isDisposed?.()) routerState._voxHoverBox.dispose();
   routerState._voxHoverBox = null;
 }
 
@@ -624,20 +616,16 @@ export function routerHandleHover(routerState) {
   const x = scene.pointerX;
   const y = scene.pointerY;
   let rawPick = null;
-  try { rawPick = scene.pick(x, y, null); }
-  catch (e) {
-    try { log('HOVER_DETAIL', 'rawPick:error', { error: String(e && e.message ? e.message : e) }); } catch {}
-  }
+  rawPick = scene.pick(x, y, null);
   if (typeof window !== 'undefined') {
-    try {
-      window.dwHoverDebug = rawPick?.hit && rawPick.pickedMesh ? {
-        name: rawPick.pickedMesh.name || null,
-        id: rawPick.pickedMesh.id || null,
-        renderGroup: typeof rawPick.pickedMesh.renderingGroupId === 'number' ? rawPick.pickedMesh.renderingGroupId : null,
-        parent: rawPick.pickedMesh.parent ? (rawPick.pickedMesh.parent.name || rawPick.pickedMesh.parent.id || null) : null,
-        pointer: { x, y }
-      } : null;
-    } catch {}
+    window.dwHoverDebug = rawPick?.hit && rawPick.pickedMesh ? {
+      name: rawPick.pickedMesh.name || null,
+      id: rawPick.pickedMesh.id || null,
+      renderGroup: typeof rawPick.pickedMesh.renderingGroupId === 'number' ? rawPick.pickedMesh.renderingGroupId : null,
+      parent: rawPick.pickedMesh.parent ? (rawPick.pickedMesh.parent.name || rawPick.pickedMesh.parent.id || null) : null,
+      pointer: { x, y }
+ } : null;
+
   }
   const gizmo2Active = !!((state?._selectionGizmo || state?._testGizmo)?.isActive?.());
   if (gizmo2Active) {
@@ -711,21 +699,18 @@ export function routerHandleHover(routerState) {
   const prevSpaceId = routerState?.hoverSpace?.id || null;
   log('HOVER', 'miss:all', { x, y, prevSpaceId, prevHoverKind: routerState?.hover?.kind || null });
   if (routerLogsEnabled()) {
-    try {
-      if (rawPick?.hit && rawPick.pickedMesh) {
-        const mesh = rawPick.pickedMesh;
-        log('HOVER_DETAIL', 'miss:raw', {
-          mesh: mesh.name || null,
-          id: mesh.id || null,
-          hasParent: !!mesh.parent,
-          renderGroup: typeof mesh.renderingGroupId === 'number' ? mesh.renderingGroupId : null
-        });
-      } else {
-        log('HOVER_DETAIL', 'miss:raw:none', { x, y });
-      }
-    } catch (e) {
-      log('HOVER_DETAIL', 'miss:raw:error', { error: String(e && e.message ? e.message : e) });
+    if (rawPick?.hit && rawPick.pickedMesh) {
+      const mesh = rawPick.pickedMesh;
+      log('HOVER_DETAIL', 'miss:raw', {
+        mesh: mesh.name || null,
+        id: mesh.id || null,
+        hasParent: !!mesh.parent,
+        renderGroup: typeof mesh.renderingGroupId === 'number' ? mesh.renderingGroupId : null
+ });
+ } else {
+      log('HOVER_DETAIL', 'miss:raw:none', { x, y });
     }
+
   }
   clearPPHover(routerState);
   clearGizmoHover(routerState);

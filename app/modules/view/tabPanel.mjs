@@ -8,6 +8,6 @@ export function buildTabPanel({ renderDbView, state, Log }) {
   const created = initTabsUI({ renderDbView, state, Log }) || {};
   // Build Edit tab DOM and return it so handlers can bind
   let editDom = null;
-  try { editDom = buildEditTab({ state, Log }) || null; } catch {}
+  editDom = buildEditTab({ state, Log }) || null;
   return { ...created, editDom };
 }
