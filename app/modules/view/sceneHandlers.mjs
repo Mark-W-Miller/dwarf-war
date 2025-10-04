@@ -11,7 +11,7 @@ import { saveBarrow, snapshot } from '../barrow/store.mjs';
 import { renderDbView } from './dbTab.mjs';
 
 export function initSceneHandlers({ scene, engine, camApi, camera, state, helpers }) {
-  const { setMode, rebuildScene, rebuildHalos, scheduleGridUpdate, moveSelection } = helpers || {};
+  const { setMode, rebuildScene, rebuildHalos, scheduleGridUpdate } = helpers || {};
 
   let _gizmosSuppressed = false;
   const noop = () => {};
@@ -181,15 +181,36 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
   }
 
   function buildTranslationContext() {
-    const context = { spaceIds: [], nodeTargets: [] };
+    const context = { spaceIds: [], spaceTargets: [], nodeTargets: [], bounds: null };
+    const bounds = {
+      min: { x: Infinity, y: Infinity, z: Infinity },
+      max: { x: -Infinity, y: -Infinity, z: -Infinity }
+    };
     try {
       const selectedSpaces = Array.from(state?.selection || []);
       const builtSpaces = Array.isArray(state?.built?.spaces) ? state.built.spaces : [];
       for (const id of selectedSpaces) {
         const entry = builtSpaces.find((x) => x && x.id === id);
         const mesh = entry?.mesh;
-        if (!mesh) continue;
+        const space = (state?.barrow?.spaces || []).find((s) => s && s.id === id) || null;
+        if (!mesh || !space) continue;
+        let startPos = null;
+        try { startPos = mesh.getAbsolutePosition ? mesh.getAbsolutePosition().clone() : mesh.position.clone(); }
+        catch { startPos = mesh.position ? mesh.position.clone() : null; }
+        if (!startPos) startPos = new BABYLON.Vector3(space.origin?.x || 0, space.origin?.y || 0, space.origin?.z || 0);
+        const origin = {
+          x: Number(space.origin?.x) || 0,
+          y: Number(space.origin?.y) || 0,
+          z: Number(space.origin?.z) || 0
+        };
         context.spaceIds.push(id);
+        context.spaceTargets.push({ id, mesh, startPos, origin, space });
+        bounds.min.x = Math.min(bounds.min.x, startPos.x);
+        bounds.min.y = Math.min(bounds.min.y, startPos.y);
+        bounds.min.z = Math.min(bounds.min.z, startPos.z);
+        bounds.max.x = Math.max(bounds.max.x, startPos.x);
+        bounds.max.y = Math.max(bounds.max.y, startPos.y);
+        bounds.max.z = Math.max(bounds.max.z, startPos.z);
       }
     } catch {}
 
@@ -203,10 +224,81 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
         catch { start = mesh.position ? mesh.position.clone() : null; }
         if (!start) continue;
         context.nodeTargets.push({ mesh, start });
+        bounds.min.x = Math.min(bounds.min.x, start.x);
+        bounds.min.y = Math.min(bounds.min.y, start.y);
+        bounds.min.z = Math.min(bounds.min.z, start.z);
+        bounds.max.x = Math.max(bounds.max.x, start.x);
+        bounds.max.y = Math.max(bounds.max.y, start.y);
+        bounds.max.z = Math.max(bounds.max.z, start.z);
       }
     } catch {}
 
+    if (bounds.min.x !== Infinity) {
+      context.bounds = {
+        min: { ...bounds.min },
+        max: { ...bounds.max }
+      };
+    }
+
     return context;
+  }
+
+  function updateSelectionObbLiveForTargets(spaceTargets, opts = {}) {
+    if (!Array.isArray(spaceTargets) || !spaceTargets.length) return;
+    const metaVoxel = state?.barrow?.meta?.voxelSize || 1;
+    const selObb = state.selObb instanceof Map ? state.selObb : null;
+    if (!selObb || !selObb.size) return;
+    for (const target of spaceTargets) {
+      const id = target?.id;
+      const space = target?.space;
+      if (!id || !space) continue;
+      const lines = selObb.get(id);
+      if (!lines || lines.isDisposed?.()) continue;
+      const sr = space.res || metaVoxel;
+      const size = space.size || {};
+      const w = (size.x || 0) * sr;
+      const h = (size.y || 0) * sr;
+      const d = (size.z || 0) * sr;
+      const hx = w / 2;
+      const hy = h / 2;
+      const hz = d / 2;
+      const originBase = target.origin || { x: 0, y: 0, z: 0 };
+      const origin = (() => {
+        if (opts.useSpaceOrigin && space.origin) {
+          return {
+            x: Number(space.origin.x) || 0,
+            y: Number(space.origin.y) || 0,
+            z: Number(space.origin.z) || 0
+          };
+        }
+        const delta = opts.delta || { x: 0, y: 0, z: 0 };
+        return {
+          x: originBase.x + (Number(delta.x) || 0),
+          y: originBase.y + (Number(delta.y) || 0),
+          z: originBase.z + (Number(delta.z) || 0)
+        };
+      })();
+      const rx = (space.rotation && typeof space.rotation.x === 'number') ? space.rotation.x : 0;
+      const ry = (space.rotation && typeof space.rotation.y === 'number') ? space.rotation.y : (typeof space.rotY === 'number' ? space.rotY : 0);
+      const rz = (space.rotation && typeof space.rotation.z === 'number') ? space.rotation.z : 0;
+      const q = BABYLON.Quaternion.FromEulerAngles(rx, ry, rz);
+      const matrix = BABYLON.Matrix.Compose(new BABYLON.Vector3(1, 1, 1), q, new BABYLON.Vector3(origin.x, origin.y, origin.z));
+      const locals = [
+        new BABYLON.Vector3(-hx, -hy, -hz), new BABYLON.Vector3(+hx, -hy, -hz),
+        new BABYLON.Vector3(-hx, +hy, -hz), new BABYLON.Vector3(+hx, +hy, -hz),
+        new BABYLON.Vector3(-hx, -hy, +hz), new BABYLON.Vector3(+hx, -hy, +hz),
+        new BABYLON.Vector3(-hx, +hy, +hz), new BABYLON.Vector3(+hx, +hy, +hz)
+      ];
+      const corners = locals.map((v) => BABYLON.Vector3.TransformCoordinates(v, matrix));
+      const edges = [
+        [corners[0], corners[1]], [corners[1], corners[3]], [corners[3], corners[2]], [corners[2], corners[0]],
+        [corners[4], corners[5]], [corners[5], corners[7]], [corners[7], corners[6]], [corners[6], corners[4]],
+        [corners[0], corners[4]], [corners[1], corners[5]], [corners[2], corners[6]], [corners[3], corners[7]]
+      ];
+      try {
+        BABYLON.MeshBuilder.CreateLineSystem(lines.name, { lines: edges, updatable: true, instance: lines });
+      } catch {}
+    }
   }
 
   function buildRotationContext({ axis = 'y', center = new BABYLON.Vector3(0, 0, 0), axisDir = null } = {}) {
@@ -283,26 +375,113 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
       return buildTranslationContext();
     },
     apply(context, totalDelta, deltaStep) {
-      if (!context || !totalDelta || !deltaStep) return;
-      if (context.spaceIds?.length && typeof moveSelection === 'function' && deltaStep.lengthSquared() > 1e-6) {
-        try { moveSelection(deltaStep.x, deltaStep.y, deltaStep.z); }
-        catch (e) { logErr('EH:gizmo2:apply', e); }
+    if (!context || !totalDelta || !deltaStep) return;
+    if (context.spaceTargets?.length) {
+      for (const target of context.spaceTargets) {
+        const mesh = target?.mesh;
+        const start = target?.startPos;
+        if (!mesh || !start) continue;
+        const newPos = new BABYLON.Vector3(
+          start.x + totalDelta.x,
+          start.y + totalDelta.y,
+          start.z + totalDelta.z
+        );
+        try { mesh.setAbsolutePosition(newPos); }
+        catch { try { mesh.position.copyFrom(newPos); } catch {} }
       }
+      updateSelectionObbLiveForTargets(context.spaceTargets, { delta: totalDelta });
+    }
+    if (context.bounds && _selectionGizmo?.setBounds) {
+      const min = context.bounds.min;
+      const max = context.bounds.max;
+      const offsetMin = {
+        x: min.x + totalDelta.x,
+        y: min.y + totalDelta.y,
+        z: min.z + totalDelta.z
+      };
+      const offsetMax = {
+        x: max.x + totalDelta.x,
+        y: max.y + totalDelta.y,
+        z: max.z + totalDelta.z
+      };
+      try {
+        _selectionGizmo.setBounds({ min: offsetMin, max: offsetMax });
+        const center = new BABYLON.Vector3(
+          (offsetMin.x + offsetMax.x) / 2,
+          (offsetMin.y + offsetMax.y) / 2,
+          (offsetMin.z + offsetMax.z) / 2
+        );
+        _selectionGizmo.setPosition?.(center);
+      } catch {}
+    }
+    const voxStep = deltaStep && deltaStep.lengthSquared() > 1e-6 ? deltaStep : null;
+    if (voxStep) {
       for (const target of context.nodeTargets || []) {
         const mesh = target?.mesh;
         const start = target?.start;
         if (!mesh || !start) continue;
-        start.addInPlace(deltaStep);
+        start.addInPlace(voxStep);
         try { mesh.setAbsolutePosition(start); }
         catch { try { mesh.position.copyFrom(start); } catch {} }
       }
+    }
     },
-    cancel() {
-      // no-op for spaces once moveSelection has been applied incrementally
+    cancel(context) {
+      if (!context) return;
+      if (context.spaceTargets?.length) {
+        for (const target of context.spaceTargets) {
+          const mesh = target?.mesh;
+          const start = target?.startPos;
+          if (!mesh || !start) continue;
+          try { mesh.setAbsolutePosition(start.clone()); }
+          catch { try { mesh.position.copyFrom(start); } catch {} }
+        }
+        updateSelectionObbLiveForTargets(context.spaceTargets);
+        if (context.bounds && _selectionGizmo?.setBounds) {
+          try {
+            _selectionGizmo.setBounds({ min: context.bounds.min, max: context.bounds.max });
+            const c = new BABYLON.Vector3(
+              (context.bounds.min.x + context.bounds.max.x) / 2,
+              (context.bounds.min.y + context.bounds.max.y) / 2,
+              (context.bounds.min.z + context.bounds.max.z) / 2
+            );
+            _selectionGizmo.setPosition?.(c);
+          } catch {}
+        }
+      }
     },
     commit(context, totalDelta) {
       if (!context || !totalDelta) return;
-      if (context.spaceIds?.length) setTimeout(() => updateSelectionGizmo(), 0);
+      if (context.spaceTargets?.length) {
+        const selectionArray = Array.from(state?.selection || []);
+        for (const target of context.spaceTargets) {
+          const space = target?.space;
+          if (!space) continue;
+          const originBase = target.origin || { x: 0, y: 0, z: 0 };
+          let nx = originBase.x + totalDelta.x;
+          let ny = originBase.y + totalDelta.y;
+          let nz = originBase.z + totalDelta.z;
+          try {
+            if (space.vox && space.vox.size) {
+              const res = space.vox?.res || space.res || (state?.barrow?.meta?.voxelSize || 1);
+              const snap = (v) => { const r = Math.max(1e-6, Number(res) || 0); return Math.round(v / r) * r; };
+              nx = snap(nx); ny = snap(ny); nz = snap(nz);
+            }
+          } catch {}
+          space.origin = { x: nx, y: ny, z: nz };
+        }
+        try { saveBarrow(state.barrow); snapshot(state.barrow); } catch (e) { logErr('EH:gizmo2:commitSave', e); }
+        try { renderDbView(state.barrow); } catch (e) { logErr('EH:gizmo2:commitDb', e); }
+        try { rebuildScene?.(); } catch (e) { logErr('EH:gizmo2:commitRebuild', e); }
+        try { scheduleGridUpdate?.(); } catch (e) { logErr('EH:gizmo2:commitGrid', e); }
+        try {
+          window.dispatchEvent(new CustomEvent('dw:transform', {
+            detail: { kind: 'move', dx: totalDelta.x, dy: totalDelta.y, dz: totalDelta.z, selection: selectionArray }
+          }));
+        } catch {}
+        setTimeout(() => updateSelectionGizmo(), 0);
+        updateSelectionObbLiveForTargets(context.spaceTargets, { useSpaceOrigin: true });
+      }
     }
   };
 

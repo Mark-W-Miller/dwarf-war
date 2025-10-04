@@ -56,7 +56,7 @@ export function createRebuildHalos({ scene, state }) {
             [cs[4], cs[5]], [cs[5], cs[7]], [cs[7], cs[6]], [cs[6], cs[4]],
             [cs[0], cs[4]], [cs[1], cs[5]], [cs[2], cs[6]], [cs[3], cs[7]]
           ];
-          const lines = BABYLON.MeshBuilder.CreateLineSystem(`sel:obb:${id}`, { lines: edges }, scene);
+          const lines = BABYLON.MeshBuilder.CreateLineSystem(`sel:obb:${id}`, { lines: edges, updatable: true }, scene);
           lines.color = new BABYLON.Color3(0.1, 0.9, 0.9); lines.isPickable = false; lines.renderingGroupId = 3;
           state.selObb.set(id, lines);
         }
