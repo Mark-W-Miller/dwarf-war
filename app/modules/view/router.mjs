@@ -48,10 +48,14 @@ function routerOnPointer(pi, routerState) {
       // Record down info to detect click on pointerup
       routerState._down = { x: scene.pointerX, y: scene.pointerY, t: Date.now(), button: e.button, meta: !!e.metaKey, ctrl: !!e.ctrlKey, shift: !!e.shiftKey };
       // Do not start camera if over PP, gizmo, or space
-      if (route && (route.hit === 'pp' || route.hit === 'gizmo')) return;
-      if (route && route.hit === 'voxel|space') { routerBeginVoxelStroke(e, routerState, route); return; }
-      if (route && route.hit === 'space') return;
-      routerHandleCameraDown(e, routerState);
+      const isLeftButton = (e.button === 0);
+      const isMiddleButton = (e.button === 1);
+      if (isLeftButton && route && (route.hit === 'pp' || route.hit === 'gizmo')) return;
+      if (isLeftButton && route && route.hit === 'voxel|space') { routerBeginVoxelStroke(e, routerState, route); return; }
+      if (isLeftButton && route && route.hit === 'space') return;
+      if (isLeftButton || isMiddleButton) {
+        routerHandleCameraDown(e, routerState);
+      }
     } else if (t === BABYLON.PointerEventTypes.POINTERMOVE) {
       routerHandleCameraMove(routerState);
       // Extend voxel brush when active (Shift+LC across voxels)

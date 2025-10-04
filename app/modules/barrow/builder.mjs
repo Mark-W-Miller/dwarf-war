@@ -229,7 +229,10 @@ export function buildSceneFromBarrow(scene, barrow) {
             let rotZDeg = 0; try { const v = Number(localStorage.getItem('dw:ui:brickRotZDeg') || '0') || 0; rotZDeg = Math.max(-180, Math.min(180, v)); } catch {}
             wallMat.diffuseTexture.wAng = (rotZDeg * Math.PI) / 180;
           } catch {}
-          try { const pct = Math.max(0, Math.min(100, Number(localStorage.getItem('dw:ui:wallOpacity') || '60') || 60)); wallMat.alpha = Math.max(0.0, Math.min(1.0, pct / 100)); } catch { wallMat.alpha = 0.6; }
+          try {
+            const pct = Math.max(0, Math.min(100, Number(localStorage.getItem('dw:ui:wallOpacity') || '100') || 100));
+            wallMat.alpha = Math.max(0.0, Math.min(1.0, pct / 100));
+          } catch { wallMat.alpha = 1.0; }
         }
         // Per-face materials: rotate ±Z faces (use wallMat), ±X faces use rotated texture (wallMatRot)
         if (cavernView || !cavernView) {
@@ -325,9 +328,9 @@ export function buildSceneFromBarrow(scene, barrow) {
           rockMat.specularColor = new BABYLON.Color3(0,0,0);
           rockMat.backFaceCulling = false; // consistent with cavern for visibility
           try {
-            const pctR = Math.max(0, Math.min(100, Number(localStorage.getItem('dw:ui:rockOpacity') || '85') || 85));
+            const pctR = Math.max(0, Math.min(100, Number(localStorage.getItem('dw:ui:rockOpacity') || '100') || 100));
             rockMat.alpha = Math.max(0.0, Math.min(1.0, pctR / 100));
-          } catch { rockMat.alpha = 0.85; }
+          } catch { rockMat.alpha = 1.0; }
         }
         rockBase.material = rockMat;
         built.voxParts.push(rockBase);

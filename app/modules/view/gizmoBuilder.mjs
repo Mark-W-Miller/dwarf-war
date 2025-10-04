@@ -275,10 +275,14 @@ function applyTranslationDelta(totalDelta) {
   const prev = dragState.appliedOffset || new BABYLON.Vector3(0, 0, 0);
   const deltaStep = totalDelta.clone();
   deltaStep.subtractInPlace(prev);
-  if (deltaStep.lengthSquared() < 1e-6) return;
   try { handler.apply(context, totalDelta, deltaStep); }
   catch (e) { try { log('GIZMO_ERR', 'translate:apply', { error: String(e && e.message ? e.message : e) }); } catch {} }
-  dragState.appliedOffset = totalDelta.clone();
+  const snapped = context?._snappedTotal;
+  if (snapped) {
+    dragState.appliedOffset = new BABYLON.Vector3(snapped.x, snapped.y, snapped.z);
+  } else {
+    dragState.appliedOffset = totalDelta.clone();
+  }
 }
 
   function makeAxis(axisKey) {

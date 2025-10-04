@@ -132,8 +132,8 @@ try {
     const v = Number(n);
     return isFinite(v) && v >= 0 && v <= 100 ? String(v) : String(dflt);
   };
-  localStorage.setItem('dw:ui:wallOpacity', clamp01(localStorage.getItem('dw:ui:wallOpacity'), 60));
-  localStorage.setItem('dw:ui:rockOpacity', clamp01(localStorage.getItem('dw:ui:rockOpacity'), 85));
+  localStorage.setItem('dw:ui:wallOpacity', clamp01(localStorage.getItem('dw:ui:wallOpacity'), 100));
+  localStorage.setItem('dw:ui:rockOpacity', clamp01(localStorage.getItem('dw:ui:rockOpacity'), 100));
 } catch {}
 
 // Global flag to block transforms during voxel operations (bake/merge/fill)
@@ -475,10 +475,10 @@ function applyTextScale() {
 // Apply voxel wall opacity to current scene based on settings
 function applyVoxelOpacity() {
   // Apply with a small floor to avoid fully invisible voxels in WR
-  let alphaWall = 0.6;
-  let alphaRock = 0.85;
-  try { alphaWall = Math.max(0.05, Math.min(1.0, (Number(localStorage.getItem('dw:ui:wallOpacity') || '60') || 60) / 100)); } catch {}
-  try { alphaRock = Math.max(0.05, Math.min(1.0, (Number(localStorage.getItem('dw:ui:rockOpacity') || '85') || 85) / 100)); } catch {}
+  let alphaWall = 1.0;
+  let alphaRock = 1.0;
+  try { alphaWall = Math.max(0.05, Math.min(1.0, (Number(localStorage.getItem('dw:ui:wallOpacity') || '100') || 100) / 100)); } catch {}
+  try { alphaRock = Math.max(0.05, Math.min(1.0, (Number(localStorage.getItem('dw:ui:rockOpacity') || '100') || 100) / 100)); } catch {}
   try {
     for (const part of state?.built?.voxParts || []) {
       try {

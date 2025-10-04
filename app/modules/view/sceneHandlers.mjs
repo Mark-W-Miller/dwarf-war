@@ -240,6 +240,7 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
       };
     }
 
+    context._snappedTotal = { x: 0, y: 0, z: 0 };
     return context;
   }
 
@@ -375,34 +376,54 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
       return buildTranslationContext();
     },
     apply(context, totalDelta, deltaStep) {
-    if (!context || !totalDelta || !deltaStep) return;
+    if (!context || !totalDelta) return;
+
+    const worldStep = Math.max(1e-6, Number(state?.barrow?.meta?.voxelSize || 1));
+    const snap = (v) => Math.round(v / worldStep) * worldStep;
+
+    const snappedTotal = {
+      x: snap(totalDelta.x),
+      y: snap(totalDelta.y),
+      z: snap(totalDelta.z)
+    };
+
+    const prevSnapped = context._snappedTotal || { x: 0, y: 0, z: 0 };
+    const snappedStep = {
+      x: snappedTotal.x - prevSnapped.x,
+      y: snappedTotal.y - prevSnapped.y,
+      z: snappedTotal.z - prevSnapped.z
+    };
+
+    if (!context._snappedTotal) context._snappedTotal = { x: 0, y: 0, z: 0 };
+    context._snappedTotal = snappedTotal;
+
     if (context.spaceTargets?.length) {
       for (const target of context.spaceTargets) {
         const mesh = target?.mesh;
         const start = target?.startPos;
         if (!mesh || !start) continue;
         const newPos = new BABYLON.Vector3(
-          start.x + totalDelta.x,
-          start.y + totalDelta.y,
-          start.z + totalDelta.z
+          start.x + snappedTotal.x,
+          start.y + snappedTotal.y,
+          start.z + snappedTotal.z
         );
         try { mesh.setAbsolutePosition(newPos); }
         catch { try { mesh.position.copyFrom(newPos); } catch {} }
       }
-      updateSelectionObbLiveForTargets(context.spaceTargets, { delta: totalDelta });
+      updateSelectionObbLiveForTargets(context.spaceTargets, { delta: snappedTotal });
     }
     if (context.bounds && _selectionGizmo?.setBounds) {
       const min = context.bounds.min;
       const max = context.bounds.max;
       const offsetMin = {
-        x: min.x + totalDelta.x,
-        y: min.y + totalDelta.y,
-        z: min.z + totalDelta.z
+        x: min.x + snappedTotal.x,
+        y: min.y + snappedTotal.y,
+        z: min.z + snappedTotal.z
       };
       const offsetMax = {
-        x: max.x + totalDelta.x,
-        y: max.y + totalDelta.y,
-        z: max.z + totalDelta.z
+        x: max.x + snappedTotal.x,
+        y: max.y + snappedTotal.y,
+        z: max.z + snappedTotal.z
       };
       try {
         _selectionGizmo.setBounds({ min: offsetMin, max: offsetMax });
@@ -414,21 +435,23 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
         _selectionGizmo.setPosition?.(center);
       } catch {}
     }
-    const voxStep = deltaStep && deltaStep.lengthSquared() > 1e-6 ? deltaStep : null;
+    const voxStep = snappedStep && (snappedStep.x || snappedStep.y || snappedStep.z)
+      ? new BABYLON.Vector3(snappedStep.x, snappedStep.y, snappedStep.z)
+      : null;
     if (voxStep) {
       for (const target of context.nodeTargets || []) {
         const mesh = target?.mesh;
         const start = target?.start;
         if (!mesh || !start) continue;
-        start.addInPlace(voxStep);
-        try { mesh.setAbsolutePosition(start); }
-        catch { try { mesh.position.copyFrom(start); } catch {} }
+        const updated = start.add(voxStep);
+        try { mesh.setAbsolutePosition(updated.clone()); }
+        catch { try { mesh.position.copyFrom(updated); } catch {} }
       }
     }
-    },
-    cancel(context) {
-      if (!context) return;
-      if (context.spaceTargets?.length) {
+  },
+  cancel(context) {
+    if (!context) return;
+    if (context.spaceTargets?.length) {
         for (const target of context.spaceTargets) {
           const mesh = target?.mesh;
           const start = target?.startPos;
@@ -453,14 +476,15 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
     commit(context, totalDelta) {
       if (!context || !totalDelta) return;
       if (context.spaceTargets?.length) {
+        const snappedTotal = context._snappedTotal || { x: 0, y: 0, z: 0 };
         const selectionArray = Array.from(state?.selection || []);
         for (const target of context.spaceTargets) {
           const space = target?.space;
           if (!space) continue;
           const originBase = target.origin || { x: 0, y: 0, z: 0 };
-          let nx = originBase.x + totalDelta.x;
-          let ny = originBase.y + totalDelta.y;
-          let nz = originBase.z + totalDelta.z;
+          let nx = originBase.x + snappedTotal.x;
+          let ny = originBase.y + snappedTotal.y;
+          let nz = originBase.z + snappedTotal.z;
           try {
             if (space.vox && space.vox.size) {
               const res = space.vox?.res || space.res || (state?.barrow?.meta?.voxelSize || 1);
@@ -476,7 +500,7 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
         try { scheduleGridUpdate?.(); } catch (e) { logErr('EH:gizmo2:commitGrid', e); }
         try {
           window.dispatchEvent(new CustomEvent('dw:transform', {
-            detail: { kind: 'move', dx: totalDelta.x, dy: totalDelta.y, dz: totalDelta.z, selection: selectionArray }
+            detail: { kind: 'move', dx: snappedTotal.x, dy: snappedTotal.y, dz: snappedTotal.z, selection: selectionArray }
           }));
         } catch {}
         setTimeout(() => updateSelectionGizmo(), 0);

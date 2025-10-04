@@ -86,7 +86,7 @@ export function initSettingsTab(camApi, ui = {}) {
   const valueSpan10 = document.createElement('span'); valueSpan10.id = 'wallOpacityVal';
   label10.appendChild(slider10); label10.appendChild(valueSpan10); row10.appendChild(label10); pane.appendChild(row10);
   const WKEY = 'dw:ui:wallOpacity';
-  const wStored = Number(localStorage.getItem(WKEY) || '60') || 60;
+  const wStored = Number(localStorage.getItem(WKEY) || '100') || 100;
   slider10.value = String(wStored); valueSpan10.textContent = String(wStored + '%');
   slider10.addEventListener('input', () => {
     valueSpan10.textContent = slider10.value + '%';
@@ -102,7 +102,7 @@ export function initSettingsTab(camApi, ui = {}) {
   const valueSpan11 = document.createElement('span'); valueSpan11.id = 'rockOpacityVal';
   label11.appendChild(slider11); label11.appendChild(valueSpan11); row11.appendChild(label11); pane.appendChild(row11);
   const RCKEY = 'dw:ui:rockOpacity';
-  const rcStored = Number(localStorage.getItem(RCKEY) || '85') || 85;
+  const rcStored = Number(localStorage.getItem(RCKEY) || '100') || 100;
   slider11.value = String(rcStored); valueSpan11.textContent = String(rcStored + '%');
   slider11.addEventListener('input', () => {
     valueSpan11.textContent = slider11.value + '%';
@@ -167,4 +167,3 @@ export function initSettingsTab(camApi, ui = {}) {
     try { Log.log('UI', 'Change setting', { key: 'sendLogs', value: !!cbSL.checked }); } catch {}
   });
 }
-

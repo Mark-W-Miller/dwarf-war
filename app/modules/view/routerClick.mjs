@@ -196,7 +196,7 @@ export function routerHandleCameraDown(e, routerState) {
   // Mapping: LC → rotate, RC → pan. No modifiers
   let decision = 'unknown';
   if (e.button === 0) decision = 'rotate';
-  else if (e.button === 2) decision = 'pan';
+  else if (e.button === 1) decision = 'pan';
 
   const ptr = camera?.inputs?.attached?.pointers;
   switch (decision) {
