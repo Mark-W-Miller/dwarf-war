@@ -737,6 +737,9 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
     setGizmoHudVisible: noop,
     setTargetDotVisible: _viewApi?.setTargetDotVisible,
     isTargetDotVisible: _viewApi?.isTargetDotVisible,
+    centerCameraOnMesh: (mesh) => {
+      try { if (mesh) camApi?.centerOnMesh?.(mesh); } catch {}
+    },
     enterCavernModeForSpace: (id) => { try { _cavernApi?.enterCavernModeForSpace?.(id); } catch { } },
     exitCavernMode: () => { try { _cavernApi?.exitCavernMode?.(); } catch { } },
     exitScryMode,

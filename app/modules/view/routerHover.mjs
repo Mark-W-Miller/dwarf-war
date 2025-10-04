@@ -47,6 +47,16 @@ export function pickMoveGizmo({ scene, x, y }) {
   );
   return md?.hit && md.pickedMesh ? md : null;
 }
+export function pickScryBall({ scene, state, x, y }) {
+  try {
+    const ball = state?._scry?.ball;
+    if (!ball || ball.isDisposed?.()) return null;
+    const pick = scene.pick(x, y, (mesh) => mesh === ball);
+    return (pick?.hit && pick.pickedMesh === ball) ? pick : null;
+  } catch {
+    return null;
+  }
+}
 export function pickSpace({ scene, state, x, y }) {
   // Primary: triangle-accurate pick against base space meshes only `space:<id>`
   const r = scene.pick(x, y,

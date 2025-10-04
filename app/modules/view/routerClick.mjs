@@ -6,7 +6,7 @@ function isSolidVoxel(value) {
   return value === VoxelType.Rock || value === VoxelType.Wall;
 }
 import { modsOf as modsOfEvent } from '../util/log.mjs';
-import { pickPPNode, pickPPSegment, pickConnectGizmo, pickRotGizmo, pickMoveGizmo, pickSpace, refreshPPNodeSelection } from './routerHover.mjs';
+import { pickPPNode, pickPPSegment, pickConnectGizmo, pickRotGizmo, pickMoveGizmo, pickScryBall, pickSpace, refreshPPNodeSelection } from './routerHover.mjs';
 import { ensureConnectState, rebuildConnectMeshes, syncConnectPathToDb } from './connectMeshes.mjs';
 
 // ————— Primary click actions (selection) —————
@@ -62,7 +62,16 @@ export function routerHandlePrimaryClick(e, routerState) {
     }
   }
 
-  // 2) Voxels (unless Cmd/Ctrl without Shift forces space selection)
+  // 2) Scry ball focus (double-click handled elsewhere; single click suppresses camera gestures)
+  if (!forceSpaceSelection && !ignorePriorityTargets) {
+    const scry = pickScryBall({ scene, state, x, y });
+    if (scry && scry.pickedMesh) {
+      log('SELECT', 'scryBall:click', { name: scry.pickedMesh?.name || 'scryBall' });
+      return true;
+    }
+  }
+
+  // 3) Voxels (unless Cmd/Ctrl without Shift forces space selection)
   const sp = pickSpace({ scene, state, x, y });
   if (!forceSpaceSelection && sp && sp.pickedMesh) {
     const pickedName = String(sp.pickedMesh.name || '');
@@ -82,7 +91,7 @@ export function routerHandlePrimaryClick(e, routerState) {
     }
   }
 
-  // 3) Space selection (plain click selects; Shift toggles; Cmd/Ctrl supported)
+  // 4) Space selection (plain click selects; Shift toggles; Cmd/Ctrl supported)
   if (sp && sp.pickedMesh) {
     if (!metaOrCtrl) {
       return false;
@@ -142,6 +151,11 @@ export function classifyPointerDown({ scene, state, e }) {
     if (rg) return { phase, mode, hit: 'gizmo', name: rg.pickedMesh?.name || null, x, y, mods };
     const mg = pickMoveGizmo({ scene, x, y });
     if (mg) return { phase, mode, hit: 'gizmo', name: mg.pickedMesh?.name || null, x, y, mods };
+  }
+  const scry = pickScryBall({ scene, state, x, y });
+  if (scry) {
+    const name = scry.pickedMesh?.name || 'scryBall';
+    return { phase, mode, hit: 'scryball', id: name, name, x, y, mods };
   }
   const sp = pickSpace({ scene, state, x, y });
   if (sp) {
