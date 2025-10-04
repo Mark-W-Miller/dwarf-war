@@ -77,6 +77,24 @@ export function initDbUiHandlers(ctx) {
     } catch (err) { Log.log('ERROR', 'DB delete selected failed', { error: String(err) }); }
   });
 
+  // Select all non-voxel spaces from DB tab
+  window.addEventListener('dw:dbSelectNonVox', (e) => {
+    try {
+      const ids = (e && e.detail && Array.isArray(e.detail.ids)) ? e.detail.ids.map(String).filter(Boolean) : [];
+      if (!ids.length) return;
+      if (!(state.selection instanceof Set)) state.selection = new Set(Array.isArray(state.selection) ? state.selection : []);
+      state.selection.clear();
+      for (const id of ids) state.selection.add(id);
+      try { state._connect?.sel?.clear?.(); gizmo?.disposeConnectGizmo?.(); } catch {}
+      try { rebuildHalos(); } catch {}
+      try { ensureRotWidget(); ensureMoveWidget(); } catch {}
+      try { window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: Array.from(state.selection) } })); } catch {}
+      try { Log.log('UI', 'Select non-voxel spaces', { count: ids.length }); } catch {}
+    } catch (err) {
+      Log.log('ERROR', 'DB select non-voxel failed', { error: String(err && err.message ? err.message : err) });
+    }
+  });
+
   // Undo last DB change (primarily deletes)
   window.addEventListener('dw:dbUndo', () => {
     try {

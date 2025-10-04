@@ -90,40 +90,85 @@ export function initEditUiHandlers(ctx) {
     const size = { x: sx, y: sy, z: sz };
     const desiredRaw = (spaceNameEl?.value || '').trim(); const baseName = desiredRaw || suggestSpaceName(type);
     const used = new Set((state.barrow.spaces||[]).map(s => s.id)); let n = 1; let id = baseName; while (used.has(id)) { id = `${baseName}-${++n}`; }
-    // Place near the pointer on the horizontal plane through the current camera
-    // target, but clamp to a reasonable distance so shallow angles don't send
-    // the intersection too far away. Snap to voxel grid for tidy alignment.
-    let origin;
-    const isFirst = ((state.barrow?.spaces||[]).length === 0);
-    if (isFirst) {
-      origin = new BABYLON.Vector3(0,0,0);
-    } else {
-      const target = camera.target.clone();
-      const planeY = target.y;
-      let p = null;
-      try { p = pickPointOnPlane(new BABYLON.Vector3(0,1,0), new BABYLON.Vector3(0, planeY, 0)); } catch {}
-      if (p && isFinite(p.x) && isFinite(p.y) && isFinite(p.z)) {
-        // Clamp to within a fraction of the camera radius from the target
-        try {
-          const maxDist = Math.max(5, (camera.radius || 50) * 0.6);
-          const dx = p.x - target.x, dy = p.y - target.y, dz = p.z - target.z;
-          const len = Math.hypot(dx, dy, dz);
-          if (len > maxDist) {
-            const k = maxDist / len; p = new BABYLON.Vector3(target.x + dx*k, target.y + dy*k, target.z + dz*k);
+    // Place where the camera's view vector meets the ground plane (Y = 0).
+    let origin = null;
+    let viewRight = new BABYLON.Vector3(1, 0, 0);
+    try {
+      const ray = camera?.getForwardRay?.();
+      if (ray && ray.direction) {
+        const dir = ray.direction.clone();
+        const pos = camera.position.clone();
+        const EPS = 1e-5;
+        if (Math.abs(dir.y) > EPS) {
+          let t = -pos.y / dir.y;
+          const maxDist = Math.max(10, (camera.radius || 50) * 1.5);
+          if (Number.isFinite(t)) {
+            t = Math.max(0, Math.min(t, maxDist));
+            origin = pos.add(dir.scale(t));
           }
-        } catch {}
-        origin = p;
-      } else {
-        origin = target;
+        }
+        const forward = new BABYLON.Vector3(dir.x, dir.y, dir.z);
+        forward.y = 0;
+        if (forward.lengthSquared() < 1e-6) forward.set(0, 0, 1);
+        forward.normalize();
+        const up = new BABYLON.Vector3(0, 1, 0);
+        viewRight = BABYLON.Vector3.Cross(up, forward);
+        if (viewRight.lengthSquared() < 1e-6) viewRight.set(1, 0, 0);
+        viewRight.normalize();
       }
-      // Snap to voxel grid
-      try {
-        const snap = (v, r) => { r = Math.max(1e-6, Number(r)||1); return Math.round(v / r) * r; };
-        origin.x = snap(origin.x, res);
-        origin.y = snap(origin.y, res);
-        origin.z = snap(origin.z, res);
-      } catch {}
+    } catch {}
+    if (!origin || !isFinite(origin.x) || !isFinite(origin.z)) {
+      // Fallback: align along +X axis just beyond existing spaces.
+      origin = new BABYLON.Vector3(0, 0, 0);
+      const existing = Array.isArray(state?.barrow?.spaces) ? state.barrow.spaces : [];
+      if (existing.length > 0) {
+        let maxRight = 0;
+        for (const ex of existing) {
+          if (!ex) continue;
+          const exRes = Number(ex.res) || (state.barrow?.meta?.voxelSize || 1);
+          const exWidth = (Number(ex.size?.x) || 0) * exRes;
+          const center = Number(ex.origin?.x) || 0;
+          const right = center + exWidth / 2;
+          if (right > maxRight) maxRight = right;
+        }
+        const width = size.x * res;
+        const spacing = Math.max(res, width * 0.25);
+        origin = new BABYLON.Vector3(maxRight + width / 2 + spacing, 0, 0);
+      }
     }
+    origin.y = 0;
+    try {
+      const snap = (v, r) => {
+        r = Math.max(1e-6, Number(r) || 1);
+        return Math.round(v / r) * r;
+      };
+      origin.x = snap(origin.x, res);
+      origin.z = snap(origin.z, res);
+    } catch {}
+
+    // If a non-voxel space already occupies this spot, shift to the camera-right side.
+    try {
+      const tolerance = Math.max(res, 0.5);
+      const nonVox = (state?.barrow?.spaces || []).filter((sp) => sp && !(sp.vox && sp.vox.size));
+      const collide = nonVox.find((sp) => {
+        const ox = Number(sp?.origin?.x) || 0;
+        const oz = Number(sp?.origin?.z) || 0;
+        return Math.hypot(ox - origin.x, oz - origin.z) <= tolerance;
+      });
+      if (collide) {
+        const collideRes = Number(collide.res) || (state?.barrow?.meta?.voxelSize || 1);
+        const collideWidth = (Number(collide.size?.x) || 0) * collideRes;
+        const width = size.x * res;
+        const spacing = Math.max(res, Math.max(width, collideWidth) * 0.1);
+        const offset = collideWidth / 2 + width / 2 + spacing;
+        const base = new BABYLON.Vector3(Number(collide.origin?.x) || 0, 0, Number(collide.origin?.z) || 0);
+        origin = base.add(viewRight.scale(offset));
+        origin.y = 0;
+        const snap = (v, r) => { r = Math.max(1e-6, Number(r) || 1); return Math.round(v / r) * r; };
+        origin.x = snap(origin.x, res);
+        origin.z = snap(origin.z, res);
+      }
+    } catch {}
     const s = { id, type, res, size, origin: { x: origin.x, y: origin.y, z: origin.z }, chunks: {}, attrs: {} };
     state.barrow.spaces = state.barrow.spaces || []; state.barrow.spaces.push(s);
     Log?.log('UI', 'New space', { id: s.id, type: s.type, res: s.res, size: s.size, origin: s.origin });

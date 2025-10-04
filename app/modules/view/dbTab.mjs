@@ -254,10 +254,23 @@ export function renderDbView(barrow) {
   } catch {}
 
   // Delete Selected button
+  const selectNonVoxBtn = make('button', { class: 'btn', id: 'dbSelectNonVox', text: 'Select Non-Voxel' });
   const delBtn = make('button', { class: 'btn warn', id: 'dbDeleteSelected', text: 'Delete Selected' });
   const undoBtn = make('button', { class: 'btn', id: 'dbUndoDelete', text: 'Undo Delete' });
+  controls.appendChild(selectNonVoxBtn);
   controls.appendChild(delBtn);
   controls.appendChild(undoBtn);
+  selectNonVoxBtn.addEventListener('click', () => {
+    try {
+      const ids = (barrow.spaces || [])
+        .filter((s) => s && s.id && !(s.vox && s.vox.size))
+        .map((s) => String(s.id))
+        .filter((id, idx, arr) => id && arr.indexOf(id) === idx);
+      if (!ids.length) return;
+      window.dispatchEvent(new CustomEvent('dw:dbSelectNonVox', { detail: { ids } }));
+    } catch {}
+  });
+
   let lastSelection = [];
   try { window.addEventListener('dw:selectionChange', (e) => { lastSelection = (e && e.detail && Array.isArray(e.detail.selection)) ? e.detail.selection : []; }); } catch {}
   delBtn.addEventListener('click', () => {
