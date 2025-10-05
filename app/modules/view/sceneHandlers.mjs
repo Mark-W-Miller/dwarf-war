@@ -38,7 +38,7 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
   }
 
   _scryApi = initScryApi({ scene, engine, camera, state, Log });
-  state._scry = { ball: null, prev: null, exitObs: null, prevWallOpacity: null, prevRockOpacity: null };
+  state._scry = { ball: null, prev: null, exitObs: null, prevWallOpacity: null, prevRockOpacity: null, scryMode: false };
 
   function exitScryMode() { _scryApi?.exitScryMode?.();  }
 

@@ -49,6 +49,8 @@ export function initCavernApi({ scene, engine, camera, state, helpers = {}, scry
     camera.radius = rClose;
     camera.beta = Math.max(0.12, Math.min(Math.PI - 0.12, Math.PI/2));
 
+    scryApi.enterScryMode?.();
+
     setMode('cavern');
     // Remove gizmos in Cavern Mode
     disposeMoveWidget();
@@ -97,4 +99,3 @@ export function initCavernApi({ scene, engine, camera, state, helpers = {}, scry
 
   return { enterCavernModeForSpace, exitCavernMode };
 }
-

@@ -3,7 +3,7 @@
 These guidelines apply to all code under `app/modules/view`.
 
 - **No try/catch blocks.** All exceptions must propagate to the top-level error handlers. Guard operations with explicit condition checks when needed.
-- **Prefer explicit guards.** Test for null/undefined, feature support, and other preconditions instead of relying on catching runtime errors.
+- **DO NOT Prefer explicit guards.** Test for null/undefined, feature support, and other preconditions instead should rely on runtime errors.
 - **Fail fast.** When an operation cannot proceed, return early with a clear condition rather than attempting partial work.
 - **Keep logging minimal.** Only log deliberate state changes or domain events. Do not log within defensive wrappers that replace exception handling.
 - **Deterministic cleanup.** When side-effects need undoing, structure code so cleanup runs as ordinary control flow, not within finally blocks.
