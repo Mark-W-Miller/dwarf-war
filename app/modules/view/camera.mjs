@@ -22,6 +22,43 @@ export function initCamera(scene, canvas, Log) {
   camera.panningSensibility = 40;
   camera.panningInertia = 0.2;
 
+  const arrowKeys = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Up', 'Down', 'Left', 'Right']);
+  function describeKeyTarget(target) {
+    if (!target) return 'null';
+    if (typeof window !== 'undefined' && target === window) return 'window';
+    if (typeof document !== 'undefined') {
+      if (target === document) return 'document';
+      if (target === document.body) return 'body';
+    }
+    const id = target.id ? `#${target.id}` : '';
+    const cls = target.className ? `.${String(target.className).split(/\s+/).filter(Boolean).join('.')}` : '';
+    const tag = target.tagName ? String(target.tagName).toLowerCase() : target.nodeName ? String(target.nodeName).toLowerCase() : 'node';
+    return `${tag}${id}${cls}`;
+  }
+  function logCameraArrow(phase, event) {
+    if (!Log || !event) return;
+    const key = event.key;
+    if (!arrowKeys.has(key)) return;
+    Log.log('ARROWS', `camera:${phase}`, {
+      key,
+      shift: !!event.shiftKey,
+      ctrl: !!event.ctrlKey,
+      meta: !!event.metaKey,
+      alt: !!event.altKey,
+      target: describeKeyTarget(event.target || event.srcElement || null)
+    });
+  }
+  if (scene?.onKeyboardObservable) {
+    scene.onKeyboardObservable.add((kbInfo) => {
+      if (!kbInfo) return;
+      if (kbInfo.type === BABYLON.KeyboardEventTypes.KEYDOWN) {
+        logCameraArrow('keydown', kbInfo.event);
+      } else if (kbInfo.type === BABYLON.KeyboardEventTypes.KEYUP) {
+        logCameraArrow('keyup', kbInfo.event);
+      }
+    });
+  }
+
   function getZoomBase(){ return Number(localStorage.getItem('dw:ui:zoomBase') || '30') || 30; }
   function getPanBase(){ return Number(localStorage.getItem('dw:ui:panBase') || '200') || 200; }
 

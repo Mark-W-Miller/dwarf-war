@@ -7,7 +7,7 @@ export function initEditUiHandlers(ctx) {
   const { saveBarrow = () => {}, snapshot = () => {}, rebuildScene = () => {}, rebuildHalos = () => {}, scheduleGridUpdate = () => {}, renderDbView = () => {}, pickPointOnPlane = () => null, moveSelection = () => {}, setMode = () => {}, setRunning = () => {}, ensureRotWidget = () => {}, ensureMoveWidget = () => {}, disposeRotWidget = () => {}, disposeMoveWidget = () => {}, applyViewToggles = () => {}, updateGridExtent = () => {}, camApi = {} } = helpers;
 
   const { btnTunnel, btnConnect, btnFinalize, btnEmpty, btnRock, btnWall, minInput } = dom;
-  const { showNamesCb, gridGroundCb, gridXYCb, gridYZCb, axisArrowsCb, targetDotCb, resizeGridBtn, spaceTypeEl, spaceNameEl, newSpaceBtn, fitViewBtn, sizeXEl, sizeYEl, sizeZEl, sizeLockEl, tStepEl, txMinus, txPlus, tyMinus, tyPlus, tzMinus, tzPlus } = dom;
+  const { showNamesCb, gridGroundCb, gridXYCb, gridYZCb, axisArrowsCb, targetDotCb, resizeGridBtn, spaceTypeEl, spaceNameEl, newSpaceBtn, fitViewBtn, sizeXEl, sizeYEl, sizeZEl, sizeLockEl, scrySpaceName, tStepEl, txMinus, txPlus, tyMinus, tyPlus, tzMinus, tzPlus } = dom;
 
   if (minInput) minInput.addEventListener('change', () => { const v = Math.max(1, Number(minInput.value)||6); localStorage.setItem('dw:ops:minTunnelWidth', String(v)); });
 
@@ -41,6 +41,15 @@ export function initEditUiHandlers(ctx) {
   gridYZCb?.addEventListener('change', applyTogglesFromUI);
   axisArrowsCb?.addEventListener('change', applyTogglesFromUI);
   targetDotCb?.addEventListener('change', applyTogglesFromUI);
+  const updateScrySpaceLabel = (detail) => {
+    if (!scrySpaceName) return;
+    const active = detail?.active;
+    const name = detail?.name || detail?.spaceId || null;
+    scrySpaceName.textContent = active && name ? name : '—';
+  };
+  window.addEventListener('dw:scry:space', (event) => updateScrySpaceLabel(event.detail));
+  updateScrySpaceLabel({ active: state?._scry?.scryMode, name: state?._scry?.spaceName || state?._scry?.spaceId });
+
   applyTogglesFromUI();
   resizeGridBtn?.addEventListener('click', () => { updateGridExtent?.();  Log?.log('UI','Resize Grid',{}); });
 

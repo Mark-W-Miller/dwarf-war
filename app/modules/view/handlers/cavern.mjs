@@ -26,13 +26,7 @@ export function initCavernApi({ scene, engine, camera, state, helpers = {}, scry
       mode: state.mode,
  };
 
-    // Position scry ball: saved per-space pos, else center-most voxel
-    let pos = null;
-    const key = 'dw:scry:pos:' + s.id;
-    const saved = localStorage.getItem(key);
-    if (saved) { const o = JSON.parse(saved); if (o && isFinite(o.x) && isFinite(o.y) && isFinite(o.z)) pos = new BABYLON.Vector3(o.x, o.y, o.z); }
-
-    if (!pos) pos = (scryApi.findScryWorldPosForSpace?.(s)) || new BABYLON.Vector3(s.origin?.x||0, s.origin?.y||0, s.origin?.z||0);
+    const pos = scryApi.findScryWorldPosForSpace?.(s) || new BABYLON.Vector3(s.origin?.x || 0, s.origin?.y || 0, s.origin?.z || 0);
     const res = s.res || (state?.barrow?.meta?.voxelSize || 1);
     scryApi.ensureScryBallAt?.(pos, res * 0.8);
     // Switch materials to cavern style (opaque + textured)

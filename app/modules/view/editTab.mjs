@@ -54,6 +54,7 @@ export function buildEditTab({ state, Log } = {}) {
     sizeYEl: document.getElementById('sizeY'),
     sizeZEl: document.getElementById('sizeZ'),
     sizeLockEl: document.getElementById('sizeLock'),
+    scrySpaceName: document.getElementById('scrySpaceName'),
     // Transform step + nudge buttons
     tStepEl: document.getElementById('tStep'),
     txMinus: document.getElementById('txMinus'),
