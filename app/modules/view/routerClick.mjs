@@ -369,8 +369,26 @@ function ensureVoxSelForClick(routerState, spaceId, ix, iy, iz, addMode, voxelVa
     existingCount: Array.isArray(state.voxSel) ? state.voxSel.length : 0,
     selectionCount: state.selection instanceof Set ? state.selection.size : Array.isArray(state.selection) ? state.selection.length : 0
  });
-  // Clear picks for this space unless in add (brush-extend) mode or continuing an active stroke
-  if (shouldClearThisCall) state.voxSel = state.voxSel.filter(p => p && p.id !== spaceId);
+  // Clear all voxel selections when starting a fresh pick (new stroke / non-add)
+  if (shouldClearThisCall) {
+    const clearedCount = state.voxSel.length;
+    state.voxSel = [];
+    if (Array.isArray(state.voxSelMeshes) && state.voxSelMeshes.length) {
+      for (const mesh of state.voxSelMeshes) {
+        mesh?.dispose?.();
+      }
+      state.voxSelMeshes = [];
+    }
+    const spacesAll = Array.isArray(state?.barrow?.spaces) ? state.barrow.spaces : [];
+    for (const sp of spacesAll) {
+      if (sp && sp.voxPick) {
+        delete sp.voxPick;
+      }
+    }
+    if (clearedCount) {
+      log('VOXEL_SELECT', 'clear:all', { cleared: clearedCount });
+    }
+  }
   // Avoid duplicates
   const exists = state.voxSel.some(p => p && p.id === spaceId && p.x === ix && p.y === iy && p.z === iz);
   if (!exists) {

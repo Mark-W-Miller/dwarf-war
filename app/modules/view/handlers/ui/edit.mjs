@@ -3,11 +3,43 @@ import { VoxelType } from '../../../voxels/voxelize.mjs';
 import { rebuildConnectMeshes, disposeConnectMeshes, ensureConnectState, syncConnectPathToDb } from '../../connectMeshes.mjs';
 
 export function initEditUiHandlers(ctx) {
-  const { scene, engine, camera, state, Log, helpers = {}, dom = {} } = ctx;
+  const { scene, engine, camera, state, Log, helpers = {}, dom: providedDom } = ctx;
   const { saveBarrow = () => {}, snapshot = () => {}, rebuildScene = () => {}, rebuildHalos = () => {}, scheduleGridUpdate = () => {}, renderDbView = () => {}, pickPointOnPlane = () => null, moveSelection = () => {}, setMode = () => {}, setRunning = () => {}, ensureRotWidget = () => {}, ensureMoveWidget = () => {}, disposeRotWidget = () => {}, disposeMoveWidget = () => {}, applyViewToggles = () => {}, updateGridExtent = () => {}, camApi = {} } = helpers;
 
-  const { btnTunnel, btnConnect, btnFinalize, btnEmpty, btnRock, btnWall, minInput } = dom;
-  const { showNamesCb, gridGroundCb, gridXYCb, gridYZCb, axisArrowsCb, targetDotCb, resizeGridBtn, spaceTypeEl, spaceNameEl, newSpaceBtn, fitViewBtn, sizeXEl, sizeYEl, sizeZEl, sizeLockEl, scrySpaceName, tStepEl, txMinus, txPlus, tyMinus, tyPlus, tzMinus, tzPlus } = dom;
+  const dom = providedDom || {};
+  const pickEl = (el, id) => el ?? document.getElementById(id);
+
+  const btnTunnel = pickEl(dom.btnTunnel, 'voxelAddTunnel');
+  const btnConnect = pickEl(dom.btnConnect, 'voxelConnectSpaces');
+  const btnFinalize = pickEl(dom.btnFinalize, 'voxelConnectFinalize');
+  const btnEmpty = pickEl(dom.btnEmpty, 'voxelSetEmpty');
+  const btnRock = pickEl(dom.btnRock, 'voxelSetRock');
+  const btnWall = pickEl(dom.btnWall, 'voxelSetWall');
+  const minInput = pickEl(dom.minInput, 'minTunnelWidth');
+
+  const showNamesCb = pickEl(dom.showNamesCb, 'showNames');
+  const gridGroundCb = pickEl(dom.gridGroundCb, 'gridGround');
+  const gridXYCb = pickEl(dom.gridXYCb, 'gridXY');
+  const gridYZCb = pickEl(dom.gridYZCb, 'gridYZ');
+  const axisArrowsCb = pickEl(dom.axisArrowsCb, 'axisArrows');
+  const targetDotCb = pickEl(dom.targetDotCb, 'viewTargetDot');
+  const resizeGridBtn = pickEl(dom.resizeGridBtn, 'resizeGrid');
+  const spaceTypeEl = pickEl(dom.spaceTypeEl, 'spaceType');
+  const spaceNameEl = pickEl(dom.spaceNameEl, 'spaceName');
+  const newSpaceBtn = pickEl(dom.newSpaceBtn, 'newSpace');
+  const fitViewBtn = pickEl(dom.fitViewBtn, 'fitView');
+  const sizeXEl = pickEl(dom.sizeXEl, 'sizeX');
+  const sizeYEl = pickEl(dom.sizeYEl, 'sizeY');
+  const sizeZEl = pickEl(dom.sizeZEl, 'sizeZ');
+  const sizeLockEl = pickEl(dom.sizeLockEl, 'sizeLock');
+  const scrySpaceName = pickEl(dom.scrySpaceName, 'scrySpaceName');
+  const tStepEl = pickEl(dom.tStepEl, 'tStep');
+  const txMinus = pickEl(dom.txMinus, 'txMinus');
+  const txPlus = pickEl(dom.txPlus, 'txPlus');
+  const tyMinus = pickEl(dom.tyMinus, 'tyMinus');
+  const tyPlus = pickEl(dom.tyPlus, 'tyPlus');
+  const tzMinus = pickEl(dom.tzMinus, 'tzMinus');
+  const tzPlus = pickEl(dom.tzPlus, 'tzPlus');
 
   if (minInput) minInput.addEventListener('change', () => { const v = Math.max(1, Number(minInput.value)||6); localStorage.setItem('dw:ops:minTunnelWidth', String(v)); });
 

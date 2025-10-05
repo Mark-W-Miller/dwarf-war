@@ -1,5 +1,6 @@
 const KEY_CURRENT = 'dw:barrow:current';
 const KEY_HISTORY = 'dw:barrow:history';
+const KEY_SAVED = 'dw:barrow:saved';
 
 import { compressVox, decompressVox } from '../voxels/voxelize.mjs';
 
@@ -85,4 +86,80 @@ export function undoLast() {
     // Return inflated barrow for runtime
     return inflateAfterLoad(barrowCompressed);
   } catch (e) { console.warn('undoLast failed', e); return null; }
+}
+
+function readSavedEntries() {
+  try {
+    const raw = localStorage.getItem(KEY_SAVED);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeSavedEntries(entries) {
+  try {
+    localStorage.setItem(KEY_SAVED, JSON.stringify(entries));
+  } catch (e) {
+    console.warn('writeSavedEntries failed', e);
+  }
+}
+
+function sanitizeBaseName(name) {
+  const str = String(name ?? '').trim();
+  if (!str) return 'barrow';
+  return str;
+}
+
+function ensureUniqueName(baseName, entries) {
+  const existing = new Set(entries.map((e) => e && typeof e.name === 'string' ? e.name : ''));
+  if (!existing.has(baseName)) return baseName;
+  let idx = 2;
+  while (existing.has(`${baseName} (${idx})`)) idx++;
+  return `${baseName} (${idx})`;
+}
+
+export function saveNamedBarrow(name, barrow, options = {}) {
+  const entries = readSavedEntries();
+  const baseName = sanitizeBaseName(name);
+  const finalName = ensureUniqueName(baseName, entries);
+  const storedBarrow = cloneForSave(barrow);
+  const selection = Array.isArray(options?.selection) ? options.selection.map(String) : null;
+  if (selection && selection.length) {
+    storedBarrow.meta = storedBarrow.meta || {};
+    storedBarrow.meta.selected = selection;
+  }
+  const entry = {
+    name: finalName,
+    savedAt: Date.now(),
+    barrow: storedBarrow,
+  };
+  entries.push(entry);
+  writeSavedEntries(entries);
+  return entry;
+}
+
+export function listSavedBarrows() {
+  const entries = readSavedEntries();
+  return entries
+    .filter((entry) => entry && typeof entry.name === 'string')
+    .map((entry) => ({ name: entry.name, savedAt: Number(entry.savedAt) || 0 }))
+    .sort((a, b) => b.savedAt - a.savedAt);
+}
+
+export function loadNamedBarrow(name) {
+  const entries = readSavedEntries();
+  const match = entries.find((entry) => entry && entry.name === name);
+  if (!match || !match.barrow) return null;
+  return inflateAfterLoad(match.barrow);
+}
+
+export function removeNamedBarrow(name) {
+  const entries = readSavedEntries();
+  const next = entries.filter((entry) => entry && entry.name !== name);
+  const changed = next.length !== entries.length;
+  if (changed) writeSavedEntries(next);
+  return changed;
 }

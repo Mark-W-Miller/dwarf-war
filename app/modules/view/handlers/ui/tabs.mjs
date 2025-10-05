@@ -29,7 +29,7 @@ export function initTabsUI({ renderDbView, state, Log }) {
   const firstRow = editPane.querySelector('.row');
   if (firstRow) {
     const dbRow = document.createElement('div'); dbRow.className = 'row';
-    const idsToMove = ['reset','export','import','importFile'];
+    const idsToMove = ['reset','export','import','importFile','saveDb','savedDbSelect','loadDb','deleteSavedDb'];
     for (const id of idsToMove) {
       const el = firstRow.querySelector('#' + id) || editPane.querySelector('#' + id);
       if (el) dbRow.appendChild(el);

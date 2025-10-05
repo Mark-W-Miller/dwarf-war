@@ -1,6 +1,6 @@
 // Database-related UI/event handlers split from eventHandler.mjs
 // Initializes listeners for DB edits, selection via DB tree, delete/undo, and open-to-space.
-import { saveBarrow, snapshot, undoLast, loadBarrow, cloneForSave, inflateAfterLoad } from '../../../barrow/store.mjs';
+import { saveBarrow, snapshot, undoLast, loadBarrow, cloneForSave, inflateAfterLoad, saveNamedBarrow, listSavedBarrows, loadNamedBarrow, removeNamedBarrow } from '../../../barrow/store.mjs';
 import { buildSceneFromBarrow, disposeBuilt } from '../../../barrow/builder.mjs';
 import { makeDefaultBarrow, mergeInstructions, layoutBarrow } from '../../../barrow/schema.mjs';
 import { renderDbView } from '../../dbTab.mjs';
@@ -175,6 +175,139 @@ export function initDbUiHandlers(ctx) {
   const importFile = document.getElementById('importFile');
   const testSelect = document.getElementById('dbTestSelect');
   const testBtn = document.getElementById('dbLoadTest');
+  const saveDbBtn = document.getElementById('saveDb');
+  const savedDbSelect = document.getElementById('savedDbSelect');
+  const loadDbBtn = document.getElementById('loadDb');
+  const deleteSavedDbBtn = document.getElementById('deleteSavedDb');
+
+  function refreshSavedDbList(selectedName = null) {
+    if (!savedDbSelect) return;
+    const options = listSavedBarrows();
+    savedDbSelect.innerHTML = '';
+    if (!options.length) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'No saved databases';
+      opt.disabled = true;
+      opt.selected = true;
+      savedDbSelect.appendChild(opt);
+      savedDbSelect.disabled = true;
+      if (loadDbBtn) loadDbBtn.disabled = true;
+      if (deleteSavedDbBtn) deleteSavedDbBtn.disabled = true;
+      return;
+    }
+    savedDbSelect.disabled = false;
+    const sorted = options.sort((a, b) => b.savedAt - a.savedAt);
+    for (const entry of sorted) {
+      const opt = document.createElement('option');
+      opt.value = entry.name;
+      const when = entry.savedAt ? new Date(entry.savedAt).toLocaleString() : '';
+      opt.textContent = when ? `${entry.name} (${when})` : entry.name;
+      if (selectedName && entry.name === selectedName) opt.selected = true;
+      savedDbSelect.appendChild(opt);
+    }
+    if (!selectedName && savedDbSelect.options.length) {
+      savedDbSelect.selectedIndex = 0;
+    }
+    const hasSelection = !!savedDbSelect.value;
+    if (loadDbBtn) loadDbBtn.disabled = !hasSelection;
+    if (deleteSavedDbBtn) deleteSavedDbBtn.disabled = !hasSelection;
+  }
+
+  function handleSavedSelectionChange() {
+    if (!savedDbSelect) return;
+    const hasSelection = !!savedDbSelect.value;
+    if (loadDbBtn) loadDbBtn.disabled = !hasSelection;
+    if (deleteSavedDbBtn) deleteSavedDbBtn.disabled = !hasSelection;
+  }
+
+  savedDbSelect?.addEventListener('change', handleSavedSelectionChange);
+
+  function deriveSaveNameFromBarrow() {
+    const spaces = Array.isArray(state?.barrow?.spaces) ? state.barrow.spaces : [];
+    const first = spaces.find((s) => !!s);
+    const fallback = state?.barrow?.id || 'barrow';
+    const candidate = first?.name || first?.id || fallback;
+    const trimmed = String(candidate ?? '').trim();
+    return trimmed || 'barrow';
+  }
+
+  saveDbBtn?.addEventListener('click', () => {
+    if (!state?.barrow) {
+      Log.log('ERROR', 'DB save snapshot: no barrow', {});
+      return;
+    }
+    const baseName = deriveSaveNameFromBarrow();
+    const entry = saveNamedBarrow(baseName, state.barrow, { selection: Array.from(state.selection || []) });
+    Log.log('UI', 'DB save snapshot', { name: entry.name, spaces: Array.isArray(state?.barrow?.spaces) ? state.barrow.spaces.length : 0 });
+    refreshSavedDbList(entry.name);
+  });
+
+  loadDbBtn?.addEventListener('click', () => {
+    const name = savedDbSelect?.value;
+    if (!name) {
+      Log.log('ERROR', 'DB load snapshot: no selection', {});
+      return;
+    }
+    const loaded = loadNamedBarrow(name);
+    if (!loaded) {
+      Log.log('ERROR', 'DB load snapshot: missing entry', { name });
+      refreshSavedDbList();
+      return;
+    }
+
+    disposeMoveWidget();
+    disposeRotWidget();
+    state.selection.clear();
+    state.lockedVoxPick = null;
+    rebuildHalos();
+    window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: [] } }));
+
+    disposeBuilt(state.built);
+    state.barrow = loaded;
+    state.built = buildSceneFromBarrow(scene, state.barrow);
+    saveBarrow(state.barrow); snapshot(state.barrow);
+    renderDbView(state.barrow);
+    rebuildScene?.();
+    updateHud?.();
+
+    const connectPath = Array.isArray(state?.barrow?.connect?.path) ? state.barrow.connect.path : null;
+    disposeConnectMeshes(state);
+    if (connectPath && connectPath.length >= 2) {
+      ensureConnectState(state);
+      rebuildConnectMeshes({ scene, state, path: connectPath });
+      syncConnectPathToDb(state);
+      saveBarrow(state.barrow);
+      if (gizmo?.ensureConnectGizmoFromSel) gizmo.ensureConnectGizmoFromSel();
+    } else {
+      ensureConnectState(state);
+      syncConnectPathToDb(state);
+      saveBarrow(state.barrow);
+    }
+
+    const selFromMeta = Array.isArray(state?.barrow?.meta?.selected) ? state.barrow.meta.selected.map(String) : [];
+    state.selection.clear();
+    if (selFromMeta.length) {
+      for (const id of selFromMeta) state.selection.add(id);
+      rebuildHalos();
+      window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: Array.from(state.selection) } }));
+      ensureRotWidget(); ensureMoveWidget();
+    } else {
+      rebuildHalos();
+      window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: [] } }));
+    }
+
+    camApi?.fitViewSmart?.(state.barrow);
+    Log.log('UI', 'DB load snapshot', { name });
+  });
+
+  deleteSavedDbBtn?.addEventListener('click', () => {
+    const name = savedDbSelect?.value;
+    if (!name) return;
+    const removed = removeNamedBarrow(name);
+    Log.log('UI', removed ? 'DB delete snapshot' : 'DB delete snapshot: missing', { name });
+    refreshSavedDbList();
+  });
 
   resetBtn?.addEventListener('click', () => {
     disposeMoveWidget();
@@ -340,5 +473,7 @@ export function initDbUiHandlers(ctx) {
     camApi?.fitViewSmart?.(state.barrow);
     Log.log('UI', 'Load test DB', { path });
 
- });
+  });
+
+  refreshSavedDbList();
 }
