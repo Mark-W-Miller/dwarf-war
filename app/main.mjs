@@ -117,6 +117,7 @@ const state = {
   voxSelMeshes: [], // meshes used to render multi-voxel selections (dispose each rebuild)
   lastVoxPick: null, // { id, x,y,z,v }
   lockedVoxPick: null, // { id, x,y,z,v } locked in Cavern Mode
+  history: { lastCavernId: null },
   _hover: { spaceId: null },
 };
 
@@ -328,51 +329,40 @@ function getHoveredCavernId() {
 }
 
 function handleViewModeHotkeys(event) {
-  const code = event?.code;
-  if (code !== 'KeyW' && code !== 'KeyC' && code !== 'KeyS') return;
+  const key = event?.key;
+  if (key !== '<' && key !== '>') return;
   if (event.metaKey || event.ctrlKey || event.altKey) return;
   if (isEditableTarget(event.target)) return;
   if (event.repeat) return;
-  switch (code) {
-    case 'KeyW': {
-      if (state.mode === 'war') return;
-      event.preventDefault();
-      event.stopPropagation();
-      sceneApi.exitCavernMode?.();
-      return;
-    }
-    case 'KeyC': {
-      event.preventDefault();
-      event.stopPropagation();
-      if (state.mode === 'scry') {
-        sceneApi.exitScryMode?.();
-        return;
-      }
-      if (state.mode !== 'war') return;
-      const cavernId = getHoveredCavernId();
+
+  if (key === '>') {
+    if (state.mode === 'war') {
+      let cavernId = getHoveredCavernId();
+      if (!cavernId && state?.history?.lastCavernId) cavernId = state.history.lastCavernId;
       if (!cavernId) return;
+      event.preventDefault();
+      event.stopPropagation();
       sceneApi.enterCavernModeForSpace?.(cavernId);
       return;
     }
-    case 'KeyS': {
-      if (state.mode === 'scry') return;
+    if (state.mode === 'cavern') {
       event.preventDefault();
       event.stopPropagation();
-      if (state.mode === 'war') {
-        const cavernId = getHoveredCavernId();
-        if (!cavernId) return;
-        sceneApi.enterCavernModeForSpace?.(cavernId);
-        setTimeout(() => {
-          if (state.mode === 'cavern') sceneApi.enterScryMode?.();
-        }, 0);
-        return;
-      }
-      if (state.mode === 'cavern') {
-        sceneApi.enterScryMode?.();
-      }
-      return;
+      sceneApi.enterScryMode?.();
     }
-    default: return;
+    return;
+  }
+
+  if (state.mode === 'scry') {
+    event.preventDefault();
+    event.stopPropagation();
+    sceneApi.exitScryMode?.();
+    return;
+  }
+  if (state.mode === 'cavern') {
+    event.preventDefault();
+    event.stopPropagation();
+    sceneApi.exitCavernMode?.();
   }
 }
 

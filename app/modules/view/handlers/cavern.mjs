@@ -54,6 +54,8 @@ export function initCavernApi({ scene, engine, camera, state, helpers = {}, scry
       state._scry.scryMode = false;
     }
 
+    if (state?.history) state.history.lastCavernId = s.id;
+
     setMode('cavern');
     // Remove gizmos in Cavern Mode
     disposeMoveWidget();
