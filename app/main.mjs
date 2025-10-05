@@ -192,10 +192,13 @@ if (typeof applyTextScale === 'function') applyTextScale();
 if (typeof applyVoxelOpacity === 'function') applyVoxelOpacity();
 updateHud();
 
-const connectPath = Array.isArray(state?.barrow?.connect?.path) ? state.barrow.connect.path : null;
+const connectInfo = state?.barrow?.connect || {};
+const connectPath = Array.isArray(connectInfo?.path) ? connectInfo.path : null;
+const savedNodeDiameter = Number(connectInfo?.nodeDiameter);
 if (connectPath && connectPath.length >= 2) {
-  ensureConnectState(state);
-  rebuildConnectMeshes({ scene, state, path: connectPath });
+  const connectState = ensureConnectState(state);
+  connectState.nodeDiameter = Number.isFinite(savedNodeDiameter) && savedNodeDiameter > 0 ? savedNodeDiameter : null;
+  rebuildConnectMeshes({ scene, state, path: connectPath, nodeDiameter: connectState.nodeDiameter });
   dispatchCustomEvent('dw:connect:update');
 }
 

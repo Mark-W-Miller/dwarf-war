@@ -41,7 +41,24 @@ export function initEditUiHandlers(ctx) {
   const tzMinus = pickEl(dom.tzMinus, 'tzMinus');
   const tzPlus = pickEl(dom.tzPlus, 'tzPlus');
 
-  if (minInput) minInput.addEventListener('change', () => { const v = Math.max(1, Number(minInput.value)||6); localStorage.setItem('dw:ops:minTunnelWidth', String(v)); });
+  if (minInput) {
+    minInput.addEventListener('change', () => {
+      const v = Math.max(1, Number(minInput.value) || 12);
+      localStorage.setItem('dw:ops:minTunnelWidth', String(v));
+
+      const connectState = ensureConnectState(state);
+      const path = Array.isArray(connectState?.path) ? connectState.path : null;
+      if (!path || path.length < 2) return;
+
+      const baseRes = Number(state?.barrow?.meta?.voxelSize) || 1;
+      const tunnelWidthVox = Math.max(2, Math.round(v));
+      const nodeDiameter = Math.max(baseRes * tunnelWidthVox, baseRes * 1.0);
+      connectState.nodeDiameter = nodeDiameter;
+      rebuildConnectMeshes({ scene, state, path, nodeDiameter });
+      syncConnectPathToDb(state);
+      window.dispatchEvent(new CustomEvent('dw:connect:update'));
+    });
+  }
 
   // Mode controls removed (build later). Run/Pause removed.
 
@@ -401,12 +418,15 @@ export function initEditUiHandlers(ctx) {
     if (state._connect.pickObs) { scene.onPrePointerObservable.remove(state._connect.pickObs); ; state._connect.pickObs = null; }
     if (state._connect.editObs) { scene.onPrePointerObservable.remove(state._connect.editObs); ; state._connect.editObs = null; }
     state._connect.debug = null;
+    state._connect.nodeDiameter = null;
     if (btnFinalize) btnFinalize.style.display = 'none';
   }
 
-  function createProposalMeshesFromPath(path) {
+  function createProposalMeshesFromPath(path, opts = {}) {
     ensureConnectState(state);
-    rebuildConnectMeshes({ scene, state, path });
+    const nodeDiameter = Number(opts.nodeDiameter) || null;
+    if (nodeDiameter && state._connect) state._connect.nodeDiameter = nodeDiameter;
+    rebuildConnectMeshes({ scene, state, path, nodeDiameter });
     if (btnFinalize) btnFinalize.style.display = 'inline-block';
     const conn = state._connect || {};
     Log?.log('PATH', 'proposal:create', {
@@ -423,7 +443,7 @@ export function initEditUiHandlers(ctx) {
 
   function updateProposalMeshes() {
     ensureConnectState(state);
-    rebuildConnectMeshes({ scene, state, path: state._connect.path || [] });
+    rebuildConnectMeshes({ scene, state, path: state._connect.path || [], nodeDiameter: state._connect?.nodeDiameter });
     const conn = state._connect || {};
     Log?.log('PATH', 'proposal:update', {
       points: Array.isArray(conn.path) ? conn.path.length : 0,
@@ -447,75 +467,86 @@ export function initEditUiHandlers(ctx) {
 
   btnConnect?.addEventListener('click', () => {
     Log?.log('UI', 'Connect: click', {});
-    const sel = Array.from(state.selection || []);
     const picks = Array.isArray(state.voxSel) ? state.voxSel : [];
-    const bySpace = new Map();
-    for (const p of picks) {
-      if (!p || p.id == null) continue;
-      if (!bySpace.has(p.id)) bySpace.set(p.id, []);
-      bySpace.get(p.id).push(p);
-    }
+    const orderedIds = [];
+    const seen = new Set();
+    const picksBySpace = new Map();
 
-    let source = 'vox';
-    if (bySpace.size < 2 && sel.length === 2) {
-      for (const id of sel) {
-        if (!bySpace.has(id)) bySpace.set(id, []);
+    for (const pick of picks) {
+      if (!pick || pick.id == null) continue;
+      const sid = pick.id;
+      if (!picksBySpace.has(sid)) picksBySpace.set(sid, []);
+      picksBySpace.get(sid).push(pick);
+      if (!seen.has(sid)) {
+        seen.add(sid);
+        orderedIds.push(sid);
       }
-      source = picks.length ? 'mixed' : 'selection';
     }
 
-    const distinct = Array.from(bySpace.keys());
-    if (distinct.length !== 2) {
-      Log?.log('ERROR', 'Connect: need voxels in two spaces', { uniqueSpaces: distinct.length, sel: sel.length });
+    const selectionIds = state.selection instanceof Set
+      ? Array.from(state.selection)
+      : Array.isArray(state.selection) ? state.selection.slice() : [];
+    for (const sid of selectionIds) {
+      if (!seen.has(sid)) {
+        seen.add(sid);
+        orderedIds.push(sid);
+      }
+      if (!picksBySpace.has(sid)) picksBySpace.set(sid, []);
+    }
+
+    if (orderedIds.length < 2) {
+      Log?.log('ERROR', 'Connect: need at least two spaces in order', { ordered: orderedIds.length, picks: picks.length, selection: selectionIds.length });
       return;
     }
 
-    const [aId, bId] = distinct;
-    if (source === 'vox') Log?.log('UI', 'Connect: using voxel picks', { aId, bId });
-    else if (source === 'mixed') Log?.log('UI', 'Connect: using vox/selection mix', { aId, bId });
-    else Log?.log('UI', 'Connect: using selected spaces', { aId, bId });
+    const spaces = Array.isArray(state?.barrow?.spaces) ? state.barrow.spaces : [];
+    const byId = new Map(spaces.map((s) => [s.id, s]));
 
-    const byId = new Map((state?.barrow?.spaces || []).map(s => [s.id, s]));
-    const A = byId.get(aId), B = byId.get(bId); if (!A || !B) return;
-    function centerOfPicks(sid) {
-      const arr = bySpace.get(sid) || [];
-      if (!arr.length) {
-        const space = byId.get(sid);
-        if (!space) return null;
+    function centerForSpace(spaceId) {
+      const space = byId.get(spaceId);
+      if (!space) return null;
+      const picksArr = picksBySpace.get(spaceId) || [];
+      if (!picksArr.length) {
         return new BABYLON.Vector3(space.origin?.x || 0, space.origin?.y || 0, space.origin?.z || 0);
       }
       let sx = 0, sy = 0, sz = 0;
-      for (const p of arr) { sx += p.x; sy += p.y; sz += p.z; }
-      const cx = Math.round(sx / arr.length);
-      const cy = Math.round(sy / arr.length);
-      const cz = Math.round(sz / arr.length);
-      const s = byId.get(sid);
-      const world = worldPointFromVoxelIndex(s, cx, cy, cz);
+      for (const p of picksArr) { sx += p.x; sy += p.y; sz += p.z; }
+      const cx = Math.round(sx / picksArr.length);
+      const cy = Math.round(sy / picksArr.length);
+      const cz = Math.round(sz / picksArr.length);
+      const world = worldPointFromVoxelIndex(space, cx, cy, cz);
       if (world) return world;
-      return new BABYLON.Vector3(s?.origin?.x || 0, s?.origin?.y || 0, s?.origin?.z || 0);
+      return new BABYLON.Vector3(space.origin?.x || 0, space.origin?.y || 0, space.origin?.z || 0);
+    }
 
+    const nodes = [];
+    for (const sid of orderedIds) {
+      const center = centerForSpace(sid);
+      if (!center) {
+        Log?.log('ERROR', 'Connect: missing center for space', { id: sid });
+        continue;
+      }
+      nodes.push(center);
     }
-    const pA = centerOfPicks(aId); const pB = centerOfPicks(bId); if (!pA||!pB) return;
-    // Obstacles: AABBs of all spaces except the endpoints
-    const obstacles = [];
-    for (const s of (state?.barrow?.spaces||[])) {
-      if (!s || s.id === aId || s.id === bId) continue; const res = s.res || (state?.barrow?.meta?.voxelSize || 1);
-      const w = (s.size?.x||0)*res, h=(s.size?.y||0)*res, d=(s.size?.z||0)*res; const cx=s.origin?.x||0, cy=s.origin?.y||0, cz=s.origin?.z||0;
-      obstacles.push({ min:{x:cx-w/2,y:cy-h/2,z:cz-d/2}, max:{x:cx+w/2,y:cy+h/2,z:cz+d/2} });
+
+    if (nodes.length < 2) {
+      Log?.log('ERROR', 'Connect: insufficient node centers', { nodes: nodes.length });
+      return;
     }
-    const baseRes = state?.barrow?.meta?.voxelSize || 1; const cs = Math.max(2, Math.round(Number(minInput?.value||'6')||6));
-    const radius = Math.max(1.0, (cs*baseRes)/2);
-    const upY = Math.max(pA.y, pB.y);
-    const path = pathAvoidingObstacles(pA, pB, obstacles, radius, upY) || [pA,pB];
-    const newPath = path.map(p => ({ x: p.x, y: p.y, z: p.z }));
-    createProposalMeshesFromPath(newPath);
+
+    const path = nodes.map((v) => ({ x: v.x, y: v.y, z: v.z }));
+    const baseRes = state?.barrow?.meta?.voxelSize || 1;
+    const tunnelWidthVox = Math.max(2, Math.round(Number(minInput?.value || '12') || 12));
+    const nodeDiameter = Math.max(baseRes * tunnelWidthVox, baseRes * 1.0);
+    Log?.log('UI', 'Connect: path:straight', { nodes: orderedIds, nodeDiameter });
+    createProposalMeshesFromPath(path, { nodeDiameter });
     ensureConnectGizmo();
 
- });
+  });
 
   btnFinalize && (btnFinalize.onclick = () => {
     const path = state._connect?.path || []; if (path.length < 2) return;
-    const baseRes = state?.barrow?.meta?.voxelSize || 1; const cs = Math.max(2, Math.round(Number(minInput?.value||'6')||6));
+    const baseRes = state?.barrow?.meta?.voxelSize || 1; const cs = Math.max(2, Math.round(Number(minInput?.value||'12')||12));
     const depthInside = Math.max(cs * baseRes * 1.5, 2 * baseRes);
     const addedIds = [];
     for (let i = 0; i < path.length - 1; i++) {
@@ -540,7 +571,7 @@ export function initEditUiHandlers(ctx) {
       let minD2=Infinity, best=null; for(const p of arr){ const w=worldPointFromVoxelIndex(s,p.x,p.y,p.z); if(!w) continue; const dx=w.x-center.x, dy=w.y-center.y, dz=w.z-center.z; const d2=dx*dx+dy*dy+dz*dz; if(d2<minD2){minD2=d2;best=w;} }
       if (!best) continue;
       const dir = best.subtract(center); const len = dir.length(); if (!(len > 1e-6)) continue; dir.scaleInPlace(1/len);
-      const cs = Math.max(2, Math.round(Number(minInput?.value||'6')||6)); const baseRes = state?.barrow?.meta?.voxelSize || 1;
+      const cs = Math.max(2, Math.round(Number(minInput?.value||'12')||12)); const baseRes = state?.barrow?.meta?.voxelSize || 1;
       const out = center.add(dir.scale(Math.max(2, cs*baseRes*2)));
       const ids = addTunnelsAlongSegment(center, out, { baseRes, cs, Lvox: cs, depthInside: cs*baseRes*1.5, isFirst:true, isLast:true });
       for(const id of ids) added.push(id);

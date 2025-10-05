@@ -25,6 +25,7 @@ export function ensureConnectState(state) {
   if (!Array.isArray(connect.nodes)) connect.nodes = [];
   if (!Array.isArray(connect.segs)) connect.segs = [];
   if (!(connect.sel instanceof Set)) connect.sel = new Set();
+  if (typeof connect.nodeDiameter !== 'number') connect.nodeDiameter = (connect.nodeDiameter && Number.isFinite(connect.nodeDiameter)) ? Number(connect.nodeDiameter) : null;
   return connect;
 }
 
@@ -45,9 +46,12 @@ export function disposeConnectMeshes(state) {
   connect.segs = [];
 }
 
-export function rebuildConnectMeshes({ scene, state, path }) {
+export function rebuildConnectMeshes({ scene, state, path, nodeDiameter }) {
   if (!scene || !state) return null;
   const connect = ensureConnectState(state);
+  if (Number.isFinite(nodeDiameter) && nodeDiameter > 0) {
+    connect.nodeDiameter = Number(nodeDiameter);
+  }
   const points = Array.isArray(path) ? path : connect?.path;
   if (!Array.isArray(points) || points.length < 2) {
     disposeConnectMeshes(state);
@@ -61,6 +65,7 @@ export function rebuildConnectMeshes({ scene, state, path }) {
   disposeConnectMeshes(state);
 
   const pts = sanitized.map(ensureVector3);
+  const sphereDiameter = (Number.isFinite(connect.nodeDiameter) && connect.nodeDiameter > 0) ? connect.nodeDiameter : 1.2;
 
   const line = BABYLON.MeshBuilder.CreateLines('connect:proposal', { points: pts, updatable: true }, scene);
   line.color = new BABYLON.Color3(0.55, 0.9, 1.0);
@@ -69,7 +74,7 @@ export function rebuildConnectMeshes({ scene, state, path }) {
   connect.props.push({ name: 'connect:proposal', mesh: line });
 
   for (let i = 0; i < pts.length; i++) {
-    const sphere = BABYLON.MeshBuilder.CreateSphere(`connect:node:${i}`, { diameter: 1.2 }, scene);
+    const sphere = BABYLON.MeshBuilder.CreateSphere(`connect:node:${i}`, { diameter: sphereDiameter }, scene);
     sphere.position.copyFrom(pts[i]);
     sphere.isPickable = true;
     sphere.renderingGroupId = 3;
@@ -134,7 +139,7 @@ export function updateConnectMeshesGeometry({ scene, state }) {
   }
 
   if (!Array.isArray(connect.nodes) || connect.nodes.length !== pts.length) {
-    rebuildConnectMeshes({ scene, state, path });
+    rebuildConnectMeshes({ scene, state, path, nodeDiameter: connect.nodeDiameter });
     return;
   }
 
@@ -178,6 +183,10 @@ export function syncConnectPathToDb(state) {
     return;
   }
   state.barrow = state.barrow || {};
-  state.barrow.connect = { path: path.map(ensurePoint) };
+  const nodeDiameter = Number(state?._connect?.nodeDiameter);
+  state.barrow.connect = {
+    path: path.map(ensurePoint),
+    nodeDiameter: Number.isFinite(nodeDiameter) && nodeDiameter > 0 ? nodeDiameter : undefined,
+  };
 
 }

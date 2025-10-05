@@ -556,7 +556,7 @@ function insertPPNodeOnSegment({ routerState, segHit, mods }) {
     ...path.slice(segIndex + 1)
   ];
 
-  rebuildConnectMeshes({ scene, state, path: newPath });
+  rebuildConnectMeshes({ scene, state, path: newPath, nodeDiameter: connect.nodeDiameter });
   const updated = ensureConnectState(state);
   const newNodeName = `connect:node:${segIndex + 1}`;
   const newSel = new Set([newNodeName]);

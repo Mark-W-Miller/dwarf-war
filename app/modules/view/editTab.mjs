@@ -26,7 +26,7 @@ export function buildEditTab({ state, Log } = {}) {
   const row3 = document.createElement('div'); row3.className = 'row';
   const minLabel = document.createElement('label'); minLabel.textContent = 'Min Tunnel Width (vox)'; minLabel.style.display = 'flex'; minLabel.style.alignItems = 'center'; minLabel.style.gap = '6px';
   const minInput = document.createElement('input'); minInput.id = 'minTunnelWidth'; minInput.type = 'number'; minInput.min = '1'; minInput.step = '1'; minInput.style.width = '72px';
-  minInput.value = String(Math.max(1, Number(localStorage.getItem('dw:ops:minTunnelWidth') || '6')||6));
+  minInput.value = String(Math.max(1, Number(localStorage.getItem('dw:ops:minTunnelWidth') || '12')||12));
   minLabel.appendChild(minInput); row3.appendChild(minLabel);
   // Assemble
   section.appendChild(title); section.appendChild(row1); section.appendChild(row2); section.appendChild(row3); section.appendChild(hint);
