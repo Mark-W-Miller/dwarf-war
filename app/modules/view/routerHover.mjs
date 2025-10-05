@@ -8,6 +8,14 @@ function routerLogsEnabled() {
   return (v ?? '1') === '1';
 }
 
+function updateHoveredSpaceState(routerState, spaceId) {
+  const state = routerState?.state;
+  if (!state) return;
+  if (!state._hover || typeof state._hover !== 'object') state._hover = {};
+  if (state._hover.spaceId === spaceId) return;
+  state._hover.spaceId = spaceId || null;
+}
+
 // ————— Pickers (exported so click router can reuse) —————
 export function pickPPNode({ scene, x, y }) {
   const r = scene.pick(x, y,
@@ -181,6 +189,7 @@ function setHoverSpaceOutline(routerState, id) {
   const lines = BABYLON.MeshBuilder.CreateLineSystem(`hover:obb:${id}`, { lines: edges }, scene);
   lines.isPickable = false; lines.renderingGroupId = 3; lines.color = new BABYLON.Color3(0.28, 0.62, 0.95);
   routerState.hoverSpace = { id, mesh: lines };
+  updateHoveredSpaceState(routerState, id);
   log('HOVER', 'space:hover', { id });
 }
 export function clearSpaceHover(routerState) {
@@ -188,6 +197,7 @@ export function clearSpaceHover(routerState) {
   const had = !!(prev.mesh && !prev.mesh.isDisposed?.());
   if (had) prev.mesh.dispose();
   routerState.hoverSpace = { id: null, mesh: null };
+  updateHoveredSpaceState(routerState, null);
   log('HOVER', 'space:clear', { had, prevId: prev.id || null });
 }
 
@@ -472,6 +482,7 @@ function renderVoxelHover(routerState, state, space, voxelInfo, voxelValue) {
     ensureVoxelHoverBox(routerState, space, localCenter, world.quaternion, res);
   }
 
+  updateHoveredSpaceState(routerState, space.id);
   routerState._voxHoverLastHit = { id: space.id, i: ix, j: iy, k: iz };
 }
 
@@ -598,6 +609,7 @@ function ensureVoxelHoverBox(routerState, space, localCenter, q, res) {
 function clearVoxelHover(routerState) {
   if (routerState._voxHoverBox && !routerState._voxHoverBox.isDisposed?.()) routerState._voxHoverBox.dispose();
   routerState._voxHoverBox = null;
+  updateHoveredSpaceState(routerState, null);
 }
 
 // ————— Main hover entry —————

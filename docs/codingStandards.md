@@ -1,6 +1,6 @@
 # View Layer Coding Standards
 
-These guidelines apply to all code under `app/modules/view`.
+These guidelines apply to all code under `app/modules`.
 
 - **No try/catch blocks.** All exceptions must propagate to the top-level error handlers. Guard operations with explicit condition checks when needed.
 - **DO NOT Prefer explicit guards.** Test for null/undefined, feature support, and other preconditions instead should rely on runtime errors.

@@ -40,7 +40,16 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
   _scryApi = initScryApi({ scene, engine, camera, state, Log });
   state._scry = { ball: null, prev: null, exitObs: null, prevWallOpacity: null, prevRockOpacity: null, scryMode: false };
 
-  function exitScryMode() { _scryApi?.exitScryMode?.();  }
+  function enterScryMode() {
+    if (!_scryApi) return;
+    _scryApi.enterScryMode?.();
+    if (setMode) setMode('scry');
+  }
+  function exitScryMode() {
+    if (!_scryApi) return;
+    _scryApi.exitScryMode?.();
+    if (setMode && state.mode === 'scry') setMode('cavern');
+  }
 
   // Attach debug router logs before view handlers so logs still appear
   initRouter({ scene, engine, camera, state, Log });
@@ -700,6 +709,7 @@ export function initSceneHandlers({ scene, engine, camApi, camera, state, helper
  },
     enterCavernModeForSpace: (id) => { _cavernApi?.enterCavernModeForSpace?.(id); },
     exitCavernMode: () => { _cavernApi?.exitCavernMode?.(); },
+    enterScryMode,
     exitScryMode,
     voxelHitAtPointerForSpace: (s) => { return _vox?.voxelHitAtPointerForSpace?.(s) || null; },
  };

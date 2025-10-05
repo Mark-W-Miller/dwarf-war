@@ -123,6 +123,9 @@ function handleDoubleClickIfNeeded({ routerState, state, upTime }) {
       if (ball && !ball.isDisposed?.()) {
         const sceneApi = state?._sceneApi || routerState.sceneApi || null;
         routerState.sceneApi = sceneApi || routerState.sceneApi;
+        if (!state?._scry?.scryMode) {
+          sceneApi?.enterScryMode?.();
+        }
         let centered = false;
         if (sceneApi?.centerCameraOnMesh) {
           sceneApi.centerCameraOnMesh(ball);

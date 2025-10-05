@@ -117,6 +117,7 @@ const state = {
   voxSelMeshes: [], // meshes used to render multi-voxel selections (dispose each rebuild)
   lastVoxPick: null, // { id, x,y,z,v }
   lockedVoxPick: null, // { id, x,y,z,v } locked in Cavern Mode
+  _hover: { spaceId: null },
 };
 
 // Provide a reusable selection/voxel highlight rebuilder
@@ -308,6 +309,74 @@ try {
     try { window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: Array.from(state.selection) } })); } catch {}
   }
 } catch {}
+
+function isEditableTarget(element) {
+  if (!element) return false;
+  const tag = element.tagName ? String(element.tagName).toLowerCase() : '';
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
+  return !!element.isContentEditable;
+}
+
+function getHoveredCavernId() {
+  const hoveredId = state?._hover?.spaceId || null;
+  if (!hoveredId) return null;
+  const spaces = Array.isArray(state?.barrow?.spaces) ? state.barrow.spaces : [];
+  const match = spaces.find((space) => space && String(space.id) === String(hoveredId));
+  if (!match) return null;
+  if ((match.vox && match.vox.size) || match.type === 'Cavern') return match.id;
+  return null;
+}
+
+function handleViewModeHotkeys(event) {
+  const code = event?.code;
+  if (code !== 'KeyW' && code !== 'KeyC' && code !== 'KeyS') return;
+  if (event.metaKey || event.ctrlKey || event.altKey) return;
+  if (isEditableTarget(event.target)) return;
+  if (event.repeat) return;
+  switch (code) {
+    case 'KeyW': {
+      if (state.mode === 'war') return;
+      event.preventDefault();
+      event.stopPropagation();
+      sceneApi.exitCavernMode?.();
+      return;
+    }
+    case 'KeyC': {
+      event.preventDefault();
+      event.stopPropagation();
+      if (state.mode === 'scry') {
+        sceneApi.exitScryMode?.();
+        return;
+      }
+      if (state.mode !== 'war') return;
+      const cavernId = getHoveredCavernId();
+      if (!cavernId) return;
+      sceneApi.enterCavernModeForSpace?.(cavernId);
+      return;
+    }
+    case 'KeyS': {
+      if (state.mode === 'scry') return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (state.mode === 'war') {
+        const cavernId = getHoveredCavernId();
+        if (!cavernId) return;
+        sceneApi.enterCavernModeForSpace?.(cavernId);
+        setTimeout(() => {
+          if (state.mode === 'cavern') sceneApi.enterScryMode?.();
+        }, 0);
+        return;
+      }
+      if (state.mode === 'cavern') {
+        sceneApi.enterScryMode?.();
+      }
+      return;
+    }
+    default: return;
+  }
+}
+
+window.addEventListener('keydown', handleViewModeHotkeys, true);
 
 // Initialize optional tabs now that tabs exist
 function ensureVoxelTab() {
