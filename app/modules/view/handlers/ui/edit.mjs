@@ -9,13 +9,124 @@ export function initEditUiHandlers(ctx) {
   const dom = providedDom || {};
   const pickEl = (el, id) => el ?? document.getElementById(id);
 
-  const btnTunnel = pickEl(dom.btnTunnel, 'voxelAddTunnel');
   const btnConnect = pickEl(dom.btnConnect, 'voxelConnectSpaces');
   const btnFinalize = pickEl(dom.btnFinalize, 'voxelConnectFinalize');
   const btnEmpty = pickEl(dom.btnEmpty, 'voxelSetEmpty');
   const btnRock = pickEl(dom.btnRock, 'voxelSetRock');
   const btnWall = pickEl(dom.btnWall, 'voxelSetWall');
   const minInput = pickEl(dom.minInput, 'minTunnelWidth');
+
+  Log?.log('PATH', 'init:buttons', {
+    connect: !!btnConnect,
+    finalize: !!btnFinalize,
+    empty: !!btnEmpty,
+    rock: !!btnRock,
+    wall: !!btnWall
+  });
+
+  const handleFinalizeClick = (event, via = 'direct') => {
+    if (!event) event = {};
+    if (event.__finalizeHandled) return;
+    event.__finalizeHandled = true;
+    const button = event.target?.closest?.('#voxelConnectFinalize') || btnFinalize;
+    Log?.log('PATH', 'finalize:clicked', {
+      via,
+      disabled: !!button?.disabled,
+      pathPoints: Array.isArray(state._connect?.path) ? state._connect.path.length : 0
+    });
+
+    if (button && button.disabled) {
+      Log?.log('ERROR', 'finalize:skip', { reason: 'button disabled' });
+      return;
+    }
+
+    const path = state._connect?.path || [];
+    if (path.length < 2) {
+      Log?.log('ERROR', 'finalize:skip', { reason: 'path too short', points: path.length });
+      return;
+    }
+
+    const baseRes = state?.barrow?.meta?.voxelSize || 1;
+    const cs = Math.max(2, Math.round(Number(minInput?.value || '12') || 12));
+    const nodeSizeWorld = Number(state._connect?.nodeSize) || Math.max(baseRes * cs, baseRes);
+    const depthInside = Math.max(cs * baseRes * 1.5, 2 * baseRes);
+    Log?.log('PATH', 'finalize:start', {
+      segments: path.length - 1,
+      tunnelWidthVox: cs,
+      nodeSizeWorld,
+      depthInside,
+    });
+
+    const addedIds = [];
+    for (let i = 0; i < path.length - 1; i++) {
+      const p0 = path[i]; const p1 = path[i + 1];
+      const start = new BABYLON.Vector3(p0.x, p0.y, p0.z);
+      const end = new BABYLON.Vector3(p1.x, p1.y, p1.z);
+      const ids = addTunnelSegment(start, end, { baseRes, nodeSize: nodeSizeWorld, depthInside, isFirst: i === 0, isLast: i === path.length - 2 });
+      for (const id of ids) addedIds.push(id);
+      Log?.log('PATH', 'finalize:segment', {
+        index: i,
+        start: { x: start.x, y: start.y, z: start.z },
+        end: { x: end.x, y: end.y, z: end.z },
+        added: ids,
+      });
+    }
+
+    const nodeVoxelSize = Math.max(1, Math.round(nodeSizeWorld / baseRes));
+    for (let i = 0; i < path.length; i++) {
+      const p = path[i];
+      const id = uniqueId('connect-node');
+      const nodeSpace = {
+        id,
+        type: 'Tunnel',
+        size: { x: nodeVoxelSize, y: nodeVoxelSize, z: nodeVoxelSize },
+        origin: { x: p.x, y: p.y, z: p.z },
+        res: baseRes,
+        rotation: { x: 0, y: 0, z: 0 }
+      };
+      state.barrow.spaces.push(nodeSpace);
+      addedIds.push(id);
+      Log?.log('PATH', 'finalize:add-node', { index: i, id, origin: nodeSpace.origin, sizeVox: nodeSpace.size });
+    }
+
+    const spacesBeforeClear = Array.isArray(state?.barrow?.spaces) ? state.barrow.spaces.length : null;
+
+    const connectState = ensureConnectState(state);
+    connectState.path = null;
+    connectState.nodes = [];
+    connectState.segs = [];
+    connectState.props = [];
+    connectState.nodeSize = null;
+
+    clearProposals();
+
+    saveBarrow(state.barrow);
+    snapshot(state.barrow);
+    Log?.log('PATH', 'finalize:saved-before-clear', {
+      spaces: spacesBeforeClear,
+      addedIds
+    });
+
+    rebuildScene();
+    renderDbView(state.barrow);
+    rebuildHalos();
+    scheduleGridUpdate();
+
+    saveBarrow(state.barrow);
+    snapshot(state.barrow);
+    renderDbView?.(state.barrow);
+    scheduleGridUpdate?.();
+    if (state.selection instanceof Set) state.selection.clear(); else state.selection = new Set();
+    for (const id of addedIds) state.selection.add(id);
+    const selectionArray = Array.from(state.selection);
+    window.dispatchEvent(new CustomEvent('dw:selectionChange', { detail: { selection: selectionArray } }));
+    Log?.log('PATH', 'finalize:complete', {
+      spaces: Array.isArray(state?.barrow?.spaces) ? state.barrow.spaces.length : null,
+      addedIds,
+      selection: selectionArray
+    });
+    Log?.log('UI', 'Connect: finalized', { added: addedIds, segments: path.length - 1 });
+  };
 
   const showNamesCb = pickEl(dom.showNamesCb, 'showNames');
   const gridGroundCb = pickEl(dom.gridGroundCb, 'gridGround');
@@ -52,9 +163,9 @@ export function initEditUiHandlers(ctx) {
 
       const baseRes = Number(state?.barrow?.meta?.voxelSize) || 1;
       const tunnelWidthVox = Math.max(2, Math.round(v));
-      const nodeDiameter = Math.max(baseRes * tunnelWidthVox, baseRes * 1.0);
-      connectState.nodeDiameter = nodeDiameter;
-      rebuildConnectMeshes({ scene, state, path, nodeDiameter });
+      const nodeSize = Math.max(baseRes * tunnelWidthVox, baseRes);
+      connectState.nodeSize = nodeSize;
+      rebuildConnectMeshes({ scene, state, path, nodeSize });
       syncConnectPathToDb(state);
       window.dispatchEvent(new CustomEvent('dw:connect:update'));
     });
@@ -378,23 +489,41 @@ export function initEditUiHandlers(ctx) {
     return null;
   }
 
-  function addTunnelsAlongSegment(p0, p1, opts) {
+  function addTunnelSegment(p0, p1, opts = {}) {
     const addedIds = [];
-    const dirV = p1.subtract(p0); const dist = dirV.length(); if (!(dist > 1e-6)) return addedIds;
+    const dirV = p1.subtract(p0);
+    const dist = dirV.length();
+    if (!(dist > 1e-6)) return addedIds;
+
     const dir = dirV.scale(1 / dist);
-    const baseRes = opts.baseRes; const cs = opts.cs; const Lvox = opts.Lvox;
-    const nSeg = Math.max(1, Math.ceil(dist / (Lvox * baseRes))); const step = dist / nSeg;
-    for (let i = 0; i < nSeg; i++) {
-      const segLen = Math.min(step, dist - i * step); const half = segLen / 2;
-      let center = p0.add(dir.scale(i * step + half));
-      if (opts.isFirst && i === 0) center = p0.add(dir.scale(half - opts.depthInside));
-      if (opts.isLast && i === nSeg - 1) center = p1.subtract(dir.scale(half - opts.depthInside));
-      const yaw = Math.atan2(dir.x, dir.z); const pitch = -Math.asin(Math.max(-1, Math.min(1, dir.y)));
-      const sizeVox = { x: cs, y: cs, z: Math.max(3, Math.round(segLen / baseRes)) };
-      const id = uniqueId('connect-tunnel');
-      const tunnel = { id, type: 'Tunnel', size: sizeVox, origin: { x: center.x, y: center.y, z: center.z }, res: baseRes, rotation: { x: pitch, y: yaw, z: 0 } };
-      state.barrow.spaces.push(tunnel); addedIds.push(id);
-    }
+    const baseRes = Math.max(1e-6, Number(opts.baseRes) || 1);
+    const nodeSizeWorld = Math.max(baseRes, Number(opts.nodeSize) || baseRes);
+    const tunnelWidthVox = Math.max(1, Math.round(nodeSizeWorld / baseRes));
+    const tunnelHeightVox = Math.max(1, Math.round(nodeSizeWorld / baseRes));
+    const totalLength = dist + nodeSizeWorld;
+    const lengthVox = Math.max(1, Math.round(totalLength / baseRes));
+
+    const center = p0.add(p1).scale(0.5);
+    const yaw = Math.atan2(dir.x, dir.z);
+    const pitch = -Math.asin(Math.max(-1, Math.min(1, dir.y)));
+    const sizeVox = { x: tunnelWidthVox, y: tunnelHeightVox, z: Math.max(1, lengthVox) };
+    const id = uniqueId('connect-tunnel');
+    const tunnel = {
+      id,
+      type: 'Tunnel',
+      size: sizeVox,
+      origin: { x: center.x, y: center.y, z: center.z },
+      res: baseRes,
+      rotation: { x: pitch, y: yaw, z: 0 }
+    };
+    state.barrow.spaces.push(tunnel);
+    Log?.log('PATH', 'finalize:add-tunnel', {
+      id,
+      origin: tunnel.origin,
+      sizeVox,
+      res: baseRes
+    });
+    addedIds.push(id);
 
     return addedIds;
   }
@@ -414,20 +543,28 @@ export function initEditUiHandlers(ctx) {
     // Remove from DB as well
     syncConnectPathToDb(state);
     saveBarrow(state.barrow); snapshot(state.barrow);
+    renderDbView?.(state.barrow);
+    scheduleGridUpdate?.();
     window.dispatchEvent(new CustomEvent('dw:connect:update'));
     if (state._connect.pickObs) { scene.onPrePointerObservable.remove(state._connect.pickObs); ; state._connect.pickObs = null; }
     if (state._connect.editObs) { scene.onPrePointerObservable.remove(state._connect.editObs); ; state._connect.editObs = null; }
     state._connect.debug = null;
-    state._connect.nodeDiameter = null;
-    if (btnFinalize) btnFinalize.style.display = 'none';
+    state._connect.nodeSize = null;
+    if (btnFinalize) {
+      btnFinalize.style.display = '';
+      btnFinalize.disabled = true;
+    }
   }
 
   function createProposalMeshesFromPath(path, opts = {}) {
     ensureConnectState(state);
-    const nodeDiameter = Number(opts.nodeDiameter) || null;
-    if (nodeDiameter && state._connect) state._connect.nodeDiameter = nodeDiameter;
-    rebuildConnectMeshes({ scene, state, path, nodeDiameter });
-    if (btnFinalize) btnFinalize.style.display = 'inline-block';
+    const nodeSize = Number(opts.nodeSize) || null;
+    if (nodeSize && state._connect) state._connect.nodeSize = nodeSize;
+    rebuildConnectMeshes({ scene, state, path, nodeSize });
+    if (btnFinalize) {
+      btnFinalize.style.display = '';
+      btnFinalize.disabled = false;
+    }
     const conn = state._connect || {};
     Log?.log('PATH', 'proposal:create', {
       points: Array.isArray(conn.path) ? conn.path.length : 0,
@@ -443,7 +580,7 @@ export function initEditUiHandlers(ctx) {
 
   function updateProposalMeshes() {
     ensureConnectState(state);
-    rebuildConnectMeshes({ scene, state, path: state._connect.path || [], nodeDiameter: state._connect?.nodeDiameter });
+    rebuildConnectMeshes({ scene, state, path: state._connect.path || [], nodeSize: state._connect?.nodeSize });
     const conn = state._connect || {};
     Log?.log('PATH', 'proposal:update', {
       points: Array.isArray(conn.path) ? conn.path.length : 0,
@@ -465,9 +602,11 @@ export function initEditUiHandlers(ctx) {
     }
  });
 
-  btnConnect?.addEventListener('click', () => {
-    Log?.log('UI', 'Connect: click', {});
+  function buildStraightConnectPath({ trigger = 'manual' } = {}) {
+    Log?.log('UI', 'Connect: build', { trigger });
     const picks = Array.isArray(state.voxSel) ? state.voxSel : [];
+    const connectState = ensureConnectState(state);
+    if (connectState.sel instanceof Set) connectState.sel.clear();
     const orderedIds = [];
     const seen = new Set();
     const picksBySpace = new Map();
@@ -495,8 +634,8 @@ export function initEditUiHandlers(ctx) {
     }
 
     if (orderedIds.length < 2) {
-      Log?.log('ERROR', 'Connect: need at least two spaces in order', { ordered: orderedIds.length, picks: picks.length, selection: selectionIds.length });
-      return;
+      Log?.log('ERROR', 'Connect: need at least two spaces in order', { ordered: orderedIds.length, picks: picks.length, selection: selectionIds.length, trigger });
+      return false;
     }
 
     const spaces = Array.isArray(state?.barrow?.spaces) ? state.barrow.spaces : [];
@@ -530,60 +669,69 @@ export function initEditUiHandlers(ctx) {
     }
 
     if (nodes.length < 2) {
-      Log?.log('ERROR', 'Connect: insufficient node centers', { nodes: nodes.length });
-      return;
+      Log?.log('ERROR', 'Connect: insufficient node centers', { nodes: nodes.length, trigger });
+      return false;
     }
 
     const path = nodes.map((v) => ({ x: v.x, y: v.y, z: v.z }));
     const baseRes = state?.barrow?.meta?.voxelSize || 1;
     const tunnelWidthVox = Math.max(2, Math.round(Number(minInput?.value || '12') || 12));
-    const nodeDiameter = Math.max(baseRes * tunnelWidthVox, baseRes * 1.0);
-    Log?.log('UI', 'Connect: path:straight', { nodes: orderedIds, nodeDiameter });
-    createProposalMeshesFromPath(path, { nodeDiameter });
+    const nodeSize = Math.max(baseRes * tunnelWidthVox, baseRes);
+    Log?.log('UI', 'Connect: path:straight', { nodes: orderedIds, nodeSize, trigger });
+    createProposalMeshesFromPath(path, { nodeSize });
     ensureConnectGizmo();
 
+    return true;
+  }
+
+  btnConnect?.addEventListener('click', () => {
+    buildStraightConnectPath({ trigger: 'button' });
   });
 
-  btnFinalize && (btnFinalize.onclick = () => {
-    const path = state._connect?.path || []; if (path.length < 2) return;
-    const baseRes = state?.barrow?.meta?.voxelSize || 1; const cs = Math.max(2, Math.round(Number(minInput?.value||'12')||12));
-    const depthInside = Math.max(cs * baseRes * 1.5, 2 * baseRes);
-    const addedIds = [];
-    for (let i = 0; i < path.length - 1; i++) {
-      const p0 = path[i]; const p1 = path[i+1];
-      const ids = addTunnelsAlongSegment(new BABYLON.Vector3(p0.x,p0.y,p0.z), new BABYLON.Vector3(p1.x,p1.y,p1.z), { baseRes, cs, Lvox: cs, depthInside, isFirst: i===0, isLast: i===path.length-2 });
-      for (const id of ids) addedIds.push(id);
-    }
-    saveBarrow(state.barrow); snapshot(state.barrow); rebuildScene(); renderDbView(state.barrow); rebuildHalos(); scheduleGridUpdate();
-    clearProposals(); Log?.log('UI','Connect: finalized', { added: addedIds });
+  window.addEventListener('dw:connect:new', (event) => {
+    const trigger = event?.detail?.trigger || 'cmd-click';
+    const success = buildStraightConnectPath({ trigger });
+    if (event && event.detail) event.detail.result = success;
+  });
 
- });
+  const bindFinalizeListener = () => {
+    if (state._finalizeListenerAttached) return;
+    if (typeof window === 'undefined') return;
+    window.addEventListener('click', (event) => {
+      const button = event.target?.closest?.('#voxelConnectFinalize');
+      if (!button) return;
+      handleFinalizeClick(event, 'delegate');
+    }, true);
+    state._finalizeListenerAttached = true;
+    Log?.log('PATH', 'finalize:delegate-bound', {});
+  };
 
-  btnTunnel?.addEventListener('click', () => {
-    const picks = Array.isArray(state.voxSel) ? state.voxSel : [];
-    if (!picks.length) { Log?.log('UI','Tunnel: no voxel picks',{}); return; }
-    const bySpace = new Map(); for (const p of picks) { if (p && p.id != null) { if (!bySpace.has(p.id)) bySpace.set(p.id, []); bySpace.get(p.id).push(p); } }
-    const byId = new Map((state?.barrow?.spaces||[]).map(s => [s.id, s]));
-    const added = [];
-    for (const [sid, arr] of bySpace) {
-      const s = byId.get(sid); if (!s) continue;
-      const center = new BABYLON.Vector3(s.origin?.x||0, s.origin?.y||0, s.origin?.z||0);
-      let minD2=Infinity, best=null; for(const p of arr){ const w=worldPointFromVoxelIndex(s,p.x,p.y,p.z); if(!w) continue; const dx=w.x-center.x, dy=w.y-center.y, dz=w.z-center.z; const d2=dx*dx+dy*dy+dz*dz; if(d2<minD2){minD2=d2;best=w;} }
-      if (!best) continue;
-      const dir = best.subtract(center); const len = dir.length(); if (!(len > 1e-6)) continue; dir.scaleInPlace(1/len);
-      const cs = Math.max(2, Math.round(Number(minInput?.value||'12')||12)); const baseRes = state?.barrow?.meta?.voxelSize || 1;
-      const out = center.add(dir.scale(Math.max(2, cs*baseRes*2)));
-      const ids = addTunnelsAlongSegment(center, out, { baseRes, cs, Lvox: cs, depthInside: cs*baseRes*1.5, isFirst:true, isLast:true });
-      for(const id of ids) added.push(id);
-    }
-    saveBarrow(state.barrow); snapshot(state.barrow); rebuildScene(); renderDbView(state.barrow); rebuildHalos(); scheduleGridUpdate();
-    Log?.log('UI','Tunnel: added', { count: added.length });
-
- });
+  bindFinalizeListener();
+  if (btnFinalize) {
+    btnFinalize.setAttribute('type', 'button');
+    btnFinalize.addEventListener('pointerdown', () => {
+      const pathPoints = Array.isArray(state._connect?.path) ? state._connect.path.length : 0;
+      if (pathPoints >= 2 && btnFinalize.disabled) {
+        btnFinalize.disabled = false;
+      }
+      Log?.log('PATH', 'finalize:pointerdown', {
+        disabled: !!btnFinalize.disabled,
+        pathPoints
+      });
+    }, true);
+    btnFinalize.addEventListener('click', (event) => handleFinalizeClick(event, 'button'));
+  } else {
+    Log?.log('PATH', 'finalize:button-missing', {});
+  }
 
   // Minimal gizmo for path editing (selection + drag)
   function ensureConnectGizmo() {
     // This is a large system in eventHandler; keep minimal re-center logic here
-    if (!state._connect) return; if (!state._connect.path) return; if (btnFinalize) btnFinalize.style.display = 'inline-block';
+    if (!state._connect) return;
+    if (!state._connect.path) return;
+    if (btnFinalize) {
+      btnFinalize.style.display = '';
+      btnFinalize.disabled = !Array.isArray(state._connect.path) || state._connect.path.length < 2;
+    }
   }
 }

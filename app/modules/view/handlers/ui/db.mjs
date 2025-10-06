@@ -273,17 +273,17 @@ export function initDbUiHandlers(ctx) {
 
     const connectInfo = state?.barrow?.connect || {};
     const connectPath = Array.isArray(connectInfo?.path) ? connectInfo.path : null;
-    const savedNodeDiameter = Number(connectInfo?.nodeDiameter);
+    const savedNodeSize = Number(connectInfo?.nodeSize ?? connectInfo?.nodeDiameter);
     const connectState = ensureConnectState(state);
-    connectState.nodeDiameter = Number.isFinite(savedNodeDiameter) && savedNodeDiameter > 0 ? savedNodeDiameter : null;
+    connectState.nodeSize = Number.isFinite(savedNodeSize) && savedNodeSize > 0 ? savedNodeSize : null;
     disposeConnectMeshes(state);
     if (connectPath && connectPath.length >= 2) {
-      rebuildConnectMeshes({ scene, state, path: connectPath, nodeDiameter: connectState.nodeDiameter });
+      rebuildConnectMeshes({ scene, state, path: connectPath, nodeSize: connectState.nodeSize });
       syncConnectPathToDb(state);
       saveBarrow(state.barrow);
       if (gizmo?.ensureConnectGizmoFromSel) gizmo.ensureConnectGizmoFromSel();
     } else {
-      connectState.nodeDiameter = null;
+      connectState.nodeSize = null;
       syncConnectPathToDb(state);
       saveBarrow(state.barrow);
     }
@@ -411,11 +411,11 @@ export function initDbUiHandlers(ctx) {
     // Apply PP proposal path if provided
     const rawConnect = data?.connect || data?.meta?.connect || {};
     const p = (rawConnect && Array.isArray(rawConnect.path)) ? rawConnect.path : null;
-    const savedNodeDiameter = Number(rawConnect?.nodeDiameter);
+    const savedNodeSize = Number(rawConnect?.nodeSize ?? rawConnect?.nodeDiameter);
     const connectState = ensureConnectState(state);
-    connectState.nodeDiameter = Number.isFinite(savedNodeDiameter) && savedNodeDiameter > 0 ? savedNodeDiameter : null;
+    connectState.nodeSize = Number.isFinite(savedNodeSize) && savedNodeSize > 0 ? savedNodeSize : null;
     if (p && p.length >= 2) {
-      rebuildConnectMeshes({ scene, state, path: p, nodeDiameter: connectState.nodeDiameter });
+      rebuildConnectMeshes({ scene, state, path: p, nodeSize: connectState.nodeSize });
       syncConnectPathToDb(state);
       saveBarrow(state.barrow);
       if (gizmo?.ensureConnectGizmoFromSel) gizmo.ensureConnectGizmoFromSel();
@@ -460,11 +460,11 @@ export function initDbUiHandlers(ctx) {
     // Apply PP proposal path if provided
     const rawConnect = data?.connect || data?.meta?.connect || {};
     const p = (rawConnect && Array.isArray(rawConnect.path)) ? rawConnect.path : null;
-    const savedNodeDiameter = Number(rawConnect?.nodeDiameter);
+    const savedNodeSize = Number(rawConnect?.nodeSize ?? rawConnect?.nodeDiameter);
     const connectState = ensureConnectState(state);
-    connectState.nodeDiameter = Number.isFinite(savedNodeDiameter) && savedNodeDiameter > 0 ? savedNodeDiameter : null;
+    connectState.nodeSize = Number.isFinite(savedNodeSize) && savedNodeSize > 0 ? savedNodeSize : null;
     if (p && p.length >= 2) {
-      rebuildConnectMeshes({ scene, state, path: p, nodeDiameter: connectState.nodeDiameter });
+      rebuildConnectMeshes({ scene, state, path: p, nodeSize: connectState.nodeSize });
       syncConnectPathToDb(state);
       saveBarrow(state.barrow);
       if (gizmo?.ensureConnectGizmoFromSel) gizmo.ensureConnectGizmoFromSel();

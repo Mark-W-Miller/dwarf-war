@@ -2,7 +2,7 @@ import { Log } from '../../util/log.mjs';
 import { updateConnectMeshesGeometry, syncConnectPathToDb } from '../connectMeshes.mjs';
 
 const GIZMO_ACTIVE_MODES = new Set(['edit', 'war']);
-const CONNECT_GIZMO_SCALE = 3;
+const CONNECT_GIZMO_SCALE = 18;
 
 export function getVoxelPickWorldCenter(state) {
   let pid = null, px = null, py = null, pz = null;
@@ -241,6 +241,10 @@ export function initConnectGizmo({ scene, engine, camera, state, renderDbView, s
       parts.push(shaft, tip, grab);
 
       state._connect.gizmo = { root, parts };
+    }
+
+    if (root) {
+      root.scaling.set(CONNECT_GIZMO_SCALE, CONNECT_GIZMO_SCALE, CONNECT_GIZMO_SCALE);
     }
 
     root.position.set(center.x, center.y, center.z);

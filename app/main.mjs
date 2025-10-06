@@ -194,11 +194,11 @@ updateHud();
 
 const connectInfo = state?.barrow?.connect || {};
 const connectPath = Array.isArray(connectInfo?.path) ? connectInfo.path : null;
-const savedNodeDiameter = Number(connectInfo?.nodeDiameter);
+const savedNodeSize = Number(connectInfo?.nodeSize ?? connectInfo?.nodeDiameter);
 if (connectPath && connectPath.length >= 2) {
   const connectState = ensureConnectState(state);
-  connectState.nodeDiameter = Number.isFinite(savedNodeDiameter) && savedNodeDiameter > 0 ? savedNodeDiameter : null;
-  rebuildConnectMeshes({ scene, state, path: connectPath, nodeDiameter: connectState.nodeDiameter });
+  connectState.nodeSize = Number.isFinite(savedNodeSize) && savedNodeSize > 0 ? savedNodeSize : null;
+  rebuildConnectMeshes({ scene, state, path: connectPath, nodeSize: connectState.nodeSize });
   dispatchCustomEvent('dw:connect:update');
 }
 

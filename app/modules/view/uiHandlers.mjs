@@ -1,4 +1,5 @@
 import { Log, logErr, sLog, inputLog, modsOf, comboName, dPick } from '../util/log.mjs';
+import { ensureConnectState, rebuildConnectMeshes, disposeConnectMeshes, syncConnectPathToDb } from './connectMeshes.mjs';
 import { initPanelUI } from './handlers/ui/panel.mjs';
 import { initSelectionUI, initPointerSelection } from './handlers/ui/selection.mjs';
 import { buildTabPanel } from './tabPanel.mjs';
@@ -77,6 +78,50 @@ export function initUIHandlers({ scene, engine, camApi, camera, state, helpers, 
     if (isEditable) return;
     const rw = sceneApi.getRotWidget?.(); const mw = sceneApi.getMoveWidget?.();
     if (rw?.dragging || mw?.dragging || rw?.preDrag || mw?.preDrag) return;
+
+    const connectState = ensureConnectState(state);
+    if (connectState?.sel instanceof Set && connectState.sel.size) {
+      e.preventDefault();
+      e.stopPropagation();
+      const path = Array.isArray(connectState.path) ? connectState.path.slice() : null;
+      if (!path || !path.length) {
+        connectState.sel.clear();
+        disposeConnectMeshes(state);
+        connectState.path = null;
+        connectState.nodeSize = null;
+        syncConnectPathToDb(state);
+        window.dispatchEvent(new CustomEvent('dw:connect:update'));
+        Log.log('PATH', 'pp:delete:no-path', {});
+        return;
+      }
+      const indices = Array.from(new Set(Array.from(connectState.sel).map((name) => {
+        const match = /connect:node:(\d+)/.exec(String(name));
+        return match ? Number(match[1]) : null;
+      }).filter((n) => Number.isFinite(n)))).sort((a, b) => b - a);
+      connectState.sel.clear();
+      let removed = 0;
+      for (const idx of indices) {
+        if (idx >= 0 && idx < path.length) {
+          path.splice(idx, 1);
+          removed++;
+        }
+      }
+      Log.log('PATH', 'pp:delete:nodes', { indices, removed, remaining: path.length });
+      if (path.length >= 2) {
+        connectState.path = path;
+        rebuildConnectMeshes({ scene, state, path, nodeSize: connectState.nodeSize });
+        syncConnectPathToDb(state);
+        window.dispatchEvent(new CustomEvent('dw:connect:update'));
+      } else {
+        connectState.path = null;
+        connectState.nodeSize = null;
+        disposeConnectMeshes(state);
+        syncConnectPathToDb(state);
+        window.dispatchEvent(new CustomEvent('dw:connect:update'));
+        Log.log('PATH', 'pp:delete:cleared', {});
+      }
+      return;
+    }
     const ids = Array.from(state.selection || []);
     if (!ids.length) return;
     const byId = new Map((state.barrow.spaces||[]).map(s => [s.id, s]));

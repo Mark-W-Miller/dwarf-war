@@ -14,7 +14,6 @@ function ensurePoint(p) {
 function segmentRadius(state) {
   const base = Number(state?.barrow?.meta?.voxelSize) || 0;
   if (base > 0) return Math.max(0.32, base * 0.22);
-
   return 0.35;
 }
 
@@ -25,7 +24,14 @@ export function ensureConnectState(state) {
   if (!Array.isArray(connect.nodes)) connect.nodes = [];
   if (!Array.isArray(connect.segs)) connect.segs = [];
   if (!(connect.sel instanceof Set)) connect.sel = new Set();
-  if (typeof connect.nodeDiameter !== 'number') connect.nodeDiameter = (connect.nodeDiameter && Number.isFinite(connect.nodeDiameter)) ? Number(connect.nodeDiameter) : null;
+  if (typeof connect.nodeSize !== 'number') {
+    if (typeof connect.nodeDiameter === 'number' && Number.isFinite(connect.nodeDiameter)) {
+      connect.nodeSize = Number(connect.nodeDiameter);
+    } else {
+      connect.nodeSize = (connect.nodeSize && Number.isFinite(connect.nodeSize)) ? Number(connect.nodeSize) : null;
+    }
+  }
+  if (typeof connect.nodeDiameter !== 'undefined') delete connect.nodeDiameter;
   return connect;
 }
 
@@ -46,11 +52,11 @@ export function disposeConnectMeshes(state) {
   connect.segs = [];
 }
 
-export function rebuildConnectMeshes({ scene, state, path, nodeDiameter }) {
+export function rebuildConnectMeshes({ scene, state, path, nodeSize }) {
   if (!scene || !state) return null;
   const connect = ensureConnectState(state);
-  if (Number.isFinite(nodeDiameter) && nodeDiameter > 0) {
-    connect.nodeDiameter = Number(nodeDiameter);
+  if (Number.isFinite(nodeSize) && nodeSize > 0) {
+    connect.nodeSize = Number(nodeSize);
   }
   const points = Array.isArray(path) ? path : connect?.path;
   if (!Array.isArray(points) || points.length < 2) {
@@ -65,7 +71,9 @@ export function rebuildConnectMeshes({ scene, state, path, nodeDiameter }) {
   disposeConnectMeshes(state);
 
   const pts = sanitized.map(ensureVector3);
-  const sphereDiameter = (Number.isFinite(connect.nodeDiameter) && connect.nodeDiameter > 0) ? connect.nodeDiameter : 1.2;
+  const baseRes = Number(state?.barrow?.meta?.voxelSize) || 1;
+  const defaultNodeSize = Math.max(baseRes, baseRes * 12);
+  const cubeSize = (Number.isFinite(connect.nodeSize) && connect.nodeSize > 0) ? connect.nodeSize : defaultNodeSize;
 
   const line = BABYLON.MeshBuilder.CreateLines('connect:proposal', { points: pts, updatable: true }, scene);
   line.color = new BABYLON.Color3(0.55, 0.9, 1.0);
@@ -74,11 +82,11 @@ export function rebuildConnectMeshes({ scene, state, path, nodeDiameter }) {
   connect.props.push({ name: 'connect:proposal', mesh: line });
 
   for (let i = 0; i < pts.length; i++) {
-    const sphere = BABYLON.MeshBuilder.CreateSphere(`connect:node:${i}`, { diameter: sphereDiameter }, scene);
-    sphere.position.copyFrom(pts[i]);
-    sphere.isPickable = true;
-    sphere.renderingGroupId = 3;
-    sphere.alwaysSelectAsActiveMesh = true;
+    const cube = BABYLON.MeshBuilder.CreateBox(`connect:node:${i}`, { size: cubeSize }, scene);
+    cube.position.copyFrom(pts[i]);
+    cube.isPickable = true;
+    cube.renderingGroupId = 3;
+    cube.alwaysSelectAsActiveMesh = true;
     const mat = new BABYLON.StandardMaterial(`connect:node:${i}:mat`, scene);
     mat.emissiveColor = new BABYLON.Color3(0.6, 0.9, 1.0);
     mat.diffuseColor = new BABYLON.Color3(0.15, 0.25, 0.35);
@@ -86,32 +94,38 @@ export function rebuildConnectMeshes({ scene, state, path, nodeDiameter }) {
     mat.disableDepthWrite = true;
     mat.backFaceCulling = false;
     mat.zOffset = 8;
-    sphere.material = mat;
-    connect.nodes.push({ i, mesh: sphere });
+    cube.material = mat;
+    connect.nodes.push({ i, mesh: cube });
   }
 
-  const radius = segmentRadius(state);
-  const tessellation = 12;
   for (let i = 0; i < pts.length - 1; i++) {
-    const mesh = BABYLON.MeshBuilder.CreateTube(`connect:seg:${i}`, {
-      path: [pts[i], pts[i + 1]],
-      radius,
-      tessellation,
-      updatable: true
- }, scene);
+    const start = pts[i];
+    const end = pts[i + 1];
+    const segVec = end.subtract(start);
+    const length = segVec.length();
+    const mid = start.add(end).scale(0.5);
+    const mesh = BABYLON.MeshBuilder.CreateBox(`connect:seg:${i}`, { size: 1 }, scene);
+    mesh.scaling.set(cubeSize, cubeSize, Math.max(length, 0.001));
     mesh.isPickable = true;
     mesh.renderingGroupId = 3;
-    mesh.visibility = 0;
     mesh.alwaysSelectAsActiveMesh = true;
     const mat = new BABYLON.StandardMaterial(`connect:seg:${i}:mat`, scene);
-    mat.alpha = 0;
+    mat.alpha = 0.35;
+    mat.diffuseColor = new BABYLON.Color3(0.12, 0.36, 0.65);
+    mat.emissiveColor = new BABYLON.Color3(0.18, 0.5, 0.85);
     mat.specularColor = new BABYLON.Color3(0, 0, 0);
-    mat.diffuseColor = new BABYLON.Color3(0, 0, 0);
-    mat.emissiveColor = new BABYLON.Color3(0, 0, 0);
-    mat.disableLighting = true;
     mat.backFaceCulling = false;
+    mat.disableLighting = false;
     mesh.material = mat;
-    connect.segs.push({ i, mesh, radius, tessellation });
+    mesh.position.copyFrom(mid);
+    const dir = segVec.normalize();
+    const up = Math.abs(dir.y) < 0.999 ? BABYLON.Axis.Y : BABYLON.Axis.Z;
+    const xAxis = BABYLON.Vector3.Cross(up, dir).normalize();
+    const yAxis = BABYLON.Vector3.Cross(dir, xAxis).normalize();
+    const rotationMatrix = BABYLON.Matrix.Identity();
+    BABYLON.Matrix.FromXYZAxesToRef(xAxis, yAxis, dir, rotationMatrix);
+    mesh.rotationQuaternion = BABYLON.Quaternion.FromRotationMatrix(rotationMatrix);
+    connect.segs.push({ i, mesh, size: cubeSize });
   }
 
   return { line, nodes: connect.nodes, segs: connect.segs };
@@ -139,7 +153,7 @@ export function updateConnectMeshesGeometry({ scene, state }) {
   }
 
   if (!Array.isArray(connect.nodes) || connect.nodes.length !== pts.length) {
-    rebuildConnectMeshes({ scene, state, path, nodeDiameter: connect.nodeDiameter });
+    rebuildConnectMeshes({ scene, state, path, nodeSize: connect.nodeSize });
     return;
   }
 
@@ -151,7 +165,7 @@ export function updateConnectMeshesGeometry({ scene, state }) {
   }
 
   if (!Array.isArray(connect.segs) || connect.segs.length !== pts.length - 1) {
-    rebuildConnectMeshes({ scene, state, path });
+    rebuildConnectMeshes({ scene, state, path, nodeSize: connect.nodeSize });
     return;
   }
 
@@ -159,19 +173,22 @@ export function updateConnectMeshesGeometry({ scene, state }) {
     const idx = Number(seg?.i);
     const mesh = seg?.mesh;
     if (!Number.isFinite(idx) || !mesh || !pts[idx] || !pts[idx + 1]) continue;
-    const radius = Number(seg?.radius) || segmentRadius(state);
-    const tessellation = Number(seg?.tessellation) || 12;
-    seg.radius = radius;
-    seg.tessellation = tessellation;
-    BABYLON.MeshBuilder.CreateTube(mesh.name, {
-      path: [pts[idx], pts[idx + 1]],
-      radius,
-      tessellation,
-      updatable: true,
-      instance: mesh
- }, scene);
-    mesh.visibility = 0;
-
+    const start = pts[idx];
+    const end = pts[idx + 1];
+    const segVec = end.subtract(start);
+    const length = segVec.length();
+    const mid = start.add(end).scale(0.5);
+    const size = Number(seg?.size) || connect.nodeSize || Math.max(Number(state?.barrow?.meta?.voxelSize) || 1, (Number(state?.barrow?.meta?.voxelSize) || 1) * 12);
+    mesh.scaling.set(size, size, Math.max(length, 0.001));
+    mesh.position.copyFrom(mid);
+    const dir = segVec.normalize();
+    const up = Math.abs(dir.y) < 0.999 ? BABYLON.Axis.Y : BABYLON.Axis.Z;
+    const xAxis = BABYLON.Vector3.Cross(up, dir).normalize();
+    const yAxis = BABYLON.Vector3.Cross(dir, xAxis).normalize();
+    const rotationMatrix = BABYLON.Matrix.Identity();
+    BABYLON.Matrix.FromXYZAxesToRef(xAxis, yAxis, dir, rotationMatrix);
+    mesh.rotationQuaternion = BABYLON.Quaternion.FromRotationMatrix(rotationMatrix);
+    seg.size = size;
   }
 }
 
@@ -183,10 +200,10 @@ export function syncConnectPathToDb(state) {
     return;
   }
   state.barrow = state.barrow || {};
-  const nodeDiameter = Number(state?._connect?.nodeDiameter);
+  const nodeSize = Number(state?._connect?.nodeSize);
   state.barrow.connect = {
     path: path.map(ensurePoint),
-    nodeDiameter: Number.isFinite(nodeDiameter) && nodeDiameter > 0 ? nodeDiameter : undefined,
+    nodeSize: Number.isFinite(nodeSize) && nodeSize > 0 ? nodeSize : undefined,
   };
 
 }

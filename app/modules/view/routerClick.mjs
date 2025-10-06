@@ -18,6 +18,12 @@ export function routerHandlePrimaryClick(e, routerState) {
   if (!isLeft) return false;
 
   const mods = { meta: !!e.metaKey, ctrl: !!e.ctrlKey, shift: !!e.shiftKey, alt: !!e.altKey };
+  const metaOnly = mods.meta && !mods.ctrl && !mods.shift && !mods.alt;
+  if (metaOnly) {
+    const connectRequest = { trigger: 'cmd-click', result: false };
+    dispatchWindowEvent('dw:connect:new', connectRequest);
+    if (connectRequest.result) return true;
+  }
   const metaOrCtrl = mods.meta || mods.ctrl;
   if (metaOrCtrl) {
     const seg = pickPPSegment({ scene, x, y });
@@ -556,7 +562,7 @@ function insertPPNodeOnSegment({ routerState, segHit, mods }) {
     ...path.slice(segIndex + 1)
   ];
 
-  rebuildConnectMeshes({ scene, state, path: newPath, nodeDiameter: connect.nodeDiameter });
+  rebuildConnectMeshes({ scene, state, path: newPath, nodeSize: connect.nodeSize });
   const updated = ensureConnectState(state);
   const newNodeName = `connect:node:${segIndex + 1}`;
   const newSel = new Set([newNodeName]);
